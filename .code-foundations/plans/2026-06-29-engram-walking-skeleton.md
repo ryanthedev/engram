@@ -2,9 +2,10 @@
 
 **Created:** 2026-06-29
 **Amended:** 2026-07-03 — external plan review (codex + antigravity) + scale re-target (S1 team → S2 org)
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-03 (build worktree: .claude/worktrees/engram-walking-skeleton, branch feature/engram-walking-skeleton)
-**Current Phase:** 0
+**Completed:** 2026-07-03 12:33
+**Duration:** ~2.5 h (Phases 0–2, incl. two Phase-2 review-fix rounds)
 **Complexity:** complex
 **Scope of this plan:** Walking skeleton — **Phases 0–2 are build-ready**. Phases 3–7 are roadmapped at vision detail (§Roadmap) and planned just-in-time once the skeleton teaches us the real constraints.
 
@@ -315,3 +316,10 @@ Summary: All five seam interfaces (Store incl. outbox/ledger/repair, Retriever, 
 - [x] Committed
 Commit: 005ab92
 Summary: The read path is live — gRPC Ingest (sync episodic append, durable id) + Search (hybrid BM25+kNN+RRF across episodic+semantic with tenant/user/validity filters); background embedding-enrichment job (text-first ingest, ≤30 s kNN lag); OpenSearchStore implements Append/Create/Update (outbox/ledger methods stubbed ErrNotImplemented for Phase 2); fusion non-inferior on the frozen holdout; perf p95 56 ms. Phase 2 extends Ingest with the outbox worker writing semantic facts through the same Store.
+
+### Phase 2: Async Write & Bi-temporal Reconciliation (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: fail → fail → PASS (3 attempts; two real interval-disjointness defects found and fixed — late-arrival neighbor bounding, neighbor-aware close bounds; residual write-skew adjudicated pre-existing/irreducible, closed by sweep rule (d) tracked for Phase 3)
+- [x] Committed
+Commit: 025de40
+Summary: The loop is closed — outbox worker (lease/attempts/dead-letter), claim-first ledger with cached-extraction resume, four-way reconciler, full D10/D11 write protocol with neighbor-aware closes and historical insertion, repair sweep (rules a/a′/b/c; rule d specified, deferred to production plan Phase 3). 146 unit + 99 integration test functions green incl. race-stressed concurrency and live-cluster crash-recovery tests; extraction cost $0.07/1k events vs $5 gate. The walking skeleton is functionally complete: event → append → extract → reconcile → hybrid-retrieve, end to end.
