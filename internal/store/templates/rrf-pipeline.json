@@ -1,0 +1,13 @@
+{
+  "description": "Engram hybrid-search fusion: rank-based RRF over the BM25 and kNN sub-query result lists (D1/D14; OpenSearch 3.1 score-ranker-processor, rank_constant=60).",
+  "phase_results_processors": [
+    {
+      "score-ranker-processor": {
+        "combination": {
+          "technique": "rrf",
+          "rank_constant": 60
+        }
+      }
+    }
+  ]
+}

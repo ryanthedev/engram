@@ -1,0 +1,85 @@
+// Engram service contract (walking-skeleton seam, locked in Phase 0).
+//
+// Ingest is the sync episodic append: cheap, durable, and the enqueue for the
+// async write path (outbox, D12). event_id is REQUIRED — it is the client-
+// supplied idempotency identity (D13); the server rejects an empty event_id
+// with INVALID_ARGUMENT. proto3 cannot express required fields, so the
+// requirement is enforced server-side and documented here.
+//
+// Search is the hybrid read path: BM25 + kNN fused by RRF (D1), scoped by
+// tenancy filters (D16) and the bi-temporal current-state filter (D3).
+syntax = "proto3";
+
+package engram.v1;
+
+option go_package = "github.com/ryanthedev/engram/api/engrampb";
+
+import "google/protobuf/timestamp.proto";
+
+// Engram is the agent-memory service: sync episodic ingest and hybrid search.
+service Engram {
+  // Ingest durably appends one event to episodic memory and returns its
+  // storage id. The append is the enqueue: extraction and reconciliation
+  // happen asynchronously (D4/D12). event_id is required; replays of the
+  // same event_id are idempotent end-to-end via the extraction ledger (D13).
+  rpc Ingest(IngestRequest) returns (IngestResponse);
+
+  // Search runs one hybrid query (BM25 + kNN -> RRF) and returns a single
+  // fused, ranked hit list.
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+// IngestRequest is one episodic event.
+message IngestRequest {
+  // Required. Client-supplied idempotency identity (D13). Empty -> INVALID_ARGUMENT.
+  string event_id = 1;
+
+  // Tenancy / provenance (D16); single-team values in the skeleton.
+  string tenant_id = 2;
+  string team_id = 3;
+  string scope = 4;
+  string owner_agent_id = 5;
+  repeated string source_ids = 6;
+
+  // Event classification (e.g. "tool_result", "conversation", "task").
+  string kind = 7;
+  // Raw event text; the extraction and BM25 target.
+  string text = 8;
+  // Real-world event time; the system stamps created_at itself (D3).
+  google.protobuf.Timestamp occurred_at = 9;
+}
+
+// IngestResponse acknowledges the durable append.
+message IngestResponse {
+  // Durable episodic doc id.
+  string id = 1;
+}
+
+// SearchRequest is one hybrid retrieval query.
+message SearchRequest {
+  // Query text; embedded for the kNN clause, matched for the BM25 clause.
+  string query = 1;
+  // Max fused results (default: server-chosen).
+  int32 k = 2;
+  // Tenancy scope filters (D16).
+  string tenant_id = 3;
+  string user_id = 4;
+  // Restrict to currently-valid facts (invalid_at == null AND expired_at ==
+  // null — the bi-temporal current-state filter).
+  bool valid_only = 5;
+}
+
+// Hit is one fused result.
+message Hit {
+  string id = 1;
+  double score = 2;
+  // Source index tier ("episodic" | "semantic").
+  string source = 3;
+  // Stored document rendered as JSON.
+  string fields_json = 4;
+}
+
+// SearchResponse is the single fused, ranked list.
+message SearchResponse {
+  repeated Hit hits = 1;
+}

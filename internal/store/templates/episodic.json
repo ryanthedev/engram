@@ -1,0 +1,45 @@
+{
+  "index_patterns": ["engram-episodic*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "index.knn": true,
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "event_id": { "type": "keyword" },
+        "tenant_id": { "type": "keyword" },
+        "team_id": { "type": "keyword" },
+        "scope": { "type": "keyword" },
+        "owner_agent_id": { "type": "keyword" },
+        "source_ids": { "type": "keyword" },
+        "kind": { "type": "keyword" },
+        "text": { "type": "text" },
+        "text_embedding": {
+          "type": "knn_vector",
+          "dimension": 1024,
+          "method": {
+            "name": "hnsw",
+            "engine": "faiss",
+            "space_type": "innerproduct",
+            "parameters": {
+              "m": 16,
+              "ef_construction": 128,
+              "encoder": { "name": "sq", "parameters": { "type": "fp16" } }
+            }
+          }
+        },
+        "occurred_at": { "type": "date" },
+        "created_at": { "type": "date" },
+        "processed_at": { "type": "date" },
+        "claim_lease_until": { "type": "date" },
+        "attempts": { "type": "integer" },
+        "dead_lettered": { "type": "boolean" },
+        "dead_letter_reason": { "type": "keyword" }
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+# revive config — DW-0.2: the exported rule enforces doc-comment contracts on
+# every exported identifier (interfaces included). Run: make lint
+ignoreGeneratedHeader = true
+severity = "error"
+confidence = 0.8
+
+[rule.exported]
+  arguments = ["checkPrivateReceivers", "sayRepetitiveInsteadOfStutters"]
+[rule.package-comments]
+[rule.blank-imports]
+[rule.context-as-argument]
+[rule.context-keys-type]
+[rule.dot-imports]
+[rule.error-return]
+[rule.error-strings]
+[rule.error-naming]
+[rule.if-return]
+[rule.increment-decrement]
+[rule.var-naming]
+[rule.var-declaration]
+[rule.range]
+[rule.receiver-naming]
+[rule.time-naming]
+[rule.unexported-return]
+[rule.indent-error-flow]
+[rule.errorf]
+[rule.empty-block]
+[rule.superfluous-else]
+[rule.unreachable-code]
+[rule.redefines-builtin-id]

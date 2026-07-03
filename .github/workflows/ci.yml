@@ -1,0 +1,55 @@
+# Engram CI — DW-0.1 (build+test), DW-0.2 (lint incl. revive exported rule),
+# DW-0.7 (proto codegen + generated-code drift check), and a live-cluster
+# integration job against the pinned OpenSearch 3.1.0 (DW-0.4 / DW-0.9).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: make build
+      - name: Test
+        run: make test
+      - name: Lint (go vet + revive exported-comment rule)
+        run: make lint
+      - name: Proto codegen matches checked-in code
+        run: make proto-check
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      opensearch:
+        image: opensearchproject/opensearch:3.1.0 # pinned — D14
+        ports:
+          - 9200:9200
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          DISABLE_INSTALL_DEMO_CONFIG: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx1g
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/ || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Apply templates (idempotent)
+        run: make apply-templates
+      - name: Live-cluster integration + spikes
+        run: make integration

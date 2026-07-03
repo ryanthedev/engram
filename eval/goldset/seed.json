@@ -1,0 +1,1206 @@
+{
+  "corpus": [
+    {
+      "id": "doc-pay-timeout",
+      "text": "Service payments-api has a hard request timeout of 2500ms configured in PAY-cfg-114."
+    },
+    {
+      "id": "doc-inc-4312",
+      "text": "Incident INC-4312 was caused by a leaked connection pool in orders-svc after the v2.14 deploy."
+    },
+    {
+      "id": "doc-own-search",
+      "text": "The search-platform team owns the opensearch-gateway service; escalation goes to @maya.chen."
+    },
+    {
+      "id": "doc-dep-freeze",
+      "text": "Deploy freezes start every quarter on the last Thursday and are tracked in REL-freeze-Q."
+    },
+    {
+      "id": "doc-tok-rotate",
+      "text": "API tokens for vault-broker rotate every 12 hours; manual rotation uses runbook RB-77."
+    },
+    {
+      "id": "doc-db-primary",
+      "text": "The billing Postgres primary is db-bill-01 in us-east-2a; failover target is db-bill-02."
+    },
+    {
+      "id": "doc-rate-limit",
+      "text": "Public API rate limit is 600 requests per minute per key, enforced by edge-limiter."
+    },
+    {
+      "id": "doc-inc-4388",
+      "text": "Incident INC-4388 traced to a bad glibc upgrade on the build fleet; fixed by pinning image bld-2024.09."
+    },
+    {
+      "id": "doc-kafka-lag",
+      "text": "Consumer lag alerts for the events pipeline fire at 30k messages via alert EVT-lag-30k."
+    },
+    {
+      "id": "doc-gpu-quota",
+      "text": "Each ML team gets 64 A100-hours per day; overage requests go through ML-QUOTA board."
+    },
+    {
+      "id": "doc-cdn-purge",
+      "text": "CDN cache purges propagate globally within 90 seconds using the purge-fanout job."
+    },
+    {
+      "id": "doc-oncall-rot",
+      "text": "Primary on-call rotates weekly on Mondays 10:00 UTC; the schedule lives in PagerPlane."
+    },
+    {
+      "id": "doc-tf-state",
+      "text": "Terraform state for core-infra is stored in bucket tf-core-state-prod with DynamoDB locking."
+    },
+    {
+      "id": "doc-sso-idp",
+      "text": "Workforce SSO runs through Okta tenant meridian-corp; break-glass accounts are in BG-vault."
+    },
+    {
+      "id": "doc-canary-pct",
+      "text": "Canary deploys route 5% of traffic for 30 minutes before full rollout, gated by canary-judge."
+    },
+    {
+      "id": "doc-log-retent",
+      "text": "Production logs retain 30 days hot and 13 months cold in the logging-lake archive."
+    },
+    {
+      "id": "doc-mtls-cert",
+      "text": "Internal mTLS certificates expire after 90 days and auto-renew at 60 via cert-minter."
+    },
+    {
+      "id": "doc-perf-slo",
+      "text": "checkout-web has a p95 latency SLO of 350ms measured at the edge, dashboard PERF-co-web."
+    },
+    {
+      "id": "doc-repo-mono",
+      "text": "All Go services live in the monorepo meridian/go-services; ownership is per-directory CODEOWNERS."
+    },
+    {
+      "id": "doc-sec-scan",
+      "text": "Container images are blocked from deploy on critical CVEs by the sentinel-scan admission gate."
+    },
+    {
+      "id": "doc-flag-svc",
+      "text": "Feature flags are served by flagd-edge with a 10s propagation SLA; kill switches use KS- prefixes."
+    },
+    {
+      "id": "doc-backup-rpo",
+      "text": "Billing data RPO is 5 minutes via WAL shipping; restore drills run monthly under DR-bill."
+    },
+    {
+      "id": "doc-inc-4501",
+      "text": "Incident INC-4501: expired SAML metadata broke vendor logins; renewal automated in job saml-refresh."
+    },
+    {
+      "id": "doc-queue-dlq",
+      "text": "Failed webhook deliveries retry 8 times with exponential backoff then land in hooks-dlq."
+    },
+    {
+      "id": "doc-cost-tag",
+      "text": "Every cloud resource must carry cost-center and service tags; untagged spend pages FinOps weekly."
+    },
+    {
+      "id": "doc-api-vers",
+      "text": "Public API versions are date-pinned (e.g. 2025-06-01) and supported for 24 months after sunset notice."
+    },
+    {
+      "id": "doc-chaos-day",
+      "text": "Chaos experiments run in prod every second Wednesday, coordinated through the storm-runner tool."
+    },
+    {
+      "id": "doc-data-resid",
+      "text": "EU customer data stays in eu-central-1 under policy DATA-RES-EU; cross-region copies are blocked."
+    },
+    {
+      "id": "doc-build-cache",
+      "text": "CI build cache hits average 82% using the bazel-remote cluster; misses page nobody."
+    },
+    {
+      "id": "doc-pii-mask",
+      "text": "PII is masked at ingestion by the scrub-gate library; raw values never reach the lake."
+    }
+  ],
+  "queries": [
+    {
+      "id": "q-api-vers-exact-id",
+      "text": "2025-06-01",
+      "expected_ids": [
+        "doc-api-vers"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-api-vers-keyword",
+      "text": "api versioning",
+      "expected_ids": [
+        "doc-api-vers"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-api-vers-multi-term",
+      "text": "public api date pinned version support window",
+      "expected_ids": [
+        "doc-api-vers"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-api-vers-paraphrase",
+      "text": "how long is an old api version kept alive",
+      "expected_ids": [
+        "doc-api-vers"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-backup-rpo-exact-id",
+      "text": "DR-bill",
+      "expected_ids": [
+        "doc-backup-rpo"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-backup-rpo-keyword",
+      "text": "billing backup rpo",
+      "expected_ids": [
+        "doc-backup-rpo"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-backup-rpo-multi-term",
+      "text": "billing rpo wal shipping restore drill",
+      "expected_ids": [
+        "doc-backup-rpo"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-backup-rpo-paraphrase",
+      "text": "how much invoice data could we lose at most",
+      "expected_ids": [
+        "doc-backup-rpo"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-build-cache-exact-id",
+      "text": "bazel-remote",
+      "expected_ids": [
+        "doc-build-cache"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-build-cache-keyword",
+      "text": "build cache",
+      "expected_ids": [
+        "doc-build-cache"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-build-cache-multi-term",
+      "text": "ci build cache hit rate remote cluster",
+      "expected_ids": [
+        "doc-build-cache"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-build-cache-paraphrase",
+      "text": "how often does continuous integration reuse compiled work",
+      "expected_ids": [
+        "doc-build-cache"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-canary-pct-exact-id",
+      "text": "canary-judge",
+      "expected_ids": [
+        "doc-canary-pct"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-canary-pct-keyword",
+      "text": "canary percentage",
+      "expected_ids": [
+        "doc-canary-pct"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-canary-pct-multi-term",
+      "text": "canary deploy traffic percent duration gate",
+      "expected_ids": [
+        "doc-canary-pct"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-canary-pct-paraphrase",
+      "text": "how much traffic does a trial release get first",
+      "expected_ids": [
+        "doc-canary-pct"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-cdn-purge-exact-id",
+      "text": "purge-fanout",
+      "expected_ids": [
+        "doc-cdn-purge"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-cdn-purge-keyword",
+      "text": "cdn purge",
+      "expected_ids": [
+        "doc-cdn-purge"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-cdn-purge-multi-term",
+      "text": "cdn cache purge global propagation time",
+      "expected_ids": [
+        "doc-cdn-purge"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-cdn-purge-paraphrase",
+      "text": "how fast does clearing the edge cache take everywhere",
+      "expected_ids": [
+        "doc-cdn-purge"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-chaos-day-exact-id",
+      "text": "storm-runner",
+      "expected_ids": [
+        "doc-chaos-day"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-chaos-day-keyword",
+      "text": "chaos testing",
+      "expected_ids": [
+        "doc-chaos-day"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-chaos-day-multi-term",
+      "text": "chaos experiment prod schedule coordination tool",
+      "expected_ids": [
+        "doc-chaos-day"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-chaos-day-paraphrase",
+      "text": "when do we deliberately break things in production",
+      "expected_ids": [
+        "doc-chaos-day"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-cost-tag-exact-id",
+      "text": "cost-center",
+      "expected_ids": [
+        "doc-cost-tag"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-cost-tag-keyword",
+      "text": "cost tagging",
+      "expected_ids": [
+        "doc-cost-tag"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-cost-tag-multi-term",
+      "text": "cloud resource mandatory tags untagged spend",
+      "expected_ids": [
+        "doc-cost-tag"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-cost-tag-paraphrase",
+      "text": "which labels are mandatory on cloud resources",
+      "expected_ids": [
+        "doc-cost-tag"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-data-resid-exact-id",
+      "text": "DATA-RES-EU",
+      "expected_ids": [
+        "doc-data-resid"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-data-resid-keyword",
+      "text": "data residency",
+      "expected_ids": [
+        "doc-data-resid"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-data-resid-multi-term",
+      "text": "eu data residency region policy cross region",
+      "expected_ids": [
+        "doc-data-resid"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-data-resid-paraphrase",
+      "text": "where must european customer records be stored",
+      "expected_ids": [
+        "doc-data-resid"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-db-primary-exact-id",
+      "text": "db-bill-01",
+      "expected_ids": [
+        "doc-db-primary"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-db-primary-keyword",
+      "text": "billing postgres primary",
+      "expected_ids": [
+        "doc-db-primary"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-db-primary-multi-term",
+      "text": "billing postgres primary failover target zone",
+      "expected_ids": [
+        "doc-db-primary"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-db-primary-paraphrase",
+      "text": "which database node is the main one for invoicing",
+      "expected_ids": [
+        "doc-db-primary"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-dep-freeze-exact-id",
+      "text": "REL-freeze-Q",
+      "expected_ids": [
+        "doc-dep-freeze"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-dep-freeze-keyword",
+      "text": "deploy freeze schedule",
+      "expected_ids": [
+        "doc-dep-freeze"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-dep-freeze-multi-term",
+      "text": "quarterly deploy freeze start day tracking",
+      "expected_ids": [
+        "doc-dep-freeze"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-dep-freeze-paraphrase",
+      "text": "when are we not allowed to ship to production",
+      "expected_ids": [
+        "doc-dep-freeze"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-flag-svc-exact-id",
+      "text": "flagd-edge",
+      "expected_ids": [
+        "doc-flag-svc"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-flag-svc-keyword",
+      "text": "feature flags",
+      "expected_ids": [
+        "doc-flag-svc"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-flag-svc-multi-term",
+      "text": "feature flag propagation sla kill switch",
+      "expected_ids": [
+        "doc-flag-svc"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-flag-svc-paraphrase",
+      "text": "how quickly does toggling a feature reach users",
+      "expected_ids": [
+        "doc-flag-svc"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-gpu-quota-exact-id",
+      "text": "ML-QUOTA",
+      "expected_ids": [
+        "doc-gpu-quota"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-gpu-quota-keyword",
+      "text": "gpu quota",
+      "expected_ids": [
+        "doc-gpu-quota"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-gpu-quota-multi-term",
+      "text": "ml team daily a100 hour quota overage",
+      "expected_ids": [
+        "doc-gpu-quota"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-gpu-quota-paraphrase",
+      "text": "how much accelerator time does a team get daily",
+      "expected_ids": [
+        "doc-gpu-quota"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-inc-4312-exact-id",
+      "text": "INC-4312",
+      "expected_ids": [
+        "doc-inc-4312"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-inc-4312-keyword",
+      "text": "orders-svc incident",
+      "expected_ids": [
+        "doc-inc-4312"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-inc-4312-multi-term",
+      "text": "incident caused by connection pool leak orders",
+      "expected_ids": [
+        "doc-inc-4312"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-inc-4312-paraphrase",
+      "text": "what went wrong with the order service connection leak",
+      "expected_ids": [
+        "doc-inc-4312"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-inc-4388-exact-id",
+      "text": "INC-4388",
+      "expected_ids": [
+        "doc-inc-4388"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-inc-4388-keyword",
+      "text": "build fleet incident",
+      "expected_ids": [
+        "doc-inc-4388"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-inc-4388-multi-term",
+      "text": "incident glibc upgrade build fleet pinned image",
+      "expected_ids": [
+        "doc-inc-4388"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-inc-4388-paraphrase",
+      "text": "what broke the compile machines last autumn",
+      "expected_ids": [
+        "doc-inc-4388"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-inc-4501-exact-id",
+      "text": "INC-4501",
+      "expected_ids": [
+        "doc-inc-4501"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-inc-4501-keyword",
+      "text": "saml incident",
+      "expected_ids": [
+        "doc-inc-4501"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-inc-4501-multi-term",
+      "text": "incident expired saml metadata vendor login",
+      "expected_ids": [
+        "doc-inc-4501"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-inc-4501-paraphrase",
+      "text": "why could partners not sign in during the outage",
+      "expected_ids": [
+        "doc-inc-4501"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-kafka-lag-exact-id",
+      "text": "EVT-lag-30k",
+      "expected_ids": [
+        "doc-kafka-lag"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-kafka-lag-keyword",
+      "text": "kafka lag alert",
+      "expected_ids": [
+        "doc-kafka-lag"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-kafka-lag-multi-term",
+      "text": "events pipeline consumer lag alert threshold",
+      "expected_ids": [
+        "doc-kafka-lag"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-kafka-lag-paraphrase",
+      "text": "at what backlog does the event stream page us",
+      "expected_ids": [
+        "doc-kafka-lag"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-log-retent-exact-id",
+      "text": "logging-lake",
+      "expected_ids": [
+        "doc-log-retent"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-log-retent-keyword",
+      "text": "log retention",
+      "expected_ids": [
+        "doc-log-retent"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-log-retent-multi-term",
+      "text": "production log retention hot cold archive",
+      "expected_ids": [
+        "doc-log-retent"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-log-retent-paraphrase",
+      "text": "how long do we keep production log data",
+      "expected_ids": [
+        "doc-log-retent"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-mtls-cert-exact-id",
+      "text": "cert-minter",
+      "expected_ids": [
+        "doc-mtls-cert"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-mtls-cert-keyword",
+      "text": "mtls certificate expiry",
+      "expected_ids": [
+        "doc-mtls-cert"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-mtls-cert-multi-term",
+      "text": "internal mtls certificate lifetime auto renew",
+      "expected_ids": [
+        "doc-mtls-cert"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-mtls-cert-paraphrase",
+      "text": "when do the internal service certs run out",
+      "expected_ids": [
+        "doc-mtls-cert"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-oncall-rot-exact-id",
+      "text": "PagerPlane",
+      "expected_ids": [
+        "doc-oncall-rot"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-oncall-rot-keyword",
+      "text": "oncall rotation",
+      "expected_ids": [
+        "doc-oncall-rot"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-oncall-rot-multi-term",
+      "text": "primary oncall weekly rotation handover time",
+      "expected_ids": [
+        "doc-oncall-rot"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-oncall-rot-paraphrase",
+      "text": "when does the pager hand over each week",
+      "expected_ids": [
+        "doc-oncall-rot"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-own-search-exact-id",
+      "text": "opensearch-gateway",
+      "expected_ids": [
+        "doc-own-search"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-own-search-keyword",
+      "text": "search-platform ownership",
+      "expected_ids": [
+        "doc-own-search"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-own-search-multi-term",
+      "text": "opensearch gateway owning team escalation",
+      "expected_ids": [
+        "doc-own-search"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-own-search-paraphrase",
+      "text": "who do I page when the search cluster proxy breaks",
+      "expected_ids": [
+        "doc-own-search"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-pay-timeout-exact-id",
+      "text": "PAY-cfg-114",
+      "expected_ids": [
+        "doc-pay-timeout"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-pay-timeout-keyword",
+      "text": "payments-api timeout",
+      "expected_ids": [
+        "doc-pay-timeout"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-pay-timeout-multi-term",
+      "text": "payments-api request timeout configuration value",
+      "expected_ids": [
+        "doc-pay-timeout"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-pay-timeout-paraphrase",
+      "text": "how long before the payment service gives up on a request",
+      "expected_ids": [
+        "doc-pay-timeout"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-perf-slo-exact-id",
+      "text": "PERF-co-web",
+      "expected_ids": [
+        "doc-perf-slo"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-perf-slo-keyword",
+      "text": "checkout latency slo",
+      "expected_ids": [
+        "doc-perf-slo"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-perf-slo-multi-term",
+      "text": "checkout web p95 latency slo edge",
+      "expected_ids": [
+        "doc-perf-slo"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-perf-slo-paraphrase",
+      "text": "how fast must the purchase page respond",
+      "expected_ids": [
+        "doc-perf-slo"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-pii-mask-exact-id",
+      "text": "scrub-gate",
+      "expected_ids": [
+        "doc-pii-mask"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-pii-mask-keyword",
+      "text": "pii masking",
+      "expected_ids": [
+        "doc-pii-mask"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-pii-mask-multi-term",
+      "text": "pii masking ingestion library data lake",
+      "expected_ids": [
+        "doc-pii-mask"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-pii-mask-paraphrase",
+      "text": "how is personal data hidden before analytics",
+      "expected_ids": [
+        "doc-pii-mask"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-queue-dlq-exact-id",
+      "text": "hooks-dlq",
+      "expected_ids": [
+        "doc-queue-dlq"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-queue-dlq-keyword",
+      "text": "webhook retries",
+      "expected_ids": [
+        "doc-queue-dlq"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-queue-dlq-multi-term",
+      "text": "webhook delivery retry count backoff dead letter",
+      "expected_ids": [
+        "doc-queue-dlq"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-queue-dlq-paraphrase",
+      "text": "what happens to a webhook that keeps failing",
+      "expected_ids": [
+        "doc-queue-dlq"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-rate-limit-exact-id",
+      "text": "edge-limiter",
+      "expected_ids": [
+        "doc-rate-limit"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-rate-limit-keyword",
+      "text": "api rate limit",
+      "expected_ids": [
+        "doc-rate-limit"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-rate-limit-multi-term",
+      "text": "public api per key rate limit enforcement",
+      "expected_ids": [
+        "doc-rate-limit"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-rate-limit-paraphrase",
+      "text": "how many calls can one api key make each minute",
+      "expected_ids": [
+        "doc-rate-limit"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-repo-mono-exact-id",
+      "text": "go-services",
+      "expected_ids": [
+        "doc-repo-mono"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-repo-mono-keyword",
+      "text": "monorepo layout",
+      "expected_ids": [
+        "doc-repo-mono"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-repo-mono-multi-term",
+      "text": "go services monorepo codeowners per directory",
+      "expected_ids": [
+        "doc-repo-mono"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-repo-mono-paraphrase",
+      "text": "where does backend code live and who approves changes",
+      "expected_ids": [
+        "doc-repo-mono"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-sec-scan-exact-id",
+      "text": "sentinel-scan",
+      "expected_ids": [
+        "doc-sec-scan"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-sec-scan-keyword",
+      "text": "security scanning",
+      "expected_ids": [
+        "doc-sec-scan"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-sec-scan-multi-term",
+      "text": "container image critical cve admission gate",
+      "expected_ids": [
+        "doc-sec-scan"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-sec-scan-paraphrase",
+      "text": "what stops a vulnerable image from shipping",
+      "expected_ids": [
+        "doc-sec-scan"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-sso-idp-exact-id",
+      "text": "meridian-corp",
+      "expected_ids": [
+        "doc-sso-idp"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-sso-idp-keyword",
+      "text": "sso identity provider",
+      "expected_ids": [
+        "doc-sso-idp"
+      ],
+      "split": "holdout",
+      "class": "keyword"
+    },
+    {
+      "id": "q-sso-idp-multi-term",
+      "text": "workforce sso okta tenant break glass",
+      "expected_ids": [
+        "doc-sso-idp"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-sso-idp-paraphrase",
+      "text": "what do we log into when single sign on is down",
+      "expected_ids": [
+        "doc-sso-idp"
+      ],
+      "split": "holdout",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-tf-state-exact-id",
+      "text": "tf-core-state-prod",
+      "expected_ids": [
+        "doc-tf-state"
+      ],
+      "split": "holdout",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-tf-state-keyword",
+      "text": "terraform state",
+      "expected_ids": [
+        "doc-tf-state"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-tf-state-multi-term",
+      "text": "terraform core infra state bucket locking",
+      "expected_ids": [
+        "doc-tf-state"
+      ],
+      "split": "train",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-tf-state-paraphrase",
+      "text": "where does infrastructure as code keep its state file",
+      "expected_ids": [
+        "doc-tf-state"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    },
+    {
+      "id": "q-tok-rotate-exact-id",
+      "text": "RB-77",
+      "expected_ids": [
+        "doc-tok-rotate"
+      ],
+      "split": "train",
+      "class": "exact-id"
+    },
+    {
+      "id": "q-tok-rotate-keyword",
+      "text": "vault-broker token rotation",
+      "expected_ids": [
+        "doc-tok-rotate"
+      ],
+      "split": "train",
+      "class": "keyword"
+    },
+    {
+      "id": "q-tok-rotate-multi-term",
+      "text": "vault broker api token rotation interval runbook",
+      "expected_ids": [
+        "doc-tok-rotate"
+      ],
+      "split": "holdout",
+      "class": "multi-term"
+    },
+    {
+      "id": "q-tok-rotate-paraphrase",
+      "text": "how often do the secret broker credentials refresh",
+      "expected_ids": [
+        "doc-tok-rotate"
+      ],
+      "split": "train",
+      "class": "paraphrase"
+    }
+  ]
+}

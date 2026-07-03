@@ -1,0 +1,14 @@
+version: v2
+modules:
+  - path: api/proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # The plan pins the file at api/proto/engram.proto and the service name
+    # "Engram" (walking-skeleton plan, Phase 0 Produces/DW-0.7).
+    - PACKAGE_DIRECTORY_MATCH
+    - SERVICE_SUFFIX
+breaking:
+  use:
+    - FILE

@@ -2,7 +2,9 @@
 
 **Created:** 2026-06-29
 **Amended:** 2026-07-03 — external plan review (codex + antigravity) + scale re-target (S1 team → S2 org)
-**Status:** ready
+**Status:** in-progress
+**Started:** 2026-07-03 (build worktree: .claude/worktrees/engram-walking-skeleton, branch feature/engram-walking-skeleton)
+**Current Phase:** 0
 **Complexity:** complex
 **Scope of this plan:** Walking skeleton — **Phases 0–2 are build-ready**. Phases 3–7 are roadmapped at vision detail (§Roadmap) and planned just-in-time once the skeleton teaches us the real constraints.
 
@@ -65,7 +67,7 @@ Rationale: at high uncertainty the slice surfaces the real constraints (OpenSear
 
 | ID | Decision | Grounding |
 |----|----------|-----------|
-| D0 | **Go**, not Rust | I/O-bound orchestration; vector compute delegated to OpenSearch; concurrency + ecosystem + dev speed |
+| D0 | **Go**, not Rust — **CONFIRMED 2026-07-03 (Phase 0): language locked.** Phase-0 build validated the choice end-to-end: module builds/tests green on Go 1.26, gRPC/protobuf codegen is pure-Go (pinned `go run` buf + protoc-gen-go), OpenSearch 3.1 speaks plain HTTP/JSON (no client-lib risk), and the whole toolchain (revive lint, testcontainer-style spikes) needed zero non-Go host installs. No p99/no-GC pressure surfaced. Reversibility window closes at Phase 1. | I/O-bound orchestration; vector compute delegated to OpenSearch; concurrency + ecosystem + dev speed |
 | D1 | Hybrid BM25 + kNN, RRF | Anthropic Contextual Retrieval; OpenSearch/Elastic default |
 | D2 | Incremental graph upsert, not batch | Graphiti per-episode; GraphRAG batch is a non-starter |
 | D3 | Bi-temporal invalidation (append, never delete) | Zep 4-timestamp + MemOS version chain → audit / point-in-time |

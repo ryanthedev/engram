@@ -1,0 +1,47 @@
+{
+  "index_patterns": ["engram-semantic*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "index.knn": true,
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "subject": { "type": "keyword" },
+        "predicate": { "type": "keyword" },
+        "object": { "type": "keyword" },
+        "statement": { "type": "text" },
+        "fact_embedding": {
+          "type": "knn_vector",
+          "dimension": 1024,
+          "method": {
+            "name": "hnsw",
+            "engine": "faiss",
+            "space_type": "innerproduct",
+            "parameters": {
+              "m": 16,
+              "ef_construction": 128,
+              "encoder": { "name": "sq", "parameters": { "type": "fp16" } }
+            }
+          }
+        },
+        "content_key": { "type": "keyword" },
+        "supersedes": { "type": "keyword" },
+        "extractor_version": { "type": "keyword" },
+        "tenant_id": { "type": "keyword" },
+        "team_id": { "type": "keyword" },
+        "scope": { "type": "keyword" },
+        "owner_agent_id": { "type": "keyword" },
+        "source_ids": { "type": "keyword" },
+        "valid_at": { "type": "date" },
+        "invalid_at": { "type": "date" },
+        "created_at": { "type": "date" },
+        "expired_at": { "type": "date" },
+        "invalidated_tx_at": { "type": "date" }
+      }
+    }
+  }
+}
