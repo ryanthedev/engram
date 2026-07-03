@@ -301,4 +301,10 @@ gantt
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 0: Foundations & Contracts (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: Verification passed
+- [x] Committed
+Commit: f874ecd
+Summary: All five seam interfaces (Store incl. outbox/ledger/repair, Retriever, Extractor, Reconciler, Embedder), bi-temporal record structs with the content-key/supersedes/ledger ID contract, pinned-3.1 index templates + RRF pipeline with idempotent apply, proto with required event_id, eval harness with frozen train/holdout split — codebase compiles, lints, and passes 41 tests incl. live-cluster spikes; Phases 1–2 implement against these fixed seams (dev cluster: `make dev-cluster`, podman, localhost:9200).

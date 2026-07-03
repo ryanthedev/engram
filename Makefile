@@ -26,9 +26,14 @@ proto:
 proto-check: proto
 	git diff --exit-code -- api/engrampb
 
-# DW-0.4 / DW-0.9: live-cluster integration + spike tests (pinned 3.1).
+# DW-0.4 / DW-0.9 / DW-1.1 / DW-1.2 / DW-1.3 / DW-1.4: live-cluster
+# integration + spike tests (pinned 3.1).
 integration:
-	ENGRAM_OPENSEARCH_URL=$(OPENSEARCH_URL) go test -tags=integration -count=1 -v ./internal/spike/ ./internal/store/
+	ENGRAM_OPENSEARCH_URL=$(OPENSEARCH_URL) go test -tags=integration -count=1 -v ./internal/spike/ ./internal/store/ ./internal/retrieval/ ./internal/server/ ./internal/eval/...
+
+# DW-1.5: performance harness (perf environment, not CI — see the plan).
+perf:
+	go run ./cmd/engram-perf
 
 apply-templates:
 	go run ./cmd/engram-apply-templates -url $(OPENSEARCH_URL)
