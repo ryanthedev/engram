@@ -65,6 +65,9 @@ func (f *fakeOS) handler() http.Handler {
 		case r.Method == http.MethodPost && strings.Contains(path, "/_update/"):
 			parts := strings.SplitN(path, "/_update/", 2)
 			f.handlePartialUpdate(w, r, parts[0], parts[1])
+		case r.Method == http.MethodGet && strings.Contains(path, "/_doc/"):
+			parts := strings.SplitN(path, "/_doc/", 2)
+			f.handleGet(w, parts[0], parts[1])
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -147,12 +150,27 @@ func (f *fakeOS) handlePartialUpdate(w http.ResponseWriter, r *http.Request, idx
 	_ = json.NewEncoder(w).Encode(map[string]any{"_id": id, "result": "updated"})
 }
 
+func (f *fakeOS) handleGet(w http.ResponseWriter, idx, id string) {
+	doc, exists := f.index(idx)[id]
+	if !exists {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"found": false})
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"_id": id, "found": true, "_source": doc.source,
+		"_seq_no": float64(doc.seqNo), "_primary_term": float64(doc.primaryTerm),
+	})
+}
+
 func newTestStore(t *testing.T) (*store.OpenSearchStore, *fakeOS) {
 	t.Helper()
 	fake := newFakeOS()
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
-	return store.NewOpenSearchStore(srv.Client(), srv.URL, store.WithEpisodicIndex("ep"), store.WithSemanticIndex("sem")), fake
+	return store.NewOpenSearchStore(srv.Client(), srv.URL,
+		store.WithEpisodicIndex("ep"), store.WithSemanticIndex("sem"), store.WithLedgerIndex("led")), fake
 }
 
 // TestOpenSearchStoreAppendReturnsDurableID covers DW-1.1's write half: an
@@ -204,31 +222,81 @@ func TestOpenSearchStoreUpdateGuardedConflict(t *testing.T) {
 	}
 }
 
-// TestOpenSearchStoreOutboxLedgerMethodsNotImplemented asserts the Phase-2
-// deferral: OpenSearchStore satisfies store.Store fully (compiles as a
-// Store), but its outbox/ledger methods report ErrNotImplemented rather than
-// silently doing nothing.
-func TestOpenSearchStoreOutboxLedgerMethodsNotImplemented(t *testing.T) {
+// TestOpenSearchStoreClaimLedgerFirstClaimThenResume replaces the Phase-1
+// placeholder (TestOpenSearchStoreOutboxLedgerMethodsNotImplemented — its
+// premise, "not implemented until Phase 2", is invalidated by Phase 2
+// itself). It pins the D13 claim-first mapping: the first ClaimLedger wins
+// (Claimed=true, phase=claimed), a second claim of the same key returns the
+// existing entry with Claimed=false, and cached state written by
+// UpdateLedger — including the extraction bytes — round-trips to the
+// resuming claimant.
+func TestOpenSearchStoreClaimLedgerFirstClaimThenResume(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
+	key := memory.LedgerKey{TenantID: "t1", EventID: "ev-1", ExtractorVersion: "v1"}
 
-	if _, err := s.ClaimBatch(ctx, 10, time.Minute); !errors.Is(err, store.ErrNotImplemented) {
-		t.Errorf("ClaimBatch error = %v, want ErrNotImplemented", err)
+	first, err := s.ClaimLedger(ctx, key)
+	if err != nil {
+		t.Fatalf("first ClaimLedger: %v", err)
 	}
-	if err := s.Complete(ctx, "ev-1"); !errors.Is(err, store.ErrNotImplemented) {
-		t.Errorf("Complete error = %v, want ErrNotImplemented", err)
+	if !first.Claimed || first.State.Phase != store.LedgerClaimed {
+		t.Fatalf("first claim = %+v, want Claimed=true phase=claimed", first)
 	}
-	if err := s.DeadLetter(ctx, "ev-1", "boom"); !errors.Is(err, store.ErrNotImplemented) {
-		t.Errorf("DeadLetter error = %v, want ErrNotImplemented", err)
+	if first.LeaseUntil.Before(time.Now()) {
+		t.Errorf("first claim lease %v already expired", first.LeaseUntil)
 	}
-	if _, err := s.ClaimLedger(ctx, memory.LedgerKey{}); !errors.Is(err, store.ErrNotImplemented) {
-		t.Errorf("ClaimLedger error = %v, want ErrNotImplemented", err)
+
+	cached := store.LedgerState{
+		Phase:            store.LedgerExtracted,
+		Extraction:       []byte(`[{"subject":"svc","predicate":"owner","object":"ana"}]`),
+		CompletedActions: []string{"doc-1"},
 	}
-	if err := s.UpdateLedger(ctx, memory.LedgerKey{}, store.LedgerState{}); !errors.Is(err, store.ErrNotImplemented) {
-		t.Errorf("UpdateLedger error = %v, want ErrNotImplemented", err)
+	if err := s.UpdateLedger(ctx, key, cached); err != nil {
+		t.Fatalf("UpdateLedger: %v", err)
 	}
-	if _, err := s.ScanIncomplete(ctx); !errors.Is(err, store.ErrNotImplemented) {
-		t.Errorf("ScanIncomplete error = %v, want ErrNotImplemented", err)
+
+	second, err := s.ClaimLedger(ctx, key)
+	if err != nil {
+		t.Fatalf("second ClaimLedger: %v", err)
+	}
+	if second.Claimed {
+		t.Fatal("second claim of the same key must not win (Claimed=false)")
+	}
+	if second.State.Phase != store.LedgerExtracted {
+		t.Errorf("resumed phase = %q, want %q", second.State.Phase, store.LedgerExtracted)
+	}
+	if string(second.State.Extraction) != string(cached.Extraction) {
+		t.Errorf("resumed extraction = %q, want the cached bytes", second.State.Extraction)
+	}
+	if len(second.State.CompletedActions) != 1 || second.State.CompletedActions[0] != "doc-1" {
+		t.Errorf("resumed completed actions = %v, want [doc-1]", second.State.CompletedActions)
+	}
+	if second.Key != key {
+		t.Errorf("resumed key = %+v, want %+v", second.Key, key)
+	}
+}
+
+// TestOpenSearchStoreGetFact pins the realtime read the write protocol's
+// 409 re-read depends on: an existing fact returns its content and
+// concurrency tokens; a missing id reports ok=false without error.
+func TestOpenSearchStoreGetFact(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	fact := memory.SemanticFact{Statement: "svc owner ana", ContentKey: "ck1", TenantID: "t1", ValidAt: time.Now().UTC()}
+	if err := s.Create(ctx, "fact-1", fact); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	vf, ok, err := s.GetFact(ctx, "fact-1")
+	if err != nil || !ok {
+		t.Fatalf("GetFact(fact-1) = ok=%v err=%v, want found", ok, err)
+	}
+	if vf.Fact.Statement != "svc owner ana" || vf.SeqNo == 0 && vf.PrimaryTerm == 0 {
+		t.Errorf("GetFact = %+v, want statement + concurrency tokens", vf)
+	}
+
+	if _, ok, err := s.GetFact(ctx, "missing"); err != nil || ok {
+		t.Errorf("GetFact(missing) = ok=%v err=%v, want ok=false err=nil", ok, err)
 	}
 }
 

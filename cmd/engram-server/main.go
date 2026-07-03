@@ -1,15 +1,18 @@
 // Command engram-server runs the Engram gRPC service (Ingest + Search) over
-// OpenSearch (Phase 1). It applies the cluster contract on startup
-// (idempotent — safe to run alongside make apply-templates), validates the
-// configured embedder against the index template's dimension (D15), starts
-// the episodic embedding-enrichment job, and serves engrampb.EngramServer.
+// OpenSearch, plus the Phase-2 async write path: the outbox worker pool
+// (claim → extract → reconcile → bi-temporal write) and the repair sweep. It
+// applies the cluster contract on startup (idempotent — safe to run
+// alongside make apply-templates), validates the configured embedder against
+// the index template's dimension (D15), and starts the episodic
+// embedding-enrichment job.
 //
 // Usage:
 //
-//	go run ./cmd/engram-server [-addr :7070] [-url http://localhost:9200] [-embed-url ""]
+//	go run ./cmd/engram-server [-addr :7070] [-url http://localhost:9200] [-embed-url ""] [-extract-url ""]
 //
-// With no -embed-url, the deterministic fake embedder is used (no real
-// BGE-M3 service is required for the walking skeleton's Phase-1 tests).
+// With no -embed-url, the deterministic fake embedder is used; with no
+// -extract-url, the deterministic rule-based extractor is used (no real
+// BGE-M3 or LLM endpoint is required for the walking skeleton).
 package main
 
 import (
@@ -29,9 +32,11 @@ import (
 	"github.com/ryanthedev/engram/api/engrampb"
 	"github.com/ryanthedev/engram/internal/embed"
 	"github.com/ryanthedev/engram/internal/enrich"
+	"github.com/ryanthedev/engram/internal/ingest"
 	"github.com/ryanthedev/engram/internal/retrieval"
 	"github.com/ryanthedev/engram/internal/server"
 	"github.com/ryanthedev/engram/internal/store"
+	"github.com/ryanthedev/engram/internal/worker"
 )
 
 func main() {
@@ -47,6 +52,17 @@ func main() {
 	embedRevision := flag.String("embed-revision", "unpinned-dev", "embedding model revision (D15)")
 	enrichInterval := flag.Duration("enrich-interval", 2*time.Second, "embedding-enrichment poll interval")
 	enrichBatch := flag.Int("enrich-batch", 50, "embedding-enrichment batch size")
+	extractURL := flag.String("extract-url", "", "OpenAI-compatible extraction endpoint base URL (e.g. https://api.openai.com/v1); empty uses the deterministic rule extractor")
+	extractModel := flag.String("extract-model", ingest.DefaultPricing.Model, "extraction model id (the pinned cheap model)")
+	extractorVersion := flag.String("extractor-version", "v1", "extraction pipeline version (ledger key component, D13)")
+	workers := flag.Int("workers", 2, "outbox worker pool size (D12)")
+	claimBatch := flag.Int("claim-batch", 16, "outbox events claimed per scan")
+	claimLease := flag.Duration("claim-lease", time.Minute, "outbox claim lease (also the retry backoff clock)")
+	pollInterval := flag.Duration("poll-interval", 2*time.Second, "outbox poll cadence when idle")
+	maxAttempts := flag.Int("max-attempts", 5, "processing attempts before dead-lettering")
+	sweepInterval := flag.Duration("sweep-interval", 30*time.Second, "repair sweep cadence (D10 convergence SLO <=5m at S1)")
+	priceIn := flag.Float64("extract-price-in", ingest.DefaultPricing.InputUSDPer1M, "extraction model list price, USD per 1M input tokens")
+	priceOut := flag.Float64("extract-price-out", ingest.DefaultPricing.OutputUSDPer1M, "extraction model list price, USD per 1M output tokens")
 	flag.Parse()
 
 	httpClient := &http.Client{Timeout: store.DefaultTimeout}
@@ -74,6 +90,47 @@ func main() {
 
 	job := &enrich.Job{Store: st, Embedder: embedder}
 	go job.Run(ctx, *enrichInterval, *enrichBatch)
+
+	// The async write path (Phase 2): outbox worker pool + repair sweep.
+	meter := &ingest.CostMeter{}
+	pricing := ingest.Pricing{Model: *extractModel, InputUSDPer1M: *priceIn, OutputUSDPer1M: *priceOut}
+	var extractor ingest.Extractor
+	if *extractURL != "" {
+		httpEx := ingest.NewHTTPExtractor(httpClient, *extractURL, *extractModel)
+		httpEx.Meter = meter
+		extractor = httpEx
+	} else {
+		extractor = &ingest.RuleExtractor{Meter: meter}
+	}
+	wk := worker.New(st, extractor, ingest.RuleReconciler{}, embedder, worker.Config{
+		ExtractorVersion: *extractorVersion,
+		BatchSize:        *claimBatch,
+		ClaimLease:       *claimLease,
+		PollInterval:     *pollInterval,
+		MaxAttempts:      *maxAttempts,
+		Workers:          *workers,
+	}, slog.Default())
+	go wk.Run(ctx)
+	sweeper := &worker.Sweeper{Store: st, Worker: wk}
+	go sweeper.Run(ctx, *sweepInterval)
+
+	// Extraction cost is the dominant variable cost line (DW-2.6): report
+	// the per-1k-events figure periodically so drift is visible in ops logs.
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if u := meter.Snapshot(); u.Events > 0 {
+					slog.Info("extraction cost", "model", pricing.Model, "events", u.Events,
+						"usd_per_1k_events", u.CostPer1kEventsUSD(pricing))
+				}
+			}
+		}
+	}()
 
 	lis, err := net.Listen("tcp", *addr)
 	if err != nil {

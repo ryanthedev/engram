@@ -156,10 +156,10 @@ sequenceDiagram
 1. **Claim the ledger entry** `(tenant_id, event_id, extractor_version)` with `op_type=create`. Already exists & complete → stop. Exists & incomplete (crashed run) → adopt its **cached extraction** and resume at step 3 — a retry never re-calls the LLM (extraction is nondeterministic; re-extraction would orphan near-duplicate facts).
 2. **Extract, then persist the extraction result into the ledger entry** — before any semantic write.
 3. Per fact: reconcile against candidates, then **index the NEW fact first** (`op_type=create`, `supersedes` set for UPDATE/INVALIDATE). 409 → another worker won: re-read, re-reconcile (usually NOOP).
-4. **Close the predecessor:** set `invalid_at = new.valid_at` + `invalidated_tx_at = now`, guarded by `if_seq_no`/`if_primary_term`; conflict → re-read, bounded retry. **Late arrival:** if `new.valid_at < predecessor.valid_at`, do NOT touch the predecessor — the new fact is historical: bound it at index time by its valid-time successor (`new.invalid_at = successor.valid_at`). Neighbor-aware insertion; intervals must never invert.
+4. **Close the predecessor:** set `invalid_at = min(new.valid_at, nearest valid-time successor's valid_at)` + `invalidated_tx_at = now`, guarded by `if_seq_no`/`if_primary_term`; conflict → re-read, bounded retry. **Every close bound is neighbor-aware** (2026-07-03 build finding: a crash-window transient plus a late arrival inside that window otherwise yields permanently overlapping closed records) — this applies to worker closes AND sweep closes; all closes funnel through one choke point. **Late arrival:** if `new.valid_at < predecessor.valid_at`, do NOT touch the predecessor — the new fact is historical: bound it at index time by its valid-time successor (`new.invalid_at = successor.valid_at`). Neighbor-aware insertion; intervals must never invert.
 5. **Mark each action complete in the ledger**; mark the entry complete when all actions land.
 
-**Repair sweep** (scheduled; convergence SLO ≤5 min at S1): (a) live facts whose `supersedes` target is still live → complete step 4; (b) >1 live fact sharing a `content_key` → keep the earliest, close the rest; (c) ledger entries incomplete past lease expiry → resume from their cached extraction. **Bounded consistency (documented):** between steps 3 and 4 a query may transiently see two live versions of one chain; the read path tolerates this and the sweep bounds the window.
+**Repair sweep** (scheduled; convergence SLO ≤5 min at S1): (a) live facts whose `supersedes` target is still live → complete step 4; (b) >1 live fact sharing a `content_key` → keep the earliest, close the rest; (c) ledger entries incomplete past lease expiry → resume from their cached extraction; (d) **[added at Phase-2 exit, 2026-07-03 — NOT YET IMPLEMENTED]** closed-closed valid-time overlaps within a (tenant, subject, predicate) chain → trim the earlier record to the later's `valid_at` (`trimInterval` primitive exists). Closes the irreducible multi-document write-skew window (review Issue 3): prevention is impossible under per-document OCC; only retroactive repair restores "the sweep converges all partial states". Implement before or at the next write-path change (production plan Phase 3 entry). **Bounded consistency (documented):** between steps 3 and 4 a query may transiently see two live versions of one chain; the read path tolerates this and the sweep bounds the window.
 
 ---
 
@@ -308,3 +308,10 @@ gantt
 - [x] Committed
 Commit: f874ecd
 Summary: All five seam interfaces (Store incl. outbox/ledger/repair, Retriever, Extractor, Reconciler, Embedder), bi-temporal record structs with the content-key/supersedes/ledger ID contract, pinned-3.1 index templates + RRF pipeline with idempotent apply, proto with required event_id, eval harness with frozen train/holdout split — codebase compiles, lints, and passes 41 tests incl. live-cluster spikes; Phases 1–2 implement against these fixed seams (dev cluster: `make dev-cluster`, podman, localhost:9200).
+
+### Phase 1: Hybrid Retrieval Backbone (T1 + T2) (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed
+- [x] Committed
+Commit: 005ab92
+Summary: The read path is live — gRPC Ingest (sync episodic append, durable id) + Search (hybrid BM25+kNN+RRF across episodic+semantic with tenant/user/validity filters); background embedding-enrichment job (text-first ingest, ≤30 s kNN lag); OpenSearchStore implements Append/Create/Update (outbox/ledger methods stubbed ErrNotImplemented for Phase 2); fusion non-inferior on the frozen holdout; perf p95 56 ms. Phase 2 extends Ingest with the outbox worker writing semantic facts through the same Store.

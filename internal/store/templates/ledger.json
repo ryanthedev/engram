@@ -1,0 +1,22 @@
+{
+  "index_patterns": ["engram-ledger*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "tenant_id": { "type": "keyword" },
+        "event_id": { "type": "keyword" },
+        "extractor_version": { "type": "keyword" },
+        "phase": { "type": "keyword" },
+        "extraction": { "type": "binary" },
+        "completed_actions": { "type": "keyword" },
+        "lease_until": { "type": "date" }
+      }
+    }
+  }
+}

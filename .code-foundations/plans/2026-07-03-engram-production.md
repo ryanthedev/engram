@@ -267,6 +267,7 @@ _DAG: 3 → 4 → {5 ∥ 6} → 7 → 8. Phase bodies filled during DETAIL._
 
 ## Notes
 
+- **Carry-over from the skeleton build (2026-07-03, Phase-2 review Issue 3):** implement **sweep rule (d)** — closed-closed valid-time overlap repair per (tenant, subject, predicate), trimming the earlier record to the later's `valid_at` — as the first work item of Phase 3 (or a pre-Phase-3 patch). It closes the irreducible multi-document write-skew window; the `trimInterval` primitive and regression scaffolding already exist. See the skeleton plan's Write protocol §Repair sweep (d).
 - Go MCP SDK choice is a build-time decision (Assumption row 2); the tool schemas in Phase 3's Produces are the stable contract either way.
 - Subset (⊆) ACL semantics via `terms_set` deliberately deferred — Phase 4 OUT; seam noted there.
 - Community summarization deferred (Zep reports drift under incremental updates) — revisit after S1 field data.

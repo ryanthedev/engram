@@ -33,8 +33,8 @@ func (r ApplyResult) Changed() bool {
 }
 
 // Apply idempotently applies Engram's cluster contract to the OpenSearch at
-// baseURL: the episodic + semantic index templates, their concrete indices,
-// and the RRF search pipeline. It refuses to touch any cluster whose version
+// baseURL: the episodic + semantic + extraction-ledger index templates, their
+// concrete indices, and the RRF search pipeline. It refuses to touch any cluster whose version
 // is not the pinned 3.1 line (D14) — one code path, no fallback. Re-running
 // against an up-to-date cluster is a no-op (Changed() == false).
 func Apply(ctx context.Context, client *http.Client, baseURL string) (ApplyResult, error) {
@@ -62,6 +62,7 @@ func Apply(ctx context.Context, client *http.Client, baseURL string) (ApplyResul
 	}{
 		{EpisodicTemplateName, http.MethodPut, "/_index_template/" + EpisodicTemplateName, EpisodicTemplateJSON, true},
 		{SemanticTemplateName, http.MethodPut, "/_index_template/" + SemanticTemplateName, SemanticTemplateJSON, true},
+		{LedgerTemplateName, http.MethodPut, "/_index_template/" + LedgerTemplateName, LedgerTemplateJSON, true},
 		{RRFPipelineName, http.MethodPut, "/_search/pipeline/" + RRFPipelineName, RRFPipelineJSON, true},
 	}
 	for _, s := range steps {
@@ -71,7 +72,7 @@ func Apply(ctx context.Context, client *http.Client, baseURL string) (ApplyResul
 		res.Actions[s.name] = "applied"
 	}
 
-	for _, idx := range []string{EpisodicIndex, SemanticIndex} {
+	for _, idx := range []string{EpisodicIndex, SemanticIndex, LedgerIndex} {
 		exists, err := indexExists(ctx, client, base, idx)
 		if err != nil {
 			return res, fmt.Errorf("store: checking index %s: %w", idx, err)

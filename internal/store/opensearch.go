@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,17 +12,6 @@ import (
 
 	"github.com/ryanthedev/engram/internal/memory"
 )
-
-// ErrNotImplemented is returned by the OpenSearchStore outbox and ledger
-// methods (ClaimBatch, Complete, DeadLetter, ClaimLedger, UpdateLedger,
-// ScanIncomplete). Their storage design (D12/D13 — the ledger index shape,
-// scan-and-claim query, lease semantics) is Phase 2 scope ("the outbox
-// worker pool" and "the extraction ledger" are Phase 2 Produces items in the
-// plan); Phase 1 needs only Append/Create/Update for the read/write paths it
-// implements. The method set stays complete so OpenSearchStore satisfies
-// Store today, and Phase 2 fills these bodies in without touching the
-// signatures.
-var ErrNotImplemented = errors.New("store: not implemented until Phase 2 (D12/D13 outbox + ledger design)")
 
 // Option configures an OpenSearchStore constructed by NewOpenSearchStore.
 type Option func(*OpenSearchStore)
@@ -42,15 +30,19 @@ func WithSemanticIndex(name string) Option {
 	return func(s *OpenSearchStore) { s.semanticIndex = name }
 }
 
-// OpenSearchStore is the Store implementation over OpenSearch (Phase 1). The
-// write protocol primitives it uses — op_type=create for Create, guarded
-// if_seq_no/if_primary_term for Update — were proven against the live pinned
-// cluster by the Phase-0 spikes.
+// OpenSearchStore is the Store implementation over OpenSearch. The write
+// protocol primitives it uses — op_type=create for Create/ClaimLedger,
+// guarded if_seq_no/if_primary_term for Update and outbox claims — were
+// proven against the live pinned cluster by the Phase-0 spikes. The outbox
+// lives on the episodic index (D12), the extraction ledger on its own index
+// (D13).
 type OpenSearchStore struct {
 	client        *http.Client
 	baseURL       string
 	episodicIndex string
 	semanticIndex string
+	ledgerIndex   string
+	ledgerLease   time.Duration
 }
 
 var _ Store = (*OpenSearchStore)(nil)
@@ -64,6 +56,8 @@ func NewOpenSearchStore(client *http.Client, baseURL string, opts ...Option) *Op
 		baseURL:       strings.TrimRight(baseURL, "/"),
 		episodicIndex: EpisodicIndex,
 		semanticIndex: SemanticIndex,
+		ledgerIndex:   LedgerIndex,
+		ledgerLease:   DefaultLedgerLease,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -139,36 +133,6 @@ func (s *OpenSearchStore) Update(ctx context.Context, id string, f memory.Semant
 	default:
 		return fmt.Errorf("store: updating semantic fact %s: unexpected status %d: %v", id, status, decoded)
 	}
-}
-
-// ClaimBatch is not implemented in Phase 1; see ErrNotImplemented.
-func (s *OpenSearchStore) ClaimBatch(context.Context, int, time.Duration) ([]memory.Episodic, error) {
-	return nil, ErrNotImplemented
-}
-
-// Complete is not implemented in Phase 1; see ErrNotImplemented.
-func (s *OpenSearchStore) Complete(context.Context, string) error {
-	return ErrNotImplemented
-}
-
-// DeadLetter is not implemented in Phase 1; see ErrNotImplemented.
-func (s *OpenSearchStore) DeadLetter(context.Context, string, string) error {
-	return ErrNotImplemented
-}
-
-// ClaimLedger is not implemented in Phase 1; see ErrNotImplemented.
-func (s *OpenSearchStore) ClaimLedger(context.Context, memory.LedgerKey) (LedgerEntry, error) {
-	return LedgerEntry{}, ErrNotImplemented
-}
-
-// UpdateLedger is not implemented in Phase 1; see ErrNotImplemented.
-func (s *OpenSearchStore) UpdateLedger(context.Context, memory.LedgerKey, LedgerState) error {
-	return ErrNotImplemented
-}
-
-// ScanIncomplete is not implemented in Phase 1; see ErrNotImplemented.
-func (s *OpenSearchStore) ScanIncomplete(context.Context) ([]LedgerEntry, error) {
-	return nil, ErrNotImplemented
 }
 
 // doJSON issues one JSON request and returns the status code and decoded

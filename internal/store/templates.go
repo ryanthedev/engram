@@ -24,6 +24,11 @@ const (
 	// its concrete dev index.
 	SemanticTemplateName = "engram-semantic"
 	SemanticIndex        = "engram-semantic-000001"
+	// LedgerTemplateName / LedgerIndex name the extraction-ledger index
+	// (D13): one row per (tenant_id, event_id, extractor_version), claimed
+	// with op_type=create before extraction.
+	LedgerTemplateName = "engram-ledger"
+	LedgerIndex        = "engram-ledger-000001"
 	// RRFPipelineName is the hybrid-search fusion pipeline (D1).
 	RRFPipelineName = "engram-rrf"
 )
@@ -39,6 +44,12 @@ var EpisodicTemplateJSON []byte
 //
 //go:embed templates/semantic.json
 var SemanticTemplateJSON []byte
+
+// LedgerTemplateJSON is the extraction-ledger index template (claim-first
+// idempotency rows with the cached extraction — D13).
+//
+//go:embed templates/ledger.json
+var LedgerTemplateJSON []byte
 
 // RRFPipelineJSON is the RRF search pipeline (score-ranker-processor,
 // rank_constant=60 — D1/D14).

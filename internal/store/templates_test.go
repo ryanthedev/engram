@@ -165,3 +165,37 @@ func TestDW_0_3_RRFPipelineContract(t *testing.T) {
 		t.Errorf("rank_constant = %v, want 60", proc.Combination.RankConstant)
 	}
 }
+
+// TestLedgerTemplateContract asserts the Phase-2 extraction-ledger template
+// (D13): strict mapping with the claim key fields, lifecycle phase, cached
+// extraction (binary), completed actions, and the lease clock ScanIncomplete
+// filters on.
+func TestLedgerTemplateContract(t *testing.T) {
+	var tpl struct {
+		IndexPatterns []string `json:"index_patterns"`
+		Template      struct {
+			Mappings struct {
+				Dynamic    string         `json:"dynamic"`
+				Properties map[string]any `json:"properties"`
+			} `json:"mappings"`
+		} `json:"template"`
+	}
+	if err := json.Unmarshal(LedgerTemplateJSON, &tpl); err != nil {
+		t.Fatalf("ledger template JSON invalid: %v", err)
+	}
+	if len(tpl.IndexPatterns) != 1 || tpl.IndexPatterns[0] != "engram-ledger*" {
+		t.Errorf("index_patterns = %v, want [engram-ledger*]", tpl.IndexPatterns)
+	}
+	if tpl.Template.Mappings.Dynamic != "strict" {
+		t.Errorf("dynamic = %q, want strict", tpl.Template.Mappings.Dynamic)
+	}
+	requireFieldTypes(t, tpl.Template.Mappings.Properties, map[string]string{
+		"tenant_id":         "keyword",
+		"event_id":          "keyword",
+		"extractor_version": "keyword",
+		"phase":             "keyword",
+		"extraction":        "binary",
+		"completed_actions": "keyword",
+		"lease_until":       "date",
+	})
+}
