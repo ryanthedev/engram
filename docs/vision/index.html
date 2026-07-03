@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engram — An agent memory platform</title>
+<meta name="description" content="Engram: durable, trustworthy memory for autonomous agents on a hybrid retrieval backbone.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:        #0f1311;
+    --bg-2:      #14181a;
+    --bg-3:      #171d1f;
+    --panel:     rgba(20,24,26,0.55);
+    --ink:       #e8e4d8;   /* pale bone           */
+    --ink-2:     #cdc9bd;   /* dimmed bone         */
+    --sage:      #9aa89a;   /* muted sage          */
+    --copper:    #c47a4a;   /* restrained accent   */
+    --green:     #5f8f7a;   /* mineral green       */
+    --rule:      rgba(196,122,74,0.38);
+    --hair:      rgba(154,168,154,0.16);
+    --hair-2:    rgba(154,168,154,0.10);
+
+    --serif: 'Iowan Old Style','Palatino Linotype','Newsreader',Georgia,'Times New Roman',serif;
+    --sans:  'Avenir Next','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif;
+    --mono:  'SFMono-Regular','JetBrains Mono',Menlo,Consolas,'Liberation Mono',monospace;
+
+    --col: 960px;
+  }
+
+  *{ box-sizing:border-box; }
+  html{ scroll-behavior:smooth; background:#0f1311; }
+  body{
+    margin:0;
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:17px;
+    line-height:1.66;
+    letter-spacing:.002em;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    background-color:#0f1311;
+    background-image:
+      radial-gradient(1200px 760px at 84% -8%, rgba(95,143,122,0.07), transparent 58%),
+      radial-gradient(980px 620px at -6% 2%, rgba(196,122,74,0.05), transparent 55%),
+      linear-gradient(180deg, #0f1311 0%, #14181a 50%, #111615 100%);
+    background-repeat:no-repeat;
+  }
+
+  ::selection{ background:rgba(196,122,74,0.30); color:#fff; }
+
+  a{ color:var(--copper); text-decoration:none; border-bottom:1px solid var(--rule); transition:color .2s, border-color .2s; }
+  a:hover{ color:#dd9163; border-color:#dd9163; }
+  strong{ color:var(--ink); font-weight:600; }
+  em{ color:var(--ink); }
+
+  /* ---- reveal: content is ALWAYS visible. No opacity/JS gating — text never disappears. ---- */
+  .reveal{ opacity:1 !important; transform:none !important; }
+
+  /* ---------- top nav ---------- */
+  .nav{
+    position:sticky; top:0; z-index:60;
+    backdrop-filter:saturate(140%) blur(12px);
+    -webkit-backdrop-filter:saturate(140%) blur(12px);
+    background:rgba(13,17,15,0.74);
+    border-bottom:1px solid var(--hair);
+  }
+  .nav-inner{
+    max-width:var(--col); margin:0 auto;
+    display:flex; align-items:center; justify-content:space-between; gap:1.4rem;
+    padding:.72rem 1.4rem;
+  }
+  .brand{ font-family:var(--serif); font-size:1.16rem; letter-spacing:.01em; color:var(--ink); border:none; white-space:nowrap; }
+  .brand .dot{ color:var(--copper); }
+  .nav-links{ display:flex; gap:1.05rem; flex-wrap:wrap; font-family:var(--mono); font-size:.7rem; letter-spacing:.1em; text-transform:uppercase; }
+  .nav-links a{ color:var(--sage); border:none; padding:.16rem 0; border-bottom:1px solid transparent; }
+  .nav-links a:hover{ color:var(--ink); border-bottom-color:transparent; }
+  .nav-links a.active{ color:var(--copper); border-bottom-color:var(--copper); }
+  @media(max-width:820px){ .nav-links{ display:none; } }
+
+  /* ---------- side rail ---------- */
+  .rail{ position:fixed; right:1.2rem; top:50%; transform:translateY(-50%); z-index:50; display:flex; flex-direction:column; gap:.5rem; }
+  .rail a{ display:flex; align-items:center; justify-content:flex-end; gap:.55rem; color:var(--sage); border:none; font-family:var(--mono); font-size:.6rem; letter-spacing:.12em; }
+  .rail .lbl{ opacity:0; transform:translateX(6px); transition:opacity .25s, transform .25s; white-space:nowrap; }
+  .rail a:hover .lbl{ opacity:1; transform:none; }
+  .rail .tick{ width:18px; height:1px; background:var(--hair); transition:width .25s, background .25s; }
+  .rail a.active{ color:var(--copper); }
+  .rail a.active .tick{ width:30px; background:var(--copper); }
+  .rail a.active .lbl{ opacity:1; transform:none; color:var(--copper); }
+  @media(max-width:1240px){ .rail{ display:none; } }
+
+  /* ---------- layout ---------- */
+  main{ max-width:var(--col); margin:0 auto; padding:0 1.4rem; }
+  section{ padding:5.6rem 0; border-top:1px solid var(--hair); scroll-margin-top:86px; }
+  section:first-of-type{ border-top:none; }
+
+  .eyebrow{ font-family:var(--mono); font-size:.7rem; letter-spacing:.24em; text-transform:uppercase; color:var(--copper); display:flex; align-items:center; gap:.75rem; margin-bottom:1.1rem; }
+  .eyebrow::before{ content:''; width:26px; height:1px; background:var(--copper); }
+
+  h2{ font-family:var(--serif); font-weight:500; font-size:clamp(1.85rem,4.2vw,2.7rem); line-height:1.1; letter-spacing:-.012em; margin:.1rem 0 1.1rem; color:var(--ink); max-width:20ch; }
+  p{ max-width:68ch; color:var(--ink-2); }
+  p.lead{ font-size:1.13rem; color:var(--ink); max-width:64ch; }
+  .stat{ color:var(--green); font-family:var(--mono); font-size:.92em; font-weight:500; white-space:nowrap; }
+  .sage{ color:var(--sage); }
+  .copper{ color:var(--copper); }
+
+  /* ---------- hero ---------- */
+  .hero{ padding-top:6.4rem; padding-bottom:5.4rem; }
+  .hero .kicker{ font-family:var(--mono); font-size:.74rem; letter-spacing:.32em; text-transform:uppercase; color:var(--sage); margin-bottom:1.4rem; }
+  .wordmark{ font-family:var(--serif); font-weight:500; font-size:clamp(3.8rem,14vw,8.4rem); line-height:.92; letter-spacing:-.025em; margin:0; color:var(--ink); }
+  .wordmark .dot{ color:var(--copper); }
+  .hero .subhead{ font-family:var(--serif); font-style:italic; font-size:clamp(1.2rem,3vw,1.7rem); color:var(--sage); margin:.9rem 0 0; }
+  .thesis{ font-family:var(--serif); font-weight:400; font-size:clamp(1.32rem,2.7vw,1.92rem); line-height:1.42; color:var(--ink); max-width:30ch; margin:2.2rem 0 0; }
+  .thesis .w{ color:var(--copper); font-style:italic; }
+  .thesis .k{ color:var(--green); font-style:italic; }
+  .thesis .s{ color:var(--ink); font-style:italic; border-bottom:1px solid var(--rule); }
+  .meta{ font-family:var(--mono); font-size:.76rem; letter-spacing:.06em; color:var(--sage); margin-top:2.6rem; padding-top:1.3rem; border-top:1px solid var(--hair); }
+  .meta b{ color:var(--copper); font-weight:500; }
+
+  /* ---------- three points ---------- */
+  .points{ display:flex; flex-direction:column; gap:2.3rem; margin-top:2.4rem; }
+  .point{ display:grid; grid-template-columns:1.6rem 1fr; gap:1.2rem; align-items:start; }
+  .point .mk{ font-family:var(--mono); color:var(--copper); font-size:.86rem; padding-top:.42rem; letter-spacing:.04em; }
+  .point h3{ font-family:var(--serif); font-weight:500; font-size:1.28rem; line-height:1.25; margin:0 0 .45rem; color:var(--ink); }
+  .point p{ margin:0; }
+  @media(max-width:560px){ .point{ grid-template-columns:1fr; gap:.3rem; } }
+
+  /* ---------- diagrams ---------- */
+  figure.diagram{ margin:2.4rem 0 .6rem; }
+  .frame{ border:1px solid var(--hair); border-radius:12px; background:var(--panel); padding:1.5rem 1.1rem .7rem; }
+  .mermaid{ display:flex; justify-content:center; }
+  .mermaid svg{ max-width:100%; height:auto; }
+  figcaption{ font-family:var(--mono); font-size:.72rem; letter-spacing:.03em; color:var(--sage); text-align:center; margin-top:1rem; }
+  figcaption::before{ content:'— '; color:var(--copper); }
+
+  /* ---------- tables ---------- */
+  .table-wrap{ overflow-x:auto; margin:2rem 0 .4rem; border:1px solid var(--hair); border-radius:12px; }
+  table{ width:100%; border-collapse:collapse; font-size:.92rem; }
+  thead th{ font-family:var(--mono); font-size:.66rem; letter-spacing:.16em; text-transform:uppercase; color:var(--sage); text-align:left; font-weight:500; padding:.85rem 1rem; border-bottom:1px solid var(--rule); background:rgba(95,143,122,0.04); }
+  tbody td{ padding:.78rem 1rem; border-bottom:1px solid var(--hair-2); vertical-align:top; color:var(--ink-2); }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr:hover td{ background:rgba(95,143,122,0.045); }
+  td .id{ font-family:var(--mono); color:var(--copper); font-weight:500; white-space:nowrap; }
+  td .tier{ font-family:var(--mono); color:var(--green); font-weight:500; white-space:nowrap; }
+  td .mut{ font-family:var(--mono); color:var(--sage); font-size:.86rem; white-space:nowrap; }
+  td strong{ color:var(--ink); }
+
+  /* ---------- roadmap timeline ---------- */
+  .grp-label{ font-family:var(--mono); font-size:.72rem; letter-spacing:.2em; text-transform:uppercase; margin:2.4rem 0 1.3rem; display:flex; align-items:center; gap:.7rem; }
+  .grp-label.now{ color:var(--copper); }
+  .grp-label.next{ color:var(--sage); }
+  .grp-label .bar{ height:1px; flex:1; background:var(--hair); }
+  .grp-label.now .bar{ background:var(--rule); }
+  .timeline{ margin:0; }
+  .phase{ position:relative; padding:0 0 1.7rem 2.5rem; margin-left:.2rem; border-left:1px solid var(--hair); }
+  .phase:last-child{ border-left-color:transparent; }
+  .phase::before{ content:''; position:absolute; left:-6px; top:.28rem; width:11px; height:11px; border-radius:50%; background:var(--bg-2); border:2px solid var(--sage); }
+  .phase.now::before{ border-color:var(--copper); background:var(--copper); box-shadow:0 0 0 4px rgba(196,122,74,0.12); }
+  .phase .pnum{ font-family:var(--mono); font-size:.7rem; letter-spacing:.12em; color:var(--sage); text-transform:uppercase; }
+  .phase.now .pnum{ color:var(--copper); }
+  .phase .tag{ font-family:var(--mono); font-size:.58rem; letter-spacing:.14em; text-transform:uppercase; padding:.1rem .42rem; border-radius:3px; margin-left:.55rem; vertical-align:.08em; }
+  .phase.now .tag{ color:var(--copper); border:1px solid var(--rule); }
+  .phase.next .tag{ color:var(--sage); border:1px solid var(--hair); }
+  .phase h4{ font-family:var(--serif); font-weight:500; font-size:1.17rem; margin:.28rem 0 .3rem; color:var(--ink); }
+  .phase p{ margin:0; font-size:.95rem; color:var(--ink-2); max-width:62ch; }
+
+  /* ---------- hard problems ---------- */
+  .warns{ display:flex; flex-direction:column; gap:1.4rem; margin-top:1.9rem; }
+  .warn{ border-left:2px solid var(--copper); background:linear-gradient(90deg, rgba(196,122,74,0.08), rgba(196,122,74,0) 72%); padding:1.15rem 1.4rem; border-radius:0 10px 10px 0; }
+  .warn .tag{ font-family:var(--mono); font-size:.64rem; letter-spacing:.18em; text-transform:uppercase; color:var(--copper); display:flex; align-items:center; gap:.5rem; margin-bottom:.5rem; }
+  .warn h4{ font-family:var(--serif); font-weight:500; font-size:1.18rem; margin:0 0 .4rem; color:var(--ink); }
+  .warn p{ margin:0; color:var(--ink-2); max-width:66ch; }
+
+  /* ---------- footer ---------- */
+  footer{ max-width:var(--col); margin:0 auto; padding:3.4rem 1.4rem 5.2rem; border-top:1px solid var(--rule); }
+  .stack{ font-size:1rem; color:var(--ink-2); max-width:none; line-height:1.9; }
+  .stack .tech{ color:var(--ink); font-weight:600; }
+  .stack .sep{ color:var(--copper); padding:0 .25rem; }
+  .etym{ font-family:var(--mono); font-size:.82rem; letter-spacing:.05em; color:var(--sage); margin-top:1.6rem; }
+  .etym .lemma{ color:var(--copper); }
+
+  @media (prefers-reduced-motion: reduce){
+    html{ scroll-behavior:auto; }
+    .reveal, html.js .reveal{ opacity:1 !important; transform:none !important; transition:none !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ NAV ============ -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top">Engram<span class="dot">.</span></a>
+    <div class="nav-links">
+      <a href="#why">Why memory</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#write-path">Write path</a>
+      <a href="#retrieval">Retrieval</a>
+      <a href="#bitemporal">Bi-temporal</a>
+      <a href="#multi-agent">Multi-agent</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#decisions">Decisions</a>
+      <a href="#hard">Hard</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ============ SIDE RAIL ============ -->
+<aside class="rail" aria-hidden="true">
+  <a href="#top"><span class="lbl">Engram</span><span class="tick"></span></a>
+  <a href="#why"><span class="lbl">Why memory</span><span class="tick"></span></a>
+  <a href="#architecture"><span class="lbl">Architecture</span><span class="tick"></span></a>
+  <a href="#write-path"><span class="lbl">Write path</span><span class="tick"></span></a>
+  <a href="#retrieval"><span class="lbl">Retrieval</span><span class="tick"></span></a>
+  <a href="#bitemporal"><span class="lbl">Bi-temporal</span><span class="tick"></span></a>
+  <a href="#multi-agent"><span class="lbl">Multi-agent</span><span class="tick"></span></a>
+  <a href="#roadmap"><span class="lbl">Roadmap</span><span class="tick"></span></a>
+  <a href="#decisions"><span class="lbl">Decisions</span><span class="tick"></span></a>
+  <a href="#hard"><span class="lbl">Hard problems</span><span class="tick"></span></a>
+  <a href="#stack"><span class="lbl">Stack</span><span class="tick"></span></a>
+</aside>
+
+<main>
+
+  <!-- ============ 1 · HERO ============ -->
+  <section class="hero" id="top">
+    <div class="kicker">An agent memory platform</div>
+    <h1 class="wordmark">Engram<span class="dot">.</span></h1>
+    <p class="subhead">Memory that an agent can trust.</p>
+    <p class="thesis reveal">
+      Durable, trustworthy memory for autonomous agents&nbsp;—
+      <span class="w">what worked</span>, <span class="k">what&rsquo;s known</span>,
+      <span class="s">what&rsquo;s shared</span>&nbsp;— on a hybrid retrieval backbone.
+    </p>
+    <p class="meta reveal">Status: <b>pre-build</b> &middot; Walking skeleton next &middot; Go&nbsp;+&nbsp;OpenSearch</p>
+  </section>
+
+  <!-- ============ 2 · WHY MEMORY ============ -->
+  <section id="why" class="reveal">
+    <div class="eyebrow">&sect;&nbsp;02 — Foundations</div>
+    <h2>Why memory, not just more context</h2>
+    <p class="lead">A bigger context window is not a memory system. Three findings define the problem Engram is built to solve.</p>
+
+    <div class="points">
+      <div class="point">
+        <div class="mk">(a)</div>
+        <div>
+          <h3>Long context &ne; memory</h3>
+          <p>On the BEAM benchmark, structured memory beats a 1M-token context window by <span class="stat">~75%</span> at 1M tokens. Reading more is not the same as remembering better&nbsp;— past a point, raw context dilutes rather than informs.</p>
+        </div>
+      </div>
+      <div class="point">
+        <div class="mk">(b)</div>
+        <div>
+          <h3>Experience-following is a risk, not a feature</h3>
+          <p>Agents <em>obey</em> retrieved experience&nbsp;— input&harr;output correlation runs at <span class="stat">r&thinsp;&asymp;&thinsp;1</span>&nbsp;— so a single wrong memory actively steers behavior wrong. Curated-small beats large-noisy: accuracy rose <span class="stat">38.7%&thinsp;&rarr;&thinsp;42.1%</span> <em>while the store shrank</em>.</p>
+        </div>
+      </div>
+      <div class="point">
+        <div class="mk">(c)</div>
+        <div>
+          <h3>Multi-agent needs shared memory</h3>
+          <p>Several agents working the same problem need one shared memory&nbsp;— with scoping, access control, and concurrent-write safety. That is a systems problem, not a prompt.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3 · ARCHITECTURE ============ -->
+  <section id="architecture" class="reveal">
+    <div class="eyebrow">&sect;&nbsp;03 — Architecture</div>
+    <h2>Five tiers over one retrieval backbone</h2>
+    <p class="lead">Memory is not one store. Engram separates concerns into five tiers, each with its own shape and mutability, all reachable through a single hybrid-retrieval layer.</p>
+
+    <figure class="diagram">
+      <div class="frame">
+        <div class="mermaid">
+flowchart TD
+    Agent([Agent]):::bone
+    Agent <-->|working set| T0["T0 · Working<br/>in-context · Redis"]:::tier
+    Agent -->|ingest| T1["T1 · Episodic<br/>append-only · OpenSearch"]:::tier
+    T1 -->|async extract| T2["T2 · Semantic<br/>bi-temporal facts · OpenSearch"]:::tier
+    T1 -->|distill| T3["T3 · Experience / Skill<br/>curated · gated"]:::tier
+    T2 -->|incremental| T4["T4 · Graph<br/>entities + edges"]:::tier
+    T1 -.-> R{{"Hybrid Retrieval&nbsp;&nbsp;·&nbsp;&nbsp;BM25 + kNN + RRF"}}:::accent
+    T2 -.-> R
+    T3 -.-> R
+    T4 -.-> R
+    R ==>|context| Agent
+    classDef tier fill:#171d1f,stroke:#5f8f7a,stroke-width:1px,color:#e8e4d8;
+    classDef bone fill:#1f2622,stroke:#e8e4d8,stroke-width:1.2px,color:#e8e4d8;
+    classDef accent fill:#22190f,stroke:#c47a4a,stroke-width:1.4px,color:#f0e7dc;
+        </div>
+      </div>
+      <figcaption>Five tiers, one hybrid-retrieval backbone reading T1&ndash;T4.</figcaption>
+    </figure>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Tier</th><th>Holds</th><th>Store</th><th>Mutability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="tier">T0 · Working</span></td><td>goals, scratch</td><td>Redis</td><td><span class="mut">agent-edit</span></td></tr>
+          <tr><td><span class="tier">T1 · Episodic</span></td><td>raw events + trajectories</td><td>OpenSearch</td><td><span class="mut">append-only</span></td></tr>
+          <tr><td><span class="tier">T2 · Semantic</span></td><td>extracted facts</td><td>OpenSearch</td><td><span class="mut">bi-temporal</span></td></tr>
+          <tr><td><span class="tier">T3 · Experience</span></td><td>distilled skills</td><td>OpenSearch</td><td><span class="mut">curated + gated</span></td></tr>
+          <tr><td><span class="tier">T4 · Graph</span></td><td>entities + relations</td><td>OpenSearch &rarr; Neo4j later</td><td><span class="mut">incremental</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 4 · WRITE PATH ============ -->
+  <section id="write-path" class="reveal">
+    <div class="eyebrow">&sect;&nbsp;04 — The write path</div>
+    <h2>Sync append, async extract</h2>
+    <p class="lead">Ingest must be cheap and never block. Extraction&nbsp;— the expensive, LLM-driven part&nbsp;— happens off the hot path, where it can take its time and be reconciled carefully.</p>
+
+    <figure class="diagram">
+      <div class="frame">
+        <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant A as Agent
+    participant API as API
+    participant T1 as Episodic (T1)
+    participant Q as Queue
+    participant W as Worker
+    participant L as LLM
+    participant T2 as Semantic (T2)
+    participant T4 as Graph (T4)
+
+    A->>API: event
+    API->>T1: append (sync, cheap)
+    API-->>Q: enqueue
+    Note over A,API: ingest returns immediately
+    Q-->>W: dequeue (async)
+    W->>L: extract facts
+    W->>T2: hybrid search top-k candidates
+    W->>L: decide ADD / UPDATE / INVALIDATE / NOOP
+    alt UPDATE
+        W->>T2: index new fact + set old.invalid_at = new.valid_at
+        Note right of T2: bi-temporal · never delete
+    end
+    W->>T4: upsert entities / edges
+        </div>
+      </div>
+      <figcaption>Sync append, async extract&nbsp;— extraction is the cost center, so it never blocks ingest.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ 5 · RETRIEVAL ============ -->
+  <section id="retrieval" class="reveal">
+    <div class="eyebrow">&sect;&nbsp;05 — Retrieval</div>
+    <h2>Hybrid, not RAG-vs-FTS</h2>
+    <p class="lead">The argument between keyword search and vector search is a false choice. Engram runs both and fuses them.</p>
+    <p><strong>BM25</strong> catches exact terms&nbsp;— IDs, names, error codes&nbsp;— the things a paraphrase loses. <strong>kNN</strong> catches semantic and paraphrased matches that share no literal tokens. <strong>Reciprocal Rank Fusion</strong> merges the two rankings without tuning a blend weight. OpenSearch does all three natively in one query.</p>
+
+    <figure class="diagram">
+      <div class="frame">
+        <div class="mermaid">
+flowchart LR
+    Q([Query]):::bone --> B["BM25 clause<br/>exact terms"]:::tier
+    Q --> K["kNN clause<br/>Faiss HNSW"]:::tier
+    B --> R{{"RRF<br/>score-ranker-processor"}}:::accent
+    K --> R
+    R --> X["cross-encoder rerank<br/>(optional)"]:::tier
+    X --> F{{"validity + scope / ACL<br/>invalid_at null · expired_at null"}}:::green
+    F --> H([Hits]):::bone
+    classDef tier fill:#171d1f,stroke:#5f8f7a,stroke-width:1px,color:#e8e4d8;
+    classDef bone fill:#1f2622,stroke:#e8e4d8,stroke-width:1.2px,color:#e8e4d8;
+    classDef accent fill:#22190f,stroke:#c47a4a,stroke-width:1.4px,color:#f0e7dc;
+    classDef green fill:#15211c,stroke:#5f8f7a,stroke-width:1.4px,color:#cfe0d6;
+        </div>
+      </div>
+      <figcaption>Two retrievers, one fused ranking&nbsp;— then a hard filter by validity and scope.</figcaption>
+    </figure>
+
+    <p><span class="sage">Every</span> result is filtered before it reaches the agent&nbsp;— <code class="stat">invalid_at = null</code>, <code class="stat">expired_at = null</code>, plus scope&thinsp;/&thinsp;ACL. Retrieval never returns a fact that is superseded, expired, or out of the reader&rsquo;s reach.</p>
+  </section>
+
+  <!-- ============ 6 · BI-TEMPORAL ============ -->
+  <section id="bitemporal" class="reveal">
+    <div class="eyebrow">&sect;&nbsp;06 — Bi-temporal truth</div>
+    <h2>Four timestamps, never a delete</h2>
+    <p class="lead">A fact has two independent timelines: when it was true in the world, and when we knew it. Conflating them loses history.</p>
+    <div class="points">
+      <div class="point">
+        <div class="mk">①</div>
+        <div>
+          <h3 class="copper" style="font-family:var(--mono);font-size:.95rem;letter-spacing:.04em;">valid_at / invalid_at</h3>
+          <p>When the fact was true <em>in the world</em>. A new contradicting fact sets the old one&rsquo;s <code class="stat">invalid_at</code> to the new fact&rsquo;s <code class="stat">valid_at</code>&nbsp;— closing its window without erasing it.</p>
+        </div>
+      </div>
+      <div class="point">
+        <div class="mk">②</div>
+        <div>
+          <h3 class="copper" style="font-family:var(--mono);font-size:.95rem;letter-spacing:.04em;">created_at / expired_at</h3>
+          <p>When the system <em>knew</em> the fact. Nothing is ever deleted&nbsp;— so you get a full audit trail and point-in-time queries: <em>&ldquo;what did we believe on date&nbsp;X?&rdquo;</em></p>
+        </div>
+      </div>
+    </div>
+
+    <figure class="diagram">
+      <div class="frame">
+        <div class="mermaid">
+flowchart LR
+    N([newer contradicting fact]):::accent --> F2["Fact v2 · current<br/>valid_at = T2<br/>invalid_at = null"]:::green
+    F1["Fact v1 · superseded<br/>valid_at = T1<br/>invalid_at = T2 (set, not deleted)"]:::tier -. supersedes .-> F2
+    N -. "sets invalid_at = T2" .-> F1
+    classDef tier fill:#171d1f,stroke:#5f8f7a,stroke-width:1px,color:#cfd8cf;
+    classDef accent fill:#22190f,stroke:#c47a4a,stroke-width:1.4px,color:#f0e7dc;
+    classDef green fill:#15211c,stroke:#5f8f7a,stroke-width:1.4px,color:#cfe0d6;
+        </div>
+      </div>
+      <figcaption>A newer fact closes the old one&rsquo;s validity window; the record stays for audit.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ 7 · MULTI-AGENT ============ -->
+  <section id="multi-agent" class="reveal">
+    <div class="eyebrow">&sect;&nbsp;07 — Multi-agent</div>
+    <h2>Provenance is the ACL</h2>
+    <p class="lead">In shared memory, &ldquo;who may read this?&rdquo; should not be a separate permission table that drifts out of sync. The answer is already in the data.</p>
+    <p>Every memory fragment carries its <strong>provenance</strong>&nbsp;— the owning user, the agents that contributed to it, the source resources it was built from. A reader sees a fragment only if it can reach <em>all</em> of those contributors and resources (<strong>subset semantics</strong>). Because the check runs at <strong>query time</strong>, revoking access to a resource takes effect on the very next read&nbsp;— revocation is instant.</p>
+
+    <figure class="diagram">
+      <div class="frame">
+        <div class="mermaid">
+flowchart TD
+    subgraph BP [Bipartite reachability]
+      direction LR
+      U1[User A]:::user --- AX[Agent X]:::agent
+      U1 --- AY[Agent Y]:::agent
+      AX --- R1[Resource 1]:::res
+      AY --- R2[Resource 2]:::res
+    end
+    Frag["Memory fragment<br/>provenance = { User A, Agent X, Resource 1 }"]:::accent
+    BP --> Filter{{"Query-time filter<br/>reader must reach ALL contributors + resources<br/>subset semantics · revoke = instant"}}:::green
+    Frag --> Filter
+    Filter --> Vis([Visible to reader]):::bone
+    classDef user fill:#171d1f,stroke:#e8e4d8,color:#e8e4d8;
+    classDef agent fill:#171d1f,stroke:#5f8f7a,color:#cfe0d6;
+    classDef res fill:#171d1f,stroke:#9aa89a,color:#cdc9bd;
+    classDef accent fill:#22190f,stroke:#c47a4a,stroke-width:1.4px,color:#f0e7dc;
+    classDef green fill:#15211c,stroke:#5f8f7a,stroke-width:1.4px,color:#cfe0d6;
+    classDef bone fill:#1f2622,stroke:#e8e4d8,stroke-width:1.2px,color:#e8e4d8;
+        </div>
+      </div>
+      <figcaption>Provenance is the ACL&nbsp;— reachability over users, agents, and resources, checked at query time.</figcaption>
+    </figure>
+
+    <p>Concurrent writes to the same fragment use OpenSearch <strong>optimistic concurrency</strong> plus a <strong>version chain</strong>&nbsp;— the part no published memory system solves, and where Engram makes an original contribution.</p>
+  </section>
+
+  <!-- ============ 8 · ROADMAP ============ -->
+  <section id="roadmap" class="reveal">
+    <div class="eyebrow">&sect;&nbsp;08 — Roadmap</div>
+    <h2>Eight phases: a skeleton, then the rest</h2>
+    <p class="lead">Build the thinnest end-to-end system that proves the spine&nbsp;— then layer capability onto a backbone that already works.</p>
+
+    <div class="grp-label now"><span>Walking skeleton — now / building</span><span class="bar"></span></div>
+    <div class="timeline">
+      <div class="phase now">
+        <span class="pnum">Phase 0</span><span class="tag">building</span>
+        <h4>Foundations &amp; contracts</h4>
+        <p>Lock the protobuf contracts, universal IDs, and storage schema; stand up OpenSearch and Redis.</p>
+      </div>
+      <div class="phase now">
+        <span class="pnum">Phase 1</span><span class="tag">building</span>
+        <h4>Hybrid backbone (T1 + T2)</h4>
+        <p>BM25 + kNN + RRF over episodic and semantic memory&nbsp;— retrieval that actually works end-to-end.</p>
+      </div>
+      <div class="phase now">
+        <span class="pnum">Phase 2</span><span class="tag">building</span>
+        <h4>Async write + bi-temporal reconcile</h4>
+        <p>Sync append, async extract; ADD / UPDATE / INVALIDATE decisions with bi-temporal reconciliation.</p>
+      </div>
+    </div>
+
+    <div class="grp-label next"><span>Then — roadmap / next</span><span class="bar"></span></div>
+    <div class="timeline">
+      <div class="phase next">
+        <span class="pnum">Phase 3</span><span class="tag">next</span>
+        <h4>Experience / skill memory</h4>
+        <p>Distill trajectories into reusable skills behind a mandatory write-gate.</p>
+      </div>
+      <div class="phase next">
+        <span class="pnum">Phase 4</span><span class="tag">next</span>
+        <h4>Multi-agent scope + ACL</h4>
+        <p>Provenance-as-ACL scoping with query-time reachability filtering.</p>
+      </div>
+      <div class="phase next">
+        <span class="pnum">Phase 5</span><span class="tag">next</span>
+        <h4>Incremental graph</h4>
+        <p>Maintain an entity / edge graph updated per episode, not by batch rebuild.</p>
+      </div>
+      <div class="phase next">
+        <span class="pnum">Phase 6</span><span class="tag">next</span>
+        <h4>Scale &amp; ops hardening</h4>
+        <p>Sharding, backpressure, and cost controls; harden the system for production scale.</p>
+      </div>
+      <div class="phase next">
+        <span class="pnum">Phase 7</span><span class="tag">next</span>
+        <h4>Eval &amp; safety gates</h4>
+        <p>Continuous memory evaluation and safety gates&nbsp;— HaluMem-style hallucination detection.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 9 · KEY DECISIONS ============ -->
+  <section id="decisions" class="reveal">
+    <div class="eyebrow">&sect;&nbsp;09 — Key decisions</div>
+    <h2>Decisions, and why</h2>
+    <p class="lead">The choices that shape Engram&nbsp;— each one made for a reason worth writing down.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th style="width:3.2rem">ID</th><th style="width:32%">Decision</th><th>Why</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="id">D0</span></td><td><strong>Go, not Rust</strong></td><td>This layer is I/O-bound; vector compute is delegated to OpenSearch. Go wins on concurrency, ecosystem, and developer speed.</td></tr>
+          <tr><td><span class="id">D1</span></td><td><strong>Hybrid BM25 + kNN + RRF</strong></td><td>Per Anthropic&rsquo;s Contextual Retrieval, BM25 is additive&nbsp;— <span class="stat">35% &rarr; 49%</span> failed-retrieval reduction when added to embeddings.</td></tr>
+          <tr><td><span class="id">D2</span></td><td><strong>Incremental graph, not batch</strong></td><td>Graphiti-style per-episode updates. A GraphRAG-style batch rebuild is a non-starter for live memory.</td></tr>
+          <tr><td><span class="id">D3</span></td><td><strong>Bi-temporal append, never delete</strong></td><td>Buys a full audit trail and point-in-time queries for free.</td></tr>
+          <tr><td><span class="id">D4</span></td><td><strong>Async, LLM-gated writes</strong></td><td>Extraction is the cost center; keep it off the ingest hot path.</td></tr>
+          <tr><td><span class="id">D5</span></td><td><strong>Mandatory experience write-gating</strong></td><td>Experience-following runs at <span class="stat">r &asymp; 1</span>&nbsp;— an ungated bad lesson is obeyed.</td></tr>
+          <tr><td><span class="id">D6</span></td><td><strong>Provenance-as-ACL, query-time</strong></td><td>Permissions live in the data; enforcing at read time makes revocation instant.</td></tr>
+          <tr><td><span class="id">D7</span></td><td><strong>Optimistic concurrency + version chain</strong></td><td>Concurrent shared-memory merge is unsolved in the literature&nbsp;— this is our contribution.</td></tr>
+          <tr><td><span class="id">D8</span></td><td><strong>Graph DB only for &gt; 2&ndash;3 hops</strong></td><td>OpenSearch has no native traversal; reach for Neo4j / FalkorDB only when depth demands it.</td></tr>
+          <tr><td><span class="id">D9</span></td><td><strong>Continuous eval (HaluMem)</strong></td><td>Memory hallucination is silent&nbsp;— it has to be measured continuously, not spot-checked.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 10 · HARDEST PROBLEMS ============ -->
+  <section id="hard" class="reveal">
+    <div class="eyebrow">&sect;&nbsp;10 — The honest part</div>
+    <h2>The hardest problems</h2>
+    <p class="lead">The parts that are genuinely unsolved&nbsp;— named plainly, because pretending otherwise is how memory systems quietly fail.</p>
+
+    <div class="warns">
+      <div class="warn">
+        <div class="tag">&#9888; Hard problem 01</div>
+        <h4>Concurrent-write merge in shared memory</h4>
+        <p>When multiple agents write the same fragment at once, no published system has a clean merge. This is our own design space&nbsp;— optimistic concurrency plus a version chain&nbsp;— and it is where the most original work sits.</p>
+      </div>
+      <div class="warn">
+        <div class="tag">&#9888; Hard problem 02</div>
+        <h4>Experience poisoning</h4>
+        <p>One bad lesson propagates through experience-following and gets obeyed. Defense is layered: a write-gate at intake, utility-based pruning over time, and a <em>quarantine tier</em> the literature has not yet built.</p>
+      </div>
+      <div class="warn">
+        <div class="tag">&#9888; Hard problem 03</div>
+        <h4>Extraction cost at billions scale</h4>
+        <p>LLM extraction is the dominant cost line. Containment is a selective &ldquo;worth remembering&rdquo; gate, cheaper models for the common case, and aggressive batching&nbsp;— so we only pay to remember what matters.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 11 · STACK FOOTER ============ -->
+  <section id="stack" class="reveal" style="border-bottom:none;padding-bottom:1rem;">
+    <div class="eyebrow">&sect;&nbsp;11 — The stack</div>
+    <h2>Built on boring, proven parts</h2>
+    <p class="stack">
+      <span class="tech">Go</span><span class="sep">·</span>
+      <span class="tech">OpenSearch&nbsp;&ge;&nbsp;2.19</span> <span class="sage">(Faiss HNSW kNN + BM25 + RRF)</span><span class="sep">·</span>
+      <span class="tech">gRPC&nbsp;/&nbsp;protobuf</span><span class="sep">·</span>
+      <span class="tech">Neo4j&nbsp;/&nbsp;FalkorDB</span> <span class="sage">later</span>
+    </p>
+  </section>
+
+</main>
+
+<footer>
+  <div class="etym"><span class="lemma">engram</span> &nbsp;/&#712;en&middot;gram/&nbsp; &middot; the physical trace of a memory.</div>
+</footer>
+
+<!-- ============ MERMAID ============ -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    securityLevel: 'loose',
+    flowchart: { curve: 'basis', htmlLabels: true, padding: 14, useMaxWidth: true },
+    sequence: { useMaxWidth: true, wrap: true, mirrorActors: false, actorMargin: 42, boxMargin: 8 },
+    themeVariables: {
+      darkMode: true,
+      fontFamily: "'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace",
+      fontSize: '14px',
+      background: '#14181a',
+      primaryColor: '#171d1f',
+      primaryBorderColor: '#5f8f7a',
+      primaryTextColor: '#e8e4d8',
+      secondaryColor: '#19211f',
+      secondaryBorderColor: '#3a4a42',
+      tertiaryColor: '#12171a',
+      tertiaryBorderColor: '#2a3330',
+      lineColor: '#c47a4a',
+      textColor: '#e8e4d8',
+      mainBkg: '#171d1f',
+      nodeBorder: '#5f8f7a',
+      nodeTextColor: '#e8e4d8',
+      clusterBkg: 'rgba(95,143,122,0.05)',
+      clusterBorder: '#3a4a42',
+      edgeLabelBackground: '#14181a',
+      titleColor: '#e8e4d8',
+      /* sequence diagram */
+      actorBkg: '#171d1f',
+      actorBorder: '#5f8f7a',
+      actorTextColor: '#e8e4d8',
+      actorLineColor: '#3a4a42',
+      signalColor: '#c47a4a',
+      signalTextColor: '#cdc9bd',
+      labelBoxBkgColor: '#19211f',
+      labelBoxBorderColor: '#5f8f7a',
+      labelTextColor: '#e8e4d8',
+      loopTextColor: '#cdc9bd',
+      noteBkgColor: '#22190f',
+      noteTextColor: '#f0e7dc',
+      noteBorderColor: '#c47a4a',
+      activationBkgColor: '#243029',
+      activationBorderColor: '#5f8f7a',
+      sequenceNumberColor: '#14181a'
+    }
+  });
+  mermaid.run();
+</script>
+
+<!-- ============ SCROLL BEHAVIOR ============ -->
+<script>
+  document.documentElement.className += ' js';
+  (function () {
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // reveal on scroll — with a hard failsafe so content can NEVER stay hidden
+    var reveals = Array.prototype.slice.call(document.querySelectorAll('.reveal'));
+    function revealAll(){ reveals.forEach(function (el) { el.classList.add('in'); }); }
+    if (reduce || !('IntersectionObserver' in window)) {
+      revealAll();
+    } else {
+      var ro = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { e.target.classList.add('in'); ro.unobserve(e.target); }
+        });
+      }, { rootMargin: '0px 0px -10% 0px', threshold: 0.05 });
+      reveals.forEach(function (el) { ro.observe(el); });
+      // failsafe: if anything mis-fires, show everything shortly after load
+      window.addEventListener('load', function(){ setTimeout(revealAll, 1600); });
+      setTimeout(revealAll, 2500);
+    }
+
+    // active section -> nav + rail
+    var sections = Array.prototype.slice.call(document.querySelectorAll('main section[id]'));
+    var navLinks = Array.prototype.slice.call(document.querySelectorAll('.nav-links a'));
+    var railLinks = Array.prototype.slice.call(document.querySelectorAll('.rail a'));
+    function setActive(id) {
+      [navLinks, railLinks].forEach(function (group) {
+        group.forEach(function (a) {
+          var href = a.getAttribute('href');
+          a.classList.toggle('active', href === '#' + id);
+        });
+      });
+    }
+    if ('IntersectionObserver' in window) {
+      var so = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { setActive(e.target.id); }
+        });
+      }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+      sections.forEach(function (s) { so.observe(s); });
+    }
+  })();
+</script>
+
+</body>
+</html>

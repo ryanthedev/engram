@@ -1,0 +1,15 @@
+/bin/
+*.exe
+*.test
+*.out
+*.prof
+.env
+.env.*
+/data/
+/tmp/
+.DS_Store
+docs/vision/preview.png
+
+# build worktrees
+.claude/worktrees/
+.code-foundations/wave-worktrees/
