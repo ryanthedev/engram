@@ -23,6 +23,7 @@ import (
 	"github.com/ryanthedev/engram/internal/acl"
 	"github.com/ryanthedev/engram/internal/auth"
 	"github.com/ryanthedev/engram/internal/engramclient"
+	"github.com/ryanthedev/engram/internal/experience"
 	"github.com/ryanthedev/engram/internal/store"
 )
 
@@ -43,6 +44,8 @@ func Run(ctx context.Context, args []string, env Env, out, errW io.Writer) int {
 		err = runToken(ctx, rest, env, out, errW)
 	case "acl":
 		err = runACL(ctx, rest, env, out)
+	case "quarantine":
+		err = runQuarantine(ctx, rest, env, out)
 	case "ingest":
 		err = runIngest(ctx, rest, env, out)
 	case "search":
@@ -78,6 +81,8 @@ Usage:
   engram search         QUERY [-k 10] [-addr HOST:PORT] [-token TOK]
   engram status         [-addr HOST:PORT] [-token TOK]
   engram audit          <fact-id> [-addr HOST:PORT] [-token TOK]
+  engram quarantine list    --tenant T [--url URL]
+  engram quarantine release <fingerprint> --tenant T [--url URL]
 
 Environment: ENGRAM_OPENSEARCH_URL, ENGRAM_ADDR, ENGRAM_TOKEN.`
 
@@ -408,6 +413,88 @@ func runACLList(ctx context.Context, args []string, env Env, out io.Writer) erro
 	for _, e := range edges {
 		fmt.Fprintf(out, "%-12s  %-12s  %-12s\n", e.Type, e.AgentID, e.TeamID)
 	}
+	return nil
+}
+
+// --- quarantine admin (OpenSearch-backed, like acl/token admin) ---
+
+// experienceStore builds an OpenSearch-backed Store for the admin
+// surface. Release admits directly (a human reviewed it) and never invokes the
+// gate, so the mandatory rule gate here is only to satisfy construction — it is
+// never consulted on this path.
+func experienceStore(env Env, url string) (*experience.Store, error) {
+	base := firstNonEmpty(url, env("ENGRAM_OPENSEARCH_URL"), "http://localhost:9200")
+	backend := experience.NewOpenSearchBackend(&http.Client{Timeout: store.DefaultTimeout}, base)
+	return experience.NewStore(experience.RuleGatekeeper{}, backend, nil)
+}
+
+func runQuarantine(ctx context.Context, args []string, env Env, out io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("quarantine: expected list|release")
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "list":
+		return runQuarantineList(ctx, rest, env, out)
+	case "release":
+		return runQuarantineRelease(ctx, rest, env, out)
+	default:
+		return fmt.Errorf("quarantine: unknown subcommand %q", sub)
+	}
+}
+
+func runQuarantineList(ctx context.Context, args []string, env Env, out io.Writer) error {
+	fs := flag.NewFlagSet("quarantine list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	tenant := fs.String("tenant", "", "tenant id (required)")
+	url := fs.String("url", "", "OpenSearch URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *tenant == "" {
+		return errors.New("quarantine list: --tenant is required")
+	}
+	es, err := experienceStore(env, *url)
+	if err != nil {
+		return err
+	}
+	items, err := es.ListQuarantine(ctx, *tenant)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		fmt.Fprintln(out, "no quarantined experiences")
+		return nil
+	}
+	fmt.Fprintf(out, "%-64s  %-10s  %s\n", "FINGERPRINT", "VERDICT", "REASON")
+	for _, q := range items {
+		fmt.Fprintf(out, "%-64s  %-10s  %s\n", q.Experience.Fingerprint, q.Verdict, q.Reason)
+	}
+	return nil
+}
+
+func runQuarantineRelease(ctx context.Context, args []string, env Env, out io.Writer) error {
+	fs := flag.NewFlagSet("quarantine release", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	tenant := fs.String("tenant", "", "tenant id (required)")
+	url := fs.String("url", "", "OpenSearch URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("quarantine release: expected exactly one <fingerprint>")
+	}
+	if *tenant == "" {
+		return errors.New("quarantine release: --tenant is required")
+	}
+	es, err := experienceStore(env, *url)
+	if err != nil {
+		return err
+	}
+	if err := es.Release(ctx, *tenant, fs.Arg(0)); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "released %s from quarantine into the admitted tier\n", fs.Arg(0))
 	return nil
 }
 

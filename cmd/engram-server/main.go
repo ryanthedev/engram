@@ -66,6 +66,11 @@ func main() {
 	sweepInterval := flag.Duration("sweep-interval", 30*time.Second, "repair sweep cadence (D10 convergence SLO <=5m at S1)")
 	priceIn := flag.Float64("extract-price-in", ingest.DefaultPricing.InputUSDPer1M, "extraction model list price, USD per 1M input tokens")
 	priceOut := flag.Float64("extract-price-out", ingest.DefaultPricing.OutputUSDPer1M, "extraction model list price, USD per 1M output tokens")
+	gateURL := flag.String("gate-url", "", "OpenAI-compatible experience write-gate (LLM judge) endpoint; empty uses the deterministic rule judge (fail-closed either way)")
+	gateModel := flag.String("gate-model", "gpt-4o-mini", "experience write-gate judge model id")
+	prunePhi := flag.Float64("prune-phi-max", 0.2, "experience prune: soft-expire admitted experiences with utility <= this")
+	pruneRetrievalMax := flag.Int("prune-retrieval-max", 0, "experience prune: only soft-expire experiences with retrieval_count <= this")
+	pruneInterval := flag.Duration("prune-interval", 5*time.Minute, "experience utility-prune cadence")
 	flag.Parse()
 
 	httpClient := &http.Client{Timeout: store.DefaultTimeout}
@@ -122,6 +127,19 @@ func main() {
 		MaxAttempts:      *maxAttempts,
 		Workers:          *workers,
 	}, slog.Default())
+	// Phase 5: experience memory (T3) + mandatory write-gate. Registers the
+	// distillation stage (D20) and the gated experience tier (Phase-4 seam) and
+	// starts the utility-prune job — all without editing the worker/retriever
+	// cores. Registration must precede wk.Run so the stage is active for the
+	// first claimed batch.
+	if err := wireExperience(ctx, httpClient, *osURL, experienceConfig{
+		gateURL: *gateURL, gateModel: *gateModel,
+		prunePhi: *prunePhi, pruneRetrieval: *pruneRetrievalMax, pruneInterval: *pruneInterval,
+	}, wk, retriever, slog.Default()); err != nil {
+		fmt.Fprintln(os.Stderr, "error wiring experience memory:", err)
+		os.Exit(1)
+	}
+
 	go wk.Run(ctx)
 	sweeper := &worker.Sweeper{Store: st, Worker: wk}
 	go sweeper.Run(ctx, *sweepInterval)

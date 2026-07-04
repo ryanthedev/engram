@@ -1,0 +1,21 @@
+{
+  "index_patterns": ["engram-experience-quarantine-0*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "tenant_id": { "type": "keyword" },
+        "fingerprint": { "type": "keyword" },
+        "verdict": { "type": "keyword" },
+        "reason": { "type": "text" },
+        "at": { "type": "date" },
+        "experience": { "type": "object", "enabled": false }
+      }
+    }
+  }
+}

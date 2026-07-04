@@ -289,3 +289,10 @@ _To be filled during /code-foundations:build_
 - [x] Committed
 Commit: ff2fbad
 Summary: Engram now has real client surfaces — engram-mcp (stdio) and the engram CLI over the gRPC API — behind a 256-bit hashed-token auth barricade (constant-time verify, ≤5s revocation). A fully local compose stack (pinned OpenSearch 3.1 + deterministic embed + stub LLM + engramd + worker) runs `make e2e` end-to-end through MCP/CLI/gRPC. The worker stage-registration seam (D20) and ACL post-hook/tier/write-guard seams are the plug points Phases 4–6 consume; sweep rule (d) closed the last skeleton write-skew window. 174 unit + integration + e2e tests green.
+
+### Phase 4: Multi-Agent Scope + ACL (Gate: Full, 3-sample review)
+- [x] BUILD: scope contract, acl_edges reachability, ACL filter compiler (fail-closed, in-retriever), write-guard, revocation, Audit RPC/CLI, the four Phase-5/6 seams
+- [x] REVIEW: 2-of-3 PASS; unanimous finding (tier-hit truncation before ACL re-filter) fixed pre-commit with falsification-proven regression
+- [x] Committed
+Commit: 529cb28
+Summary: Provenance-as-ACL is live and enforced at query time inside the retriever (callers cannot bypass), fail-closed on every error path, with write-time scope guarding and instant revocation. The four registration seams (RegisterPostHook, RegisterTier, RegisterWriteGuard, plus D20 RegisterStage) are real and exercised — Phase 5 plugs its gated experience tier + write-gate into them, Phase 6 its graph post-hook. Audit RPC + `engram audit` expose provenance and full bi-temporal history. 200+ tests green incl. live-cluster ACL matrices and the truncation-ordering regression.

@@ -1,0 +1,39 @@
+{
+  "index_patterns": ["engram-experience-0*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "task": { "type": "text" },
+        "context": { "type": "text" },
+        "trajectory_ref": { "type": "keyword" },
+        "outcome": {
+          "type": "object",
+          "properties": {
+            "success": { "type": "boolean" },
+            "evidence": { "type": "keyword" },
+            "signals": { "type": "keyword" }
+          }
+        },
+        "utility": { "type": "float" },
+        "distilled_skill": { "type": "text" },
+        "fingerprint": { "type": "keyword" },
+        "retrieval_count": { "type": "integer" },
+        "merged_count": { "type": "integer" },
+        "tenant_id": { "type": "keyword" },
+        "team_id": { "type": "keyword" },
+        "scope": { "type": "keyword" },
+        "owner_agent_id": { "type": "keyword" },
+        "source_ids": { "type": "keyword" },
+        "valid_at": { "type": "date" },
+        "created_at": { "type": "date" },
+        "expired_at": { "type": "date" }
+      }
+    }
+  }
+}
