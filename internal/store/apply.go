@@ -64,6 +64,7 @@ func Apply(ctx context.Context, client *http.Client, baseURL string) (ApplyResul
 		{SemanticTemplateName, http.MethodPut, "/_index_template/" + SemanticTemplateName, SemanticTemplateJSON, true},
 		{LedgerTemplateName, http.MethodPut, "/_index_template/" + LedgerTemplateName, LedgerTemplateJSON, true},
 		{AuthTokenTemplateName, http.MethodPut, "/_index_template/" + AuthTokenTemplateName, AuthTokenTemplateJSON, true},
+		{ACLEdgesTemplateName, http.MethodPut, "/_index_template/" + ACLEdgesTemplateName, ACLEdgesTemplateJSON, true},
 		{RRFPipelineName, http.MethodPut, "/_search/pipeline/" + RRFPipelineName, RRFPipelineJSON, true},
 	}
 	for _, s := range steps {
@@ -73,7 +74,7 @@ func Apply(ctx context.Context, client *http.Client, baseURL string) (ApplyResul
 		res.Actions[s.name] = "applied"
 	}
 
-	for _, idx := range []string{EpisodicIndex, SemanticIndex, LedgerIndex, AuthTokenIndex} {
+	for _, idx := range []string{EpisodicIndex, SemanticIndex, LedgerIndex, AuthTokenIndex, ACLEdgesIndex} {
 		exists, err := indexExists(ctx, client, base, idx)
 		if err != nil {
 			return res, fmt.Errorf("store: checking index %s: %w", idx, err)

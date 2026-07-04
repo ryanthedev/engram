@@ -42,6 +42,7 @@ const (
 	Engram_Ingest_FullMethodName = "/engram.v1.Engram/Ingest"
 	Engram_Search_FullMethodName = "/engram.v1.Engram/Search"
 	Engram_Status_FullMethodName = "/engram.v1.Engram/Status"
+	Engram_Audit_FullMethodName  = "/engram.v1.Engram/Audit"
 )
 
 // EngramClient is the client API for Engram service.
@@ -62,6 +63,12 @@ type EngramClient interface {
 	// tier document counts — the backing RPC for `engram status` and the MCP
 	// memory_status tool. It requires a valid token like every other call.
 	Status(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*StatusResponse, error)
+	// Audit returns a fact's provenance (who wrote it, from what) and its full
+	// bi-temporal version history (Phase 4, DW-4.6) — the backing RPC for
+	// `engram audit <id>`. The caller must be authorized to READ the target
+	// fact; an unauthorized or unknown id returns NOT_FOUND (no existence
+	// oracle). Scope enforcement applies here exactly as it does to search.
+	Audit(ctx context.Context, in *AuditRequest, opts ...grpc.CallOption) (*AuditResponse, error)
 }
 
 type engramClient struct {
@@ -102,6 +109,16 @@ func (c *engramClient) Status(ctx context.Context, in *StatusRequest, opts ...gr
 	return out, nil
 }
 
+func (c *engramClient) Audit(ctx context.Context, in *AuditRequest, opts ...grpc.CallOption) (*AuditResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuditResponse)
+	err := c.cc.Invoke(ctx, Engram_Audit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngramServer is the server API for Engram service.
 // All implementations must embed UnimplementedEngramServer
 // for forward compatibility.
@@ -120,6 +137,12 @@ type EngramServer interface {
 	// tier document counts — the backing RPC for `engram status` and the MCP
 	// memory_status tool. It requires a valid token like every other call.
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
+	// Audit returns a fact's provenance (who wrote it, from what) and its full
+	// bi-temporal version history (Phase 4, DW-4.6) — the backing RPC for
+	// `engram audit <id>`. The caller must be authorized to READ the target
+	// fact; an unauthorized or unknown id returns NOT_FOUND (no existence
+	// oracle). Scope enforcement applies here exactly as it does to search.
+	Audit(context.Context, *AuditRequest) (*AuditResponse, error)
 	mustEmbedUnimplementedEngramServer()
 }
 
@@ -138,6 +161,9 @@ func (UnimplementedEngramServer) Search(context.Context, *SearchRequest) (*Searc
 }
 func (UnimplementedEngramServer) Status(context.Context, *StatusRequest) (*StatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Status not implemented")
+}
+func (UnimplementedEngramServer) Audit(context.Context, *AuditRequest) (*AuditResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Audit not implemented")
 }
 func (UnimplementedEngramServer) mustEmbedUnimplementedEngramServer() {}
 func (UnimplementedEngramServer) testEmbeddedByValue()                {}
@@ -214,6 +240,24 @@ func _Engram_Status_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Engram_Audit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuditRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).Audit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_Audit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).Audit(ctx, req.(*AuditRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Engram_ServiceDesc is the grpc.ServiceDesc for Engram service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -232,6 +276,10 @@ var Engram_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Status",
 			Handler:    _Engram_Status_Handler,
+		},
+		{
+			MethodName: "Audit",
+			Handler:    _Engram_Audit_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

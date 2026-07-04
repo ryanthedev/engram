@@ -280,3 +280,12 @@ _DAG: 3 → 4 → {5 ∥ 6} → 7 → 8. Phase bodies filled during DETAIL._
 
 ## Execution Log
 _To be filled during /code-foundations:build_
+
+## Execution Log
+
+### Phase 3: Surfaces, Auth & E2E Foundation (Gate: Full, 3-sample review)
+- [x] BUILD: MCP server + CLI + token auth + local compose e2e stack + worker stage seam + carry-over rule (d)
+- [x] REVIEW: unanimous 3-sample PASS (security-focused). Follow-up: cmd/engram-perf runs without the interceptor (out-of-scope perf tool).
+- [x] Committed
+Commit: ff2fbad
+Summary: Engram now has real client surfaces — engram-mcp (stdio) and the engram CLI over the gRPC API — behind a 256-bit hashed-token auth barricade (constant-time verify, ≤5s revocation). A fully local compose stack (pinned OpenSearch 3.1 + deterministic embed + stub LLM + engramd + worker) runs `make e2e` end-to-end through MCP/CLI/gRPC. The worker stage-registration seam (D20) and ACL post-hook/tier/write-guard seams are the plug points Phases 4–6 consume; sweep rule (d) closed the last skeleton write-skew window. 174 unit + integration + e2e tests green.

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ryanthedev/engram/internal/acl"
 	"github.com/ryanthedev/engram/internal/embed"
 	"github.com/ryanthedev/engram/internal/store"
 )
@@ -50,6 +51,7 @@ type config struct {
 	mode          SearchMode
 	embedTimeout  time.Duration
 	logger        *slog.Logger
+	acl           ACLFilter
 }
 
 // WithIndices overrides the episodic/semantic index names searched.
@@ -73,9 +75,21 @@ func WithEmbedTimeout(d time.Duration) Option {
 }
 
 // WithLogger overrides the logger used to flag degraded searches (embedding
-// timeout -> BM25-only fallback). Defaults to slog.Default().
+// timeout -> BM25-only fallback) and ACL denials. Defaults to slog.Default().
 func WithLogger(l *slog.Logger) Option {
 	return func(c *config) { c.logger = l }
+}
+
+// WithACL enables query-time ACL enforcement (Phase 4): the compiled filter is
+// applied inside every tier query, and tier/expanded hits are re-verified
+// through the ACL predicate. Without it (eval harness, unit tests) the
+// Retriever performs no scope enforcement. A nil filter is ignored.
+func WithACL(f ACLFilter) Option {
+	return func(c *config) {
+		if f != nil {
+			c.acl = f
+		}
+	}
 }
 
 // NewOpenSearchRetriever returns the hybrid Retriever over OpenSearch: one
@@ -96,38 +110,63 @@ func NewOpenSearchRetriever(client *http.Client, baseURL string, embedder embed.
 		opt(&cfg)
 	}
 	base := strings.TrimRight(baseURL, "/")
-	tiers := []Retriever{
-		&tierRetriever{
+	tiers := []*tierRetriever{
+		{
 			client: client, baseURL: base, index: cfg.episodicIndex,
 			textField: "text", vectorField: "text_embedding", source: "episodic",
 			supportsValidity: false,
 			embedder:         embedder, embedTimeout: cfg.embedTimeout, mode: cfg.mode, logger: cfg.logger,
 		},
-		&tierRetriever{
+		{
 			client: client, baseURL: base, index: cfg.semanticIndex,
 			textField: "statement", vectorField: "fact_embedding", source: "semantic",
 			supportsValidity: true,
 			embedder:         embedder, embedTimeout: cfg.embedTimeout, mode: cfg.mode, logger: cfg.logger,
 		},
 	}
-	return &MultiRetriever{tiers: tiers}
+	return &MultiRetriever{tiers: tiers, acl: cfg.acl, logger: cfg.logger}
 }
 
 // MultiRetriever fuses hits from several per-tier retrievers into one ranked
-// list. It is Retriever's cross-tier read path: today episodic + semantic,
-// and how future tiers (experience, graph) compose in without changing the
-// Search contract.
+// list. It is Retriever's cross-tier read path: episodic + semantic built-in
+// tiers, plus registered tier sources (Phase 5) and post-hooks (Phase 6), all
+// composed behind the unchanged Search contract. When built WithACL it is the
+// enforcement point: the compiled filter goes inside every built-in query, and
+// tier/expanded hits are re-verified — no caller can bypass scope.
 type MultiRetriever struct {
-	tiers []Retriever
+	tiers     []*tierRetriever
+	acl       ACLFilter
+	tierSrcs  []TierSource
+	postHooks []PostHook
+	logger    *slog.Logger
 }
 
 var _ Retriever = (*MultiRetriever)(nil)
 
-// Search implements Retriever across every configured tier: an empty query
-// short-circuits to an empty result (no HTTP calls); otherwise every tier is
-// queried concurrently, and the merged list is sorted by score descending
-// and truncated to K. If every tier errors, Search errors; if at least one
-// tier succeeds, its hits are returned and the failure(s) are logged.
+// RegisterTier adds a retrieval tier source (Phase 4 seam; P5 experience tier).
+// Call it at wiring time before serving; not safe to call concurrently with
+// active searches. Registered sources are searched with the caller's Identity
+// and their hits re-verified through the ACL predicate.
+func (m *MultiRetriever) RegisterTier(src TierSource) {
+	m.tierSrcs = append(m.tierSrcs, src)
+}
+
+// RegisterPostHook adds a post-fusion hook (Phase 4 seam; P6 graph expansion).
+// Call it at wiring time before serving. Hooks receive the caller's Identity;
+// any hits they add are re-verified through the ACL predicate before return.
+func (m *MultiRetriever) RegisterPostHook(h PostHook) {
+	m.postHooks = append(m.postHooks, h)
+}
+
+// Search implements Retriever across every configured tier under the ACL. An
+// empty query short-circuits to an empty result (no HTTP calls). With ACL
+// enabled, the filter is compiled ONCE from f.Identity and enforced two ways:
+// its OpenSearch clause goes inside every built-in tier query (efficient,
+// preserves filtered-kNN recall), and its predicate re-verifies hits that came
+// from registered tier sources or post-hooks. It is fail-closed: an ACL
+// compile error returns zero results and logs a denial — the query never runs
+// unfiltered. Built-in tiers run concurrently; if every tier errors Search
+// errors, otherwise partial failures are logged.
 func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, error) {
 	if q.Text == "" {
 		return nil, nil
@@ -136,19 +175,41 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 		q.K = DefaultK
 	}
 
+	var enf acl.Enforcer
+	var aclClause map[string]any
+	if m.acl != nil {
+		e, err := m.acl.Enforce(ctx, f.Identity)
+		if err != nil {
+			// Fail-closed: never run a query we couldn't authorize.
+			m.logger.WarnContext(ctx, "retrieval: ACL denial, returning zero results (fail-closed)",
+				"identity", f.Identity.String(), "err", err)
+			return nil, nil
+		}
+		enf = e
+		aclClause = e.Clause()
+	}
+
 	type outcome struct {
 		hits []Hit
 		err  error
 	}
-	results := make([]outcome, len(m.tiers))
+	results := make([]outcome, len(m.tiers)+len(m.tierSrcs))
 	var wg sync.WaitGroup
 	for i, tier := range m.tiers {
 		wg.Add(1)
-		go func(i int, tier Retriever) {
+		go func(i int, tier *tierRetriever) {
 			defer wg.Done()
-			hits, err := tier.Search(ctx, q, f)
+			hits, err := tier.search(ctx, q, f, aclClause)
 			results[i] = outcome{hits, err}
 		}(i, tier)
+	}
+	for j, src := range m.tierSrcs {
+		wg.Add(1)
+		go func(i int, src TierSource) {
+			defer wg.Done()
+			hits, err := src.Search(ctx, f.Identity, q)
+			results[i] = outcome{hits, err}
+		}(len(m.tiers)+j, src)
 	}
 	wg.Wait()
 
@@ -164,11 +225,63 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 	if merged == nil && len(errs) > 0 {
 		return nil, fmt.Errorf("retrieval: all tiers failed: %w", errors.Join(errs...))
 	}
+
+	// Authorize BEFORE the top-k truncation. Registered tier sources deliver
+	// their hits unfiltered (they enforce on their own index, but we do not
+	// trust that); if an unauthorized high-scoring tier hit survived into the
+	// sort it could crowd an authorized built-in hit out of the top-k and then
+	// be dropped by a later re-filter — yielding a deficient authorized result.
+	// Filtering first guarantees no authorized hit is lost to truncation by an
+	// unauthorized one. Built-in hits already passed the query clause, so this
+	// only removes tier-source leakage (and is a cheap, equivalent re-check).
+	if m.acl != nil {
+		merged = filterAuthorized(merged, enf)
+	}
 	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
 	if len(merged) > q.K {
 		merged = merged[:q.K]
 	}
+
+	// Post-hooks (e.g. graph expansion) run with the Identity on the authorized
+	// top-k; they may add hits reached through other documents. Re-authorize
+	// their output so an expansion cannot introduce a fact the caller may not
+	// read (defense in depth; the authorized top-k above is unaffected).
+	for _, h := range m.postHooks {
+		expanded, err := h.Apply(ctx, f.Identity, merged)
+		if err != nil {
+			return nil, fmt.Errorf("retrieval: post-hook: %w", err)
+		}
+		merged = expanded
+	}
+	if m.acl != nil && len(m.postHooks) > 0 {
+		merged = filterAuthorized(merged, enf)
+	}
 	return merged, nil
+}
+
+// filterAuthorized drops hits the Enforcer does not authorize (fail-closed:
+// a hit whose fields cannot be read as an ACL record is dropped).
+func filterAuthorized(hits []Hit, enf acl.Enforcer) []Hit {
+	out := hits[:0:0]
+	for _, h := range hits {
+		if enf.Authorize(recordFromHit(h)) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// recordFromHit extracts the ACL-relevant provenance fields from a hit's stored
+// document. Missing fields read as empty strings (which the ACL treats as
+// deny-worthy for team/org and private-to-a-blank-owner), staying fail-closed.
+func recordFromHit(h Hit) acl.Record {
+	str := func(k string) string { s, _ := h.Fields[k].(string); return s }
+	return acl.Record{
+		TenantID:     str("tenant_id"),
+		TeamID:       str("team_id"),
+		Scope:        str("scope"),
+		OwnerAgentID: str("owner_agent_id"),
+	}
 }
 
 // tierRetriever implements Retriever for exactly one OpenSearch index, using
@@ -191,8 +304,18 @@ type tierRetriever struct {
 
 var _ Retriever = (*tierRetriever)(nil)
 
-// Search implements Retriever for this tier.
+// Search implements Retriever for this tier with no ACL clause (used by the
+// eval harness and tests that construct a tier directly). The MultiRetriever
+// calls search with the compiled ACL clause.
 func (t *tierRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, error) {
+	return t.search(ctx, q, f, nil)
+}
+
+// search runs this tier's query with an optional ACL clause ANDed into both
+// the BM25 and kNN sub-queries (inside the knn clause, so filtered-kNN recall
+// does not collapse — DW-4.5). A match_none aclClause makes the tier return
+// nothing (fail-closed deny-all).
+func (t *tierRetriever) search(ctx context.Context, q Query, f Filter, aclClause map[string]any) ([]Hit, error) {
 	if q.Text == "" {
 		return nil, nil
 	}
@@ -214,7 +337,7 @@ func (t *tierRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, e
 		}
 	}
 
-	filters := t.filterClauses(f)
+	filters := t.filterClauses(f, aclClause)
 	body, usePipeline := buildQuery(mode, t.textField, t.vectorField, q.Text, vec, k, filters)
 
 	url := t.baseURL + "/" + t.index + "/_search"
@@ -261,12 +384,16 @@ func (t *tierRetriever) embed(ctx context.Context, text string) (vec []float32, 
 	return vecs[0], false
 }
 
-// filterClauses builds the tenancy and validity filter query clauses,
+// filterClauses builds the tenancy, validity, and ACL filter query clauses,
 // applied inside both the BM25 and kNN sub-queries (never post-filtered —
 // the filtered-kNN recall collapse the Phase-0 spike found only when
-// filtering after the fact, not inside the knn clause).
-func (t *tierRetriever) filterClauses(f Filter) []any {
+// filtering after the fact, not inside the knn clause). The ACL clause, when
+// present, is the query-time scope barricade (Phase 4).
+func (t *tierRetriever) filterClauses(f Filter, aclClause map[string]any) []any {
 	var clauses []any
+	if aclClause != nil {
+		clauses = append(clauses, aclClause)
+	}
 	if f.TenantID != "" {
 		clauses = append(clauses, map[string]any{"term": map[string]any{"tenant_id": f.TenantID}})
 	}

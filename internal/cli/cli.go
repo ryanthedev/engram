@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ryanthedev/engram/internal/acl"
 	"github.com/ryanthedev/engram/internal/auth"
 	"github.com/ryanthedev/engram/internal/engramclient"
 	"github.com/ryanthedev/engram/internal/store"
@@ -40,12 +41,16 @@ func Run(ctx context.Context, args []string, env Env, out, errW io.Writer) int {
 	switch cmd {
 	case "token":
 		err = runToken(ctx, rest, env, out, errW)
+	case "acl":
+		err = runACL(ctx, rest, env, out)
 	case "ingest":
 		err = runIngest(ctx, rest, env, out)
 	case "search":
 		err = runSearch(ctx, rest, env, out)
 	case "status":
 		err = runStatus(ctx, rest, env, out)
+	case "audit":
+		err = runAudit(ctx, rest, env, out)
 	case "help", "-h", "--help":
 		fmt.Fprintln(out, usage)
 		return 0
@@ -66,9 +71,13 @@ Usage:
   engram token create   --tenant T --user U [--agent A] [--ttl 720h] [--url URL]
   engram token list     --tenant T --user U [--url URL]
   engram token revoke   <handle> [--url URL]
-  engram ingest         --event-id ID --text TEXT [--source S] [-addr HOST:PORT] [-token TOK]
+  engram acl grant      --tenant T --user U (--agent A | --team M | --org) [--url URL]
+  engram acl revoke     --tenant T --user U (--agent A | --team M | --org) [--url URL]
+  engram acl list       --tenant T --user U [--url URL]
+  engram ingest         --event-id ID --text TEXT [--source S] [--scope private|team|org] [--team M] [-addr HOST:PORT] [-token TOK]
   engram search         QUERY [-k 10] [-addr HOST:PORT] [-token TOK]
   engram status         [-addr HOST:PORT] [-token TOK]
+  engram audit          <fact-id> [-addr HOST:PORT] [-token TOK]
 
 Environment: ENGRAM_OPENSEARCH_URL, ENGRAM_ADDR, ENGRAM_TOKEN.`
 
@@ -187,6 +196,8 @@ func runIngest(ctx context.Context, args []string, env Env, out io.Writer) error
 	eventID := fs.String("event-id", "", "idempotency event id (required)")
 	text := fs.String("text", "", "event text (required)")
 	source := fs.String("source", "", "source id")
+	scope := fs.String("scope", "", "scope: private|team|org (default private)")
+	team := fs.String("team", "", "team id (required for --scope team)")
 	addr := fs.String("addr", "", "engramd address")
 	token := fs.String("token", "", "bearer token")
 	if err := fs.Parse(args); err != nil {
@@ -200,7 +211,7 @@ func runIngest(ctx context.Context, args []string, env Env, out io.Writer) error
 		return err
 	}
 	defer client.Close()
-	id, err := client.Ingest(ctx, *eventID, *text, *source)
+	id, err := client.IngestScoped(ctx, *eventID, *text, *source, *scope, *team)
 	if err != nil {
 		return err
 	}
@@ -262,6 +273,141 @@ func runStatus(ctx context.Context, args []string, env Env, out io.Writer) error
 	}
 	b, _ := json.MarshalIndent(st, "", "  ")
 	fmt.Fprintln(out, string(b))
+	return nil
+}
+
+func runAudit(ctx context.Context, args []string, env Env, out io.Writer) error {
+	fs := flag.NewFlagSet("audit", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	addr := fs.String("addr", "", "engramd address")
+	token := fs.String("token", "", "bearer token")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("audit: expected exactly one <fact-id>")
+	}
+	client, err := dialClient(env, *addr, *token)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	res, err := client.Audit(ctx, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	b, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Fprintln(out, string(b))
+	return nil
+}
+
+// --- ACL edge admin (OpenSearch-backed, like token admin) ---
+
+func aclEdgeStore(env Env, url string) *store.ACLEdgeStore {
+	base := firstNonEmpty(url, env("ENGRAM_OPENSEARCH_URL"), "http://localhost:9200")
+	return store.NewACLEdgeStore(&http.Client{Timeout: store.DefaultTimeout}, base)
+}
+
+func runACL(ctx context.Context, args []string, env Env, out io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("acl: expected grant|revoke|list")
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "grant":
+		return runACLEdge(ctx, rest, env, out, true)
+	case "revoke":
+		return runACLEdge(ctx, rest, env, out, false)
+	case "list":
+		return runACLList(ctx, rest, env, out)
+	default:
+		return fmt.Errorf("acl: unknown subcommand %q", sub)
+	}
+}
+
+// aclEdgeFromFlags parses the shared edge flags into an acl.Edge, inferring the
+// edge type from which target flag is set (exactly one of --agent/--team/--org).
+func aclEdgeFromFlags(args []string) (acl.Edge, string, error) {
+	fs := flag.NewFlagSet("acl edge", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	tenant := fs.String("tenant", "", "tenant id (required)")
+	user := fs.String("user", "", "user id (required)")
+	agent := fs.String("agent", "", "agent id (user_agent edge)")
+	team := fs.String("team", "", "team id (member edge)")
+	org := fs.Bool("org", false, "org write grant (org_grant edge)")
+	url := fs.String("url", "", "OpenSearch URL")
+	if err := fs.Parse(args); err != nil {
+		return acl.Edge{}, "", err
+	}
+	if *tenant == "" || *user == "" {
+		return acl.Edge{}, "", errors.New("acl: --tenant and --user are required")
+	}
+	set := 0
+	e := acl.Edge{TenantID: *tenant, UserID: *user}
+	if *agent != "" {
+		e.Type, e.AgentID = acl.EdgeUserAgent, *agent
+		set++
+	}
+	if *team != "" {
+		e.Type, e.TeamID = acl.EdgeMember, *team
+		set++
+	}
+	if *org {
+		e.Type = acl.EdgeOrgGrant
+		set++
+	}
+	if set != 1 {
+		return acl.Edge{}, "", errors.New("acl: exactly one of --agent, --team, or --org is required")
+	}
+	return e, *url, nil
+}
+
+func runACLEdge(ctx context.Context, args []string, env Env, out io.Writer, grant bool) error {
+	e, url, err := aclEdgeFromFlags(args)
+	if err != nil {
+		return err
+	}
+	es := aclEdgeStore(env, url)
+	if grant {
+		if err := es.PutEdge(ctx, e); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "granted %s edge (user=%s agent=%s team=%s)\n", e.Type, e.UserID, e.AgentID, e.TeamID)
+		return nil
+	}
+	found, err := es.DeleteEdge(ctx, e)
+	if err != nil {
+		return err
+	}
+	if !found {
+		fmt.Fprintf(out, "no such %s edge (nothing to revoke)\n", e.Type)
+		return nil
+	}
+	fmt.Fprintf(out, "revoked %s edge (user=%s agent=%s team=%s)\n", e.Type, e.UserID, e.AgentID, e.TeamID)
+	return nil
+}
+
+func runACLList(ctx context.Context, args []string, env Env, out io.Writer) error {
+	fs := flag.NewFlagSet("acl list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	tenant := fs.String("tenant", "", "tenant id (required)")
+	user := fs.String("user", "", "user id (required)")
+	url := fs.String("url", "", "OpenSearch URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	id := auth.Identity{TenantID: *tenant, UserID: *user}
+	if !id.Valid() {
+		return errors.New("acl list: --tenant and --user are required")
+	}
+	edges, err := aclEdgeStore(env, *url).ListEdges(ctx, id)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "%-12s  %-12s  %-12s\n", "TYPE", "AGENT", "TEAM")
+	for _, e := range edges {
+		fmt.Fprintf(out, "%-12s  %-12s  %-12s\n", e.Type, e.AgentID, e.TeamID)
+	}
 	return nil
 }
 

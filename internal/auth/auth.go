@@ -44,6 +44,30 @@ func (id Identity) Valid() bool {
 	return id.TenantID != "" && id.UserID != ""
 }
 
+// identityCtxKey is the private context key under which a verified Identity is
+// stored. It lives here (not in the transport layer) so business packages —
+// which may not import gRPC — can still read the barricade-injected Identity
+// without crossing the transport boundary. The type is private so no other
+// package can forge or overwrite the value.
+type identityCtxKey struct{}
+
+// ContextWithIdentity returns ctx carrying id. The gRPC barricade calls this
+// after verifying a token; in-process callers and tests use it to simulate an
+// authenticated context. This is the single writer of the identity ctx value.
+func ContextWithIdentity(ctx context.Context, id Identity) context.Context {
+	return context.WithValue(ctx, identityCtxKey{}, id)
+}
+
+// IdentityFromContext returns the Identity injected by the barricade, if any.
+// A business package (e.g. the store's write-guard path) reads it to authorize
+// a request without importing the transport layer; ok=false means no verified
+// identity is present (an in-process/worker call), which callers treat as
+// "skip client-scoped authorization", never as "authorized".
+func IdentityFromContext(ctx context.Context) (Identity, bool) {
+	id, ok := ctx.Value(identityCtxKey{}).(Identity)
+	return id, ok
+}
+
 // String renders the identity for logs (never includes a secret).
 func (id Identity) String() string {
 	return fmt.Sprintf("tenant=%s user=%s agent=%s", id.TenantID, id.UserID, id.AgentID)

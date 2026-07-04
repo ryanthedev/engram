@@ -7,6 +7,7 @@ package engramclient
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -43,7 +44,15 @@ func (c *Client) Close() error { return c.conn.Close() }
 
 // Ingest appends one episodic event and returns its storage id.
 func (c *Client) Ingest(ctx context.Context, eventID, text, source string) (string, error) {
-	req := &engrampb.IngestRequest{EventId: eventID, Text: text, Kind: "mcp"}
+	return c.IngestScoped(ctx, eventID, text, source, "", "")
+}
+
+// IngestScoped appends one episodic event at an explicit scope (private/team/
+// org) and team, subject to the server's write-time ACL guard. An empty scope
+// defaults to private server-side. This is the CLI's scoped-write surface
+// (Phase 4); the MCP tool uses the default-scope Ingest.
+func (c *Client) IngestScoped(ctx context.Context, eventID, text, source, scope, team string) (string, error) {
+	req := &engrampb.IngestRequest{EventId: eventID, Text: text, Kind: "mcp", Scope: scope, TeamId: team}
 	if source != "" {
 		req.SourceIds = []string{source}
 	}
@@ -52,6 +61,65 @@ func (c *Client) Ingest(ctx context.Context, eventID, text, source string) (stri
 		return "", err
 	}
 	return resp.GetId(), nil
+}
+
+// FactVersion is one version in an audited fact's history.
+type FactVersion struct {
+	ID         string     `json:"id"`
+	Subject    string     `json:"subject"`
+	Predicate  string     `json:"predicate"`
+	Object     string     `json:"object"`
+	Statement  string     `json:"statement"`
+	Supersedes string     `json:"supersedes,omitempty"`
+	ValidAt    time.Time  `json:"valid_at"`
+	InvalidAt  *time.Time `json:"invalid_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiredAt  *time.Time `json:"expired_at,omitempty"`
+}
+
+// AuditResult is a fact's provenance plus its full version history.
+type AuditResult struct {
+	TenantID         string        `json:"tenant_id"`
+	TeamID           string        `json:"team_id"`
+	Scope            string        `json:"scope"`
+	OwnerAgentID     string        `json:"owner_agent_id"`
+	SourceIDs        []string      `json:"source_ids"`
+	ExtractorVersion string        `json:"extractor_version"`
+	Versions         []FactVersion `json:"versions"`
+}
+
+// Audit fetches a fact's provenance and full bi-temporal history (DW-4.6).
+func (c *Client) Audit(ctx context.Context, id string) (AuditResult, error) {
+	resp, err := c.api.Audit(ctx, &engrampb.AuditRequest{Id: id})
+	if err != nil {
+		return AuditResult{}, err
+	}
+	p := resp.GetProvenance()
+	out := AuditResult{
+		TenantID:         p.GetTenantId(),
+		TeamID:           p.GetTeamId(),
+		Scope:            p.GetScope(),
+		OwnerAgentID:     p.GetOwnerAgentId(),
+		SourceIDs:        p.GetSourceIds(),
+		ExtractorVersion: p.GetExtractorVersion(),
+	}
+	for _, v := range resp.GetVersions() {
+		fv := FactVersion{
+			ID: v.GetId(), Subject: v.GetSubject(), Predicate: v.GetPredicate(),
+			Object: v.GetObject(), Statement: v.GetStatement(), Supersedes: v.GetSupersedes(),
+			ValidAt: v.GetValidAt().AsTime(), CreatedAt: v.GetCreatedAt().AsTime(),
+		}
+		if v.GetInvalidAt() != nil {
+			t := v.GetInvalidAt().AsTime()
+			fv.InvalidAt = &t
+		}
+		if v.GetExpiredAt() != nil {
+			t := v.GetExpiredAt().AsTime()
+			fv.ExpiredAt = &t
+		}
+		out.Versions = append(out.Versions, fv)
+	}
+	return out, nil
 }
 
 // Search runs one hybrid query and returns fused hits.

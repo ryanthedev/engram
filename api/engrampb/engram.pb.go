@@ -400,6 +400,330 @@ func (x *SearchResponse) GetHits() []*Hit {
 	return nil
 }
 
+// AuditRequest names one fact by its semantic doc id.
+type AuditRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Semantic fact doc id (as returned in a search Hit).
+	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuditRequest) Reset() {
+	*x = AuditRequest{}
+	mi := &file_engram_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuditRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuditRequest) ProtoMessage() {}
+
+func (x *AuditRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuditRequest.ProtoReflect.Descriptor instead.
+func (*AuditRequest) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AuditRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+// Provenance is who wrote a fact and from what (D6 provenance-as-ACL).
+type Provenance struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	TenantId     string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	TeamId       string                 `protobuf:"bytes,2,opt,name=team_id,json=teamId,proto3" json:"team_id,omitempty"`
+	Scope        string                 `protobuf:"bytes,3,opt,name=scope,proto3" json:"scope,omitempty"`
+	OwnerAgentId string                 `protobuf:"bytes,4,opt,name=owner_agent_id,json=ownerAgentId,proto3" json:"owner_agent_id,omitempty"`
+	// Episodic event ids this fact was extracted from.
+	SourceIds []string `protobuf:"bytes,5,rep,name=source_ids,json=sourceIds,proto3" json:"source_ids,omitempty"`
+	// Extraction pipeline version that produced it (D13).
+	ExtractorVersion string `protobuf:"bytes,6,opt,name=extractor_version,json=extractorVersion,proto3" json:"extractor_version,omitempty"`
+	// System append time of the audited version.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Provenance) Reset() {
+	*x = Provenance{}
+	mi := &file_engram_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Provenance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Provenance) ProtoMessage() {}
+
+func (x *Provenance) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Provenance.ProtoReflect.Descriptor instead.
+func (*Provenance) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *Provenance) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *Provenance) GetTeamId() string {
+	if x != nil {
+		return x.TeamId
+	}
+	return ""
+}
+
+func (x *Provenance) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *Provenance) GetOwnerAgentId() string {
+	if x != nil {
+		return x.OwnerAgentId
+	}
+	return ""
+}
+
+func (x *Provenance) GetSourceIds() []string {
+	if x != nil {
+		return x.SourceIds
+	}
+	return nil
+}
+
+func (x *Provenance) GetExtractorVersion() string {
+	if x != nil {
+		return x.ExtractorVersion
+	}
+	return ""
+}
+
+func (x *Provenance) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+// FactVersion is one record in a fact's bi-temporal chain.
+type FactVersion struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Subject    string                 `protobuf:"bytes,2,opt,name=subject,proto3" json:"subject,omitempty"`
+	Predicate  string                 `protobuf:"bytes,3,opt,name=predicate,proto3" json:"predicate,omitempty"`
+	Object     string                 `protobuf:"bytes,4,opt,name=object,proto3" json:"object,omitempty"`
+	Statement  string                 `protobuf:"bytes,5,opt,name=statement,proto3" json:"statement,omitempty"`
+	ContentKey string                 `protobuf:"bytes,6,opt,name=content_key,json=contentKey,proto3" json:"content_key,omitempty"`
+	// Doc id of the version this one supersedes (UPDATE/INVALIDATE); "" for ADD.
+	Supersedes string `protobuf:"bytes,7,opt,name=supersedes,proto3" json:"supersedes,omitempty"`
+	// Valid time [valid_at, invalid_at): real-world truth interval.
+	ValidAt   *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=valid_at,json=validAt,proto3" json:"valid_at,omitempty"`
+	InvalidAt *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=invalid_at,json=invalidAt,proto3" json:"invalid_at,omitempty"`
+	// Transaction time [created_at, expired_at): system currency interval.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ExpiredAt     *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=expired_at,json=expiredAt,proto3" json:"expired_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FactVersion) Reset() {
+	*x = FactVersion{}
+	mi := &file_engram_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FactVersion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FactVersion) ProtoMessage() {}
+
+func (x *FactVersion) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FactVersion.ProtoReflect.Descriptor instead.
+func (*FactVersion) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *FactVersion) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *FactVersion) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *FactVersion) GetPredicate() string {
+	if x != nil {
+		return x.Predicate
+	}
+	return ""
+}
+
+func (x *FactVersion) GetObject() string {
+	if x != nil {
+		return x.Object
+	}
+	return ""
+}
+
+func (x *FactVersion) GetStatement() string {
+	if x != nil {
+		return x.Statement
+	}
+	return ""
+}
+
+func (x *FactVersion) GetContentKey() string {
+	if x != nil {
+		return x.ContentKey
+	}
+	return ""
+}
+
+func (x *FactVersion) GetSupersedes() string {
+	if x != nil {
+		return x.Supersedes
+	}
+	return ""
+}
+
+func (x *FactVersion) GetValidAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ValidAt
+	}
+	return nil
+}
+
+func (x *FactVersion) GetInvalidAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.InvalidAt
+	}
+	return nil
+}
+
+func (x *FactVersion) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *FactVersion) GetExpiredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiredAt
+	}
+	return nil
+}
+
+// AuditResponse carries the target fact's provenance and its full history,
+// ordered oldest-first by transaction then valid time.
+type AuditResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Provenance    *Provenance            `protobuf:"bytes,1,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	Versions      []*FactVersion         `protobuf:"bytes,2,rep,name=versions,proto3" json:"versions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuditResponse) Reset() {
+	*x = AuditResponse{}
+	mi := &file_engram_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuditResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuditResponse) ProtoMessage() {}
+
+func (x *AuditResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuditResponse.ProtoReflect.Descriptor instead.
+func (*AuditResponse) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *AuditResponse) GetProvenance() *Provenance {
+	if x != nil {
+		return x.Provenance
+	}
+	return nil
+}
+
+func (x *AuditResponse) GetVersions() []*FactVersion {
+	if x != nil {
+		return x.Versions
+	}
+	return nil
+}
+
 // StatusRequest is empty; the caller is identified by the bearer token.
 type StatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -409,7 +733,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_engram_proto_msgTypes[5]
+	mi := &file_engram_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -421,7 +745,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[5]
+	mi := &file_engram_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -434,7 +758,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{5}
+	return file_engram_proto_rawDescGZIP(), []int{9}
 }
 
 // StatusResponse reports liveness, the resolved identity, and tier counts.
@@ -457,7 +781,7 @@ type StatusResponse struct {
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_engram_proto_msgTypes[6]
+	mi := &file_engram_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -469,7 +793,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[6]
+	mi := &file_engram_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -482,7 +806,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{6}
+	return file_engram_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StatusResponse) GetHealthy() bool {
@@ -567,7 +891,44 @@ const file_engram_proto_rawDesc = "" +
 	"\vfields_json\x18\x04 \x01(\tR\n" +
 	"fieldsJson\"4\n" +
 	"\x0eSearchResponse\x12\"\n" +
-	"\x04hits\x18\x01 \x03(\v2\x0e.engram.v1.HitR\x04hits\"\x0f\n" +
+	"\x04hits\x18\x01 \x03(\v2\x0e.engram.v1.HitR\x04hits\"\x1e\n" +
+	"\fAuditRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x85\x02\n" +
+	"\n" +
+	"Provenance\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
+	"\ateam_id\x18\x02 \x01(\tR\x06teamId\x12\x14\n" +
+	"\x05scope\x18\x03 \x01(\tR\x05scope\x12$\n" +
+	"\x0eowner_agent_id\x18\x04 \x01(\tR\fownerAgentId\x12\x1d\n" +
+	"\n" +
+	"source_ids\x18\x05 \x03(\tR\tsourceIds\x12+\n" +
+	"\x11extractor_version\x18\x06 \x01(\tR\x10extractorVersion\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xb4\x03\n" +
+	"\vFactVersion\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
+	"\asubject\x18\x02 \x01(\tR\asubject\x12\x1c\n" +
+	"\tpredicate\x18\x03 \x01(\tR\tpredicate\x12\x16\n" +
+	"\x06object\x18\x04 \x01(\tR\x06object\x12\x1c\n" +
+	"\tstatement\x18\x05 \x01(\tR\tstatement\x12\x1f\n" +
+	"\vcontent_key\x18\x06 \x01(\tR\n" +
+	"contentKey\x12\x1e\n" +
+	"\n" +
+	"supersedes\x18\a \x01(\tR\n" +
+	"supersedes\x125\n" +
+	"\bvalid_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\avalidAt\x129\n" +
+	"\n" +
+	"invalid_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tinvalidAt\x129\n" +
+	"\n" +
+	"created_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"expired_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\texpiredAt\"z\n" +
+	"\rAuditResponse\x125\n" +
+	"\n" +
+	"provenance\x18\x01 \x01(\v2\x15.engram.v1.ProvenanceR\n" +
+	"provenance\x122\n" +
+	"\bversions\x18\x02 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"\x0f\n" +
 	"\rStatusRequest\"\xf8\x01\n" +
 	"\x0eStatusResponse\x12\x18\n" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x1b\n" +
@@ -576,11 +937,12 @@ const file_engram_proto_rawDesc = "" +
 	"\bagent_id\x18\x04 \x01(\tR\aagentId\x12%\n" +
 	"\x0eepisodic_count\x18\x05 \x01(\x03R\repisodicCount\x12%\n" +
 	"\x0esemantic_count\x18\x06 \x01(\x03R\rsemanticCount\x12-\n" +
-	"\x12opensearch_version\x18\a \x01(\tR\x11opensearchVersion2\xc5\x01\n" +
+	"\x12opensearch_version\x18\a \x01(\tR\x11opensearchVersion2\x81\x02\n" +
 	"\x06Engram\x12=\n" +
 	"\x06Ingest\x12\x18.engram.v1.IngestRequest\x1a\x19.engram.v1.IngestResponse\x12=\n" +
 	"\x06Search\x12\x18.engram.v1.SearchRequest\x1a\x19.engram.v1.SearchResponse\x12=\n" +
-	"\x06Status\x12\x18.engram.v1.StatusRequest\x1a\x19.engram.v1.StatusResponseB+Z)github.com/ryanthedev/engram/api/engrampbb\x06proto3"
+	"\x06Status\x12\x18.engram.v1.StatusRequest\x1a\x19.engram.v1.StatusResponse\x12:\n" +
+	"\x05Audit\x12\x17.engram.v1.AuditRequest\x1a\x18.engram.v1.AuditResponseB+Z)github.com/ryanthedev/engram/api/engrampbb\x06proto3"
 
 var (
 	file_engram_proto_rawDescOnce sync.Once
@@ -594,31 +956,44 @@ func file_engram_proto_rawDescGZIP() []byte {
 	return file_engram_proto_rawDescData
 }
 
-var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_engram_proto_goTypes = []any{
 	(*IngestRequest)(nil),         // 0: engram.v1.IngestRequest
 	(*IngestResponse)(nil),        // 1: engram.v1.IngestResponse
 	(*SearchRequest)(nil),         // 2: engram.v1.SearchRequest
 	(*Hit)(nil),                   // 3: engram.v1.Hit
 	(*SearchResponse)(nil),        // 4: engram.v1.SearchResponse
-	(*StatusRequest)(nil),         // 5: engram.v1.StatusRequest
-	(*StatusResponse)(nil),        // 6: engram.v1.StatusResponse
-	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
+	(*AuditRequest)(nil),          // 5: engram.v1.AuditRequest
+	(*Provenance)(nil),            // 6: engram.v1.Provenance
+	(*FactVersion)(nil),           // 7: engram.v1.FactVersion
+	(*AuditResponse)(nil),         // 8: engram.v1.AuditResponse
+	(*StatusRequest)(nil),         // 9: engram.v1.StatusRequest
+	(*StatusResponse)(nil),        // 10: engram.v1.StatusResponse
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_engram_proto_depIdxs = []int32{
-	7, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
-	3, // 1: engram.v1.SearchResponse.hits:type_name -> engram.v1.Hit
-	0, // 2: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
-	2, // 3: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
-	5, // 4: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
-	1, // 5: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
-	4, // 6: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
-	6, // 7: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	11, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
+	3,  // 1: engram.v1.SearchResponse.hits:type_name -> engram.v1.Hit
+	11, // 2: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
+	11, // 3: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
+	11, // 4: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
+	11, // 5: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
+	11, // 6: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
+	6,  // 7: engram.v1.AuditResponse.provenance:type_name -> engram.v1.Provenance
+	7,  // 8: engram.v1.AuditResponse.versions:type_name -> engram.v1.FactVersion
+	0,  // 9: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
+	2,  // 10: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
+	9,  // 11: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
+	5,  // 12: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
+	1,  // 13: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
+	4,  // 14: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
+	10, // 15: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
+	8,  // 16: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
+	13, // [13:17] is the sub-list for method output_type
+	9,  // [9:13] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_engram_proto_init() }
@@ -632,7 +1007,7 @@ func file_engram_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engram_proto_rawDesc), len(file_engram_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

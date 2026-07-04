@@ -41,6 +41,13 @@ service Engram {
   // tier document counts — the backing RPC for `engram status` and the MCP
   // memory_status tool. It requires a valid token like every other call.
   rpc Status(StatusRequest) returns (StatusResponse);
+
+  // Audit returns a fact's provenance (who wrote it, from what) and its full
+  // bi-temporal version history (Phase 4, DW-4.6) — the backing RPC for
+  // `engram audit <id>`. The caller must be authorized to READ the target
+  // fact; an unauthorized or unknown id returns NOT_FOUND (no existence
+  // oracle). Scope enforcement applies here exactly as it does to search.
+  rpc Audit(AuditRequest) returns (AuditResponse);
 }
 
 // IngestRequest is one episodic event.
@@ -96,6 +103,51 @@ message Hit {
 // SearchResponse is the single fused, ranked list.
 message SearchResponse {
   repeated Hit hits = 1;
+}
+
+// AuditRequest names one fact by its semantic doc id.
+message AuditRequest {
+  // Semantic fact doc id (as returned in a search Hit).
+  string id = 1;
+}
+
+// Provenance is who wrote a fact and from what (D6 provenance-as-ACL).
+message Provenance {
+  string tenant_id = 1;
+  string team_id = 2;
+  string scope = 3;
+  string owner_agent_id = 4;
+  // Episodic event ids this fact was extracted from.
+  repeated string source_ids = 5;
+  // Extraction pipeline version that produced it (D13).
+  string extractor_version = 6;
+  // System append time of the audited version.
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// FactVersion is one record in a fact's bi-temporal chain.
+message FactVersion {
+  string id = 1;
+  string subject = 2;
+  string predicate = 3;
+  string object = 4;
+  string statement = 5;
+  string content_key = 6;
+  // Doc id of the version this one supersedes (UPDATE/INVALIDATE); "" for ADD.
+  string supersedes = 7;
+  // Valid time [valid_at, invalid_at): real-world truth interval.
+  google.protobuf.Timestamp valid_at = 8;
+  google.protobuf.Timestamp invalid_at = 9;
+  // Transaction time [created_at, expired_at): system currency interval.
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp expired_at = 11;
+}
+
+// AuditResponse carries the target fact's provenance and its full history,
+// ordered oldest-first by transaction then valid time.
+message AuditResponse {
+  Provenance provenance = 1;
+  repeated FactVersion versions = 2;
 }
 
 // StatusRequest is empty; the caller is identified by the bearer token.

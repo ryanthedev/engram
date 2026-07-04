@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/ryanthedev/engram/api/engrampb"
+	"github.com/ryanthedev/engram/internal/acl"
 	"github.com/ryanthedev/engram/internal/auth"
 	"github.com/ryanthedev/engram/internal/authgrpc"
 	"github.com/ryanthedev/engram/internal/embed"
@@ -87,8 +88,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Phase 4 ACL: the reachability store backs both the query-time read filter
+	// (compiled inside the retriever) and the write-time scope guard registered
+	// on the store — scope enforced at read AND write (defense in depth).
+	edgeStore := store.NewACLEdgeStore(httpClient, *osURL)
+	aclFilter := acl.NewFilter(edgeStore, slog.Default())
+
 	st := store.NewOpenSearchStore(httpClient, *osURL)
-	retriever := retrieval.NewOpenSearchRetriever(httpClient, *osURL, embedder)
+	st.RegisterWriteGuard(acl.NewScopeGuard(edgeStore))
+	retriever := retrieval.NewOpenSearchRetriever(httpClient, *osURL, embedder, retrieval.WithACL(aclFilter))
 	tokenStore := store.NewAuthTokenStore(httpClient, *osURL)
 	authenticator := auth.NewAuthenticator(tokenStore, nil)
 
@@ -148,6 +156,8 @@ func main() {
 	)
 	svc := server.New(st, retriever)
 	svc.Probe = st
+	svc.Auditor = st
+	svc.ACL = aclFilter
 	engrampb.RegisterEngramServer(grpcServer, svc)
 
 	go func() {

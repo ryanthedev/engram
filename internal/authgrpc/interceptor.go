@@ -28,10 +28,6 @@ const metadataKey = "authorization"
 // bearerPrefix is the scheme in the authorization metadata value.
 const bearerPrefix = "Bearer "
 
-// identityCtxKey is the private context key under which the barricade stores
-// the verified Identity. Private type so no other package can forge it.
-type identityCtxKey struct{}
-
 // Verifier is the read half of auth the interceptor depends on
 // (consumer-defined seam — *auth.Authenticator satisfies it). Kept minimal so
 // an SSO verifier can slot in behind the same barricade later (D17).
@@ -99,15 +95,16 @@ func bearerToken(ctx context.Context) (string, error) {
 }
 
 // WithIdentity returns ctx carrying id — used by the interceptor and by
-// in-process callers/tests that bypass the transport.
+// in-process callers/tests that bypass the transport. It delegates to auth so
+// there is exactly one identity context key (defined in the transport-free
+// auth package), letting business packages read the same value.
 func WithIdentity(ctx context.Context, id auth.Identity) context.Context {
-	return context.WithValue(ctx, identityCtxKey{}, id)
+	return auth.ContextWithIdentity(ctx, id)
 }
 
 // IdentityFrom returns the Identity the barricade injected, if present.
 // Handlers past the barricade may assert ok is true; a missing identity there
 // is a programming error (the interceptor was not wired), not a client fault.
 func IdentityFrom(ctx context.Context) (auth.Identity, bool) {
-	id, ok := ctx.Value(identityCtxKey{}).(auth.Identity)
-	return id, ok
+	return auth.IdentityFromContext(ctx)
 }
