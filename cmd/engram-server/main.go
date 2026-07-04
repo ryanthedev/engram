@@ -35,6 +35,7 @@ import (
 	"github.com/ryanthedev/engram/internal/authgrpc"
 	"github.com/ryanthedev/engram/internal/embed"
 	"github.com/ryanthedev/engram/internal/enrich"
+	"github.com/ryanthedev/engram/internal/graph"
 	"github.com/ryanthedev/engram/internal/ingest"
 	"github.com/ryanthedev/engram/internal/retrieval"
 	"github.com/ryanthedev/engram/internal/server"
@@ -71,6 +72,9 @@ func main() {
 	prunePhi := flag.Float64("prune-phi-max", 0.2, "experience prune: soft-expire admitted experiences with utility <= this")
 	pruneRetrievalMax := flag.Int("prune-retrieval-max", 0, "experience prune: only soft-expire experiences with retrieval_count <= this")
 	pruneInterval := flag.Duration("prune-interval", 5*time.Minute, "experience utility-prune cadence")
+	graphJudgeURL := flag.String("graph-judge-url", "", "OpenAI-compatible dedup tie-break judge endpoint; empty uses the deterministic rule judge (fail-safe either way)")
+	graphJudgeModel := flag.String("graph-judge-model", "gpt-4o-mini", "graph dedup judge model id")
+	graphExpandDepth := flag.Int("graph-expand-depth", graph.MaxDepth, "graph connect-the-dots expansion depth (<=2, D8)")
 	flag.Parse()
 
 	httpClient := &http.Client{Timeout: store.DefaultTimeout}
@@ -137,6 +141,16 @@ func main() {
 		prunePhi: *prunePhi, pruneRetrieval: *pruneRetrievalMax, pruneInterval: *pruneInterval,
 	}, wk, retriever, slog.Default()); err != nil {
 		fmt.Fprintln(os.Stderr, "error wiring experience memory:", err)
+		os.Exit(1)
+	}
+	// Phase 6: incremental graph (T4) + bounded connect-the-dots expansion.
+	// Registers the graph worker stage (D20) and the ACL-bounded post-hook
+	// expander (Phase-4 seam) — no worker/retriever core edits. Registration
+	// must precede wk.Run so the stage is active for the first claimed batch.
+	if err := wireGraph(ctx, httpClient, *osURL, graphConfig{
+		judgeURL: *graphJudgeURL, judgeModel: *graphJudgeModel, expandDepth: *graphExpandDepth,
+	}, embedder, wk, retriever, slog.Default()); err != nil {
+		fmt.Fprintln(os.Stderr, "error wiring graph memory:", err)
 		os.Exit(1)
 	}
 

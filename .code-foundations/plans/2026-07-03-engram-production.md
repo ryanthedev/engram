@@ -296,3 +296,10 @@ Summary: Engram now has real client surfaces — engram-mcp (stdio) and the engr
 - [x] Committed
 Commit: 529cb28
 Summary: Provenance-as-ACL is live and enforced at query time inside the retriever (callers cannot bypass), fail-closed on every error path, with write-time scope guarding and instant revocation. The four registration seams (RegisterPostHook, RegisterTier, RegisterWriteGuard, plus D20 RegisterStage) are real and exercised — Phase 5 plugs its gated experience tier + write-gate into them, Phase 6 its graph post-hook. Audit RPC + `engram audit` expose provenance and full bi-temporal history. 200+ tests green incl. live-cluster ACL matrices and the truncation-ordering regression.
+
+### Phase 5: Experience Memory + Write-Gating (T3) (Gate: Full, 3-sample review)
+- [x] BUILD: Experience record + distillation stage, mandatory no-bypass Gatekeeper, quarantine tier, gated retrieval tier, soft-expire prune, injected-bad harness
+- [x] REVIEW: unanimous 3-sample PASS (all six bypass vectors closed); one lint blocker + a silent-integration-skip gap found and fixed pre-commit
+- [x] Committed
+Commit: ce3ecfd
+Summary: T3 experience memory is live behind a mandatory, fail-closed, no-bypass write-gate — the ExperienceStore is the only T3 writer and cannot admit without a Gatekeeper verdict; timeouts/errors/contradictory evidence quarantine. Quarantine is unreachable via retrieval, released only by human CLI. Admitted experiences serve through the Phase-4 gated tier; prune soft-expires (recoverable). The distillation stage plugs into the D20 worker seam. 242 unit + live-integration + e2e green.

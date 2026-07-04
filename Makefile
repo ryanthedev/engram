@@ -36,7 +36,7 @@ proto-check: proto
 # DW-0.4 / DW-0.9 / DW-1.x / DW-2.x: live-cluster integration + spike tests
 # (pinned 3.1) — includes the Phase-2 worker/outbox/ledger live tests.
 integration:
-	ENGRAM_OPENSEARCH_URL=$(OPENSEARCH_URL) go test -tags=integration -count=1 -v ./internal/spike/ ./internal/store/ ./internal/retrieval/ ./internal/server/ ./internal/eval/... ./internal/worker/ ./internal/ingest/ ./internal/experience/
+	ENGRAM_OPENSEARCH_URL=$(OPENSEARCH_URL) go test -tags=integration -count=1 -v ./internal/spike/ ./internal/store/ ./internal/retrieval/ ./internal/server/ ./internal/eval/... ./internal/worker/ ./internal/ingest/ ./internal/experience/ ./internal/graph/
 
 # DW-1.5: performance harness (perf environment, not CI — see the plan).
 perf:

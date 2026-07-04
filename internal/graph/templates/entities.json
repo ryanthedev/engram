@@ -1,0 +1,43 @@
+{
+  "index_patterns": ["engram-graph-entities*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "index.knn": true,
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "id": { "type": "keyword" },
+        "name_key": { "type": "keyword" },
+        "tenant_id": { "type": "keyword" },
+        "team_id": { "type": "keyword" },
+        "scope": { "type": "keyword" },
+        "owner_agent_id": { "type": "keyword" },
+        "name": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+        "aliases": { "type": "text" },
+        "embedding": {
+          "type": "knn_vector",
+          "dimension": 1024,
+          "method": {
+            "name": "hnsw",
+            "engine": "faiss",
+            "space_type": "innerproduct",
+            "parameters": {
+              "m": 16,
+              "ef_construction": 128,
+              "encoder": { "name": "sq", "parameters": { "type": "fp16" } }
+            }
+          }
+        },
+        "source_ids": { "type": "keyword" },
+        "mention_count": { "type": "integer" },
+        "valid_at": { "type": "date" },
+        "created_at": { "type": "date" },
+        "expired_at": { "type": "date" }
+      }
+    }
+  }
+}
