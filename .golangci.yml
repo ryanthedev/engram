@@ -1,0 +1,34 @@
+# golangci-lint config — DW-3.7 import-boundary rule.
+#
+# depguard enforces the dependency-direction constraint structurally: business
+# packages under internal/** must NOT import the gRPC transport or the
+# generated proto API. Transport lives only at the edges (internal/server,
+# internal/authgrpc, internal/engramclient) and in cmd/. Because the rule is a
+# path pattern, packages added by later phases (internal/acl, internal/graph,
+# internal/experience, …) are covered automatically with no config change.
+#
+# The same boundary is also enforced hermetically by internal/importlint
+# (a go test, so it gates CI without requiring golangci-lint to be installed);
+# this file is the canonical depguard expression of the rule.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        internal-no-transport:
+          files:
+            - "**/internal/**"
+            - "!**/internal/server/**"
+            - "!**/internal/authgrpc/**"
+            - "!**/internal/engramclient/**"
+            - "!**/internal/mcp/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "google.golang.org/grpc"
+              desc: "transport must stay at the edges; internal business packages may not import gRPC (see internal/server, internal/authgrpc)"
+            - pkg: "github.com/ryanthedev/engram/api/engrampb"
+              desc: "the generated proto API is a transport contract; keep it out of internal business packages"

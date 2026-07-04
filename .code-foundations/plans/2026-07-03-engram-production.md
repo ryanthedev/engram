@@ -1,7 +1,9 @@
 # Plan: Engram — Production (Phases 3–8)
 
 **Created:** 2026-07-03
-**Status:** ready
+**Status:** in-progress
+**Started:** 2026-07-03 12:40 (build worktree: .claude/worktrees/engram-production, branch feature/engram-production)
+**Current Phase:** 3
 **Complexity:** complex
 **Chains from:** `.code-foundations/plans/2026-06-29-engram-walking-skeleton.md` (Phases 0–2, build-ready). Together the two plans form the full 9-phase roadmap (0–8). All decisions D0–D16 from the skeleton plan carry over unchanged.
 

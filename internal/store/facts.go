@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/ryanthedev/engram/internal/memory"
@@ -243,6 +244,111 @@ func (s *OpenSearchStore) FindByEventID(ctx context.Context, eventID string) ([]
 		out = append(out, rec)
 	}
 	return out, nil
+}
+
+// ChainKey identifies one bi-temporal chain: the (tenant, subject, predicate)
+// group whose versions share a valid-time timeline. It is the unit repair
+// sweep rule (d) converges — closed-closed valid-time overlaps within a chain.
+type ChainKey struct {
+	TenantID  string
+	Subject   string
+	Predicate string
+}
+
+// ClosedOverlapChainKeys returns up to limit (tenant, subject, predicate)
+// chains that carry ≥2 non-expired records — the chains where a closed-closed
+// valid-time overlap (sweep rule d) is possible. It over-returns disjoint
+// chains (any chain with a live head plus one closed version qualifies); the
+// sweep loads each chain's versions and no-ops when already disjoint, so this
+// scan only bounds work, it does not decide the repair.
+func (s *OpenSearchStore) ClosedOverlapChainKeys(ctx context.Context, limit int) ([]ChainKey, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	query := map[string]any{
+		"size": 0,
+		"query": map[string]any{"bool": map[string]any{
+			"must_not": []any{map[string]any{"exists": map[string]any{"field": "expired_at"}}},
+		}},
+		"aggs": map[string]any{
+			"chains": map[string]any{
+				"composite": map[string]any{
+					"size": limit,
+					"sources": []any{
+						map[string]any{"tenant_id": map[string]any{"terms": map[string]any{"field": "tenant_id"}}},
+						map[string]any{"subject": map[string]any{"terms": map[string]any{"field": "subject"}}},
+						map[string]any{"predicate": map[string]any{"terms": map[string]any{"field": "predicate"}}},
+					},
+				},
+				"aggs": map[string]any{
+					"versions": map[string]any{"bucket_selector": map[string]any{
+						"buckets_path": map[string]any{"c": "_count"},
+						"script":       "params.c > 1",
+					}},
+				},
+			},
+		},
+	}
+	body, err := json.Marshal(query)
+	if err != nil {
+		return nil, fmt.Errorf("store: encoding chain scan: %w", err)
+	}
+	status, decoded, err := doJSON(ctx, s.client, http.MethodPost, s.baseURL+"/"+s.semanticIndex+"/_search", body)
+	if err != nil {
+		return nil, fmt.Errorf("store: scanning overlap chains: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("store: scanning overlap chains: unexpected status %d: %v", status, decoded)
+	}
+	aggs, _ := decoded["aggregations"].(map[string]any)
+	chains, _ := aggs["chains"].(map[string]any)
+	buckets, _ := chains["buckets"].([]any)
+	var keys []ChainKey
+	for _, b := range buckets {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		km, _ := bm["key"].(map[string]any)
+		tenant, _ := km["tenant_id"].(string)
+		subject, _ := km["subject"].(string)
+		predicate, _ := km["predicate"].(string)
+		if tenant != "" && subject != "" && predicate != "" {
+			keys = append(keys, ChainKey{TenantID: tenant, Subject: subject, Predicate: predicate})
+		}
+	}
+	return keys, nil
+}
+
+// ChainVersions returns every non-expired record for key (live and
+// valid-time-closed), ascending by (valid_at, doc id) — the input sweep rule
+// (d) walks to detect and trim closed-closed overlaps. Record-retracted rows
+// (expired_at set) are excluded: they are not truth boundaries.
+func (s *OpenSearchStore) ChainVersions(ctx context.Context, key ChainKey) ([]VersionedFact, error) {
+	query := map[string]any{
+		"size":                1000,
+		"seq_no_primary_term": true,
+		"sort":                []any{map[string]any{"valid_at": "asc"}},
+		"query": map[string]any{"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"term": map[string]any{"tenant_id": key.TenantID}},
+				map[string]any{"term": map[string]any{"subject": key.Subject}},
+				map[string]any{"term": map[string]any{"predicate": key.Predicate}},
+			},
+			"must_not": []any{map[string]any{"exists": map[string]any{"field": "expired_at"}}},
+		}},
+	}
+	facts, err := s.searchFacts(ctx, "reading chain versions", query)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(facts, func(i, j int) bool {
+		if !facts[i].Fact.ValidAt.Equal(facts[j].Fact.ValidAt) {
+			return facts[i].Fact.ValidAt.Before(facts[j].Fact.ValidAt)
+		}
+		return facts[i].ID < facts[j].ID
+	})
+	return facts, nil
 }
 
 // liveFilterClauses is the live-fact filter: invalid_at and expired_at both

@@ -8,6 +8,15 @@
 //
 // Search is the hybrid read path: BM25 + kNN fused by RRF (D1), scoped by
 // tenancy filters (D16) and the bi-temporal current-state filter (D3).
+//
+// Authentication (Phase 3): every RPC is authenticated by a bearer token in
+// the gRPC `authorization` metadata header, value "Bearer <raw-token>". A
+// unary interceptor (the barricade) verifies the token, resolves the bound
+// Identity{tenant_id, user_id, agent_id}, and injects it; unauthenticated
+// calls are rejected with codes.Unauthenticated and an opaque message (no
+// detail leak). The server derives tenancy/provenance from the resolved
+// Identity, not from client-supplied fields, so a token cannot act outside
+// its binding.
 syntax = "proto3";
 
 package engram.v1;
@@ -27,6 +36,11 @@ service Engram {
   // Search runs one hybrid query (BM25 + kNN -> RRF) and returns a single
   // fused, ranked hit list.
   rpc Search(SearchRequest) returns (SearchResponse);
+
+  // Status reports server health, the caller's resolved identity, and coarse
+  // tier document counts — the backing RPC for `engram status` and the MCP
+  // memory_status tool. It requires a valid token like every other call.
+  rpc Status(StatusRequest) returns (StatusResponse);
 }
 
 // IngestRequest is one episodic event.
@@ -82,4 +96,22 @@ message Hit {
 // SearchResponse is the single fused, ranked list.
 message SearchResponse {
   repeated Hit hits = 1;
+}
+
+// StatusRequest is empty; the caller is identified by the bearer token.
+message StatusRequest {}
+
+// StatusResponse reports liveness, the resolved identity, and tier counts.
+message StatusResponse {
+  // healthy is true when the backing store answered the count probe.
+  bool healthy = 1;
+  // Resolved identity of the caller (from the verified token).
+  string tenant_id = 2;
+  string user_id = 3;
+  string agent_id = 4;
+  // Coarse per-tier document counts for the caller's tenant.
+  int64 episodic_count = 5;
+  int64 semantic_count = 6;
+  // OpenSearch version line the server is pinned to (D14).
+  string opensearch_version = 7;
 }

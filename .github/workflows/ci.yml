@@ -53,3 +53,16 @@ jobs:
         run: make apply-templates
       - name: Live-cluster integration + spikes
         run: make integration
+
+  e2e:
+    # DW-3.1: boot the full local stack from a clean checkout (docker compose)
+    # and run the e2e loop through MCP, the CLI, and gRPC.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Boot stack and run e2e (docker compose)
+        run: make e2e COMPOSE="docker compose"

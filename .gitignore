@@ -13,3 +13,4 @@ docs/vision/preview.png
 # build worktrees
 .claude/worktrees/
 .code-foundations/wave-worktrees/
+.e2e-bin/

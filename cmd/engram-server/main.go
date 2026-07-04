@@ -30,6 +30,8 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/ryanthedev/engram/api/engrampb"
+	"github.com/ryanthedev/engram/internal/auth"
+	"github.com/ryanthedev/engram/internal/authgrpc"
 	"github.com/ryanthedev/engram/internal/embed"
 	"github.com/ryanthedev/engram/internal/enrich"
 	"github.com/ryanthedev/engram/internal/ingest"
@@ -87,6 +89,8 @@ func main() {
 
 	st := store.NewOpenSearchStore(httpClient, *osURL)
 	retriever := retrieval.NewOpenSearchRetriever(httpClient, *osURL, embedder)
+	tokenStore := store.NewAuthTokenStore(httpClient, *osURL)
+	authenticator := auth.NewAuthenticator(tokenStore, nil)
 
 	job := &enrich.Job{Store: st, Embedder: embedder}
 	go job.Run(ctx, *enrichInterval, *enrichBatch)
@@ -137,8 +141,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error listening on", *addr, ":", err)
 		os.Exit(1)
 	}
-	grpcServer := grpc.NewServer()
-	engrampb.RegisterEngramServer(grpcServer, server.New(st, retriever))
+	// The auth interceptor is the barricade: every gRPC call is authenticated
+	// and its Identity injected before any handler runs (D17).
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(authgrpc.UnaryServerInterceptor(authenticator, slog.Default())),
+	)
+	svc := server.New(st, retriever)
+	svc.Probe = st
+	engrampb.RegisterEngramServer(grpcServer, svc)
 
 	go func() {
 		<-ctx.Done()

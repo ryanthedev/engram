@@ -104,6 +104,27 @@ type Metrics struct {
 	EventsDeadLettered atomic.Int64
 }
 
+// Stage is a post-write extension of the async pipeline (D20). After an
+// event's facts are extracted, reconciled, and landed bi-temporally, every
+// registered stage runs against the event and its facts — this is where later
+// phases plug in experience distillation (P5) and incremental graph upsert
+// (P6), each in its own file, without editing the worker core. A stage runs
+// AT-LEAST-ONCE: it executes before the ledger is marked complete, so a stage
+// error fails the event and the outbox retries it (resuming from the cached
+// extraction). Stages MUST therefore be idempotent.
+type Stage interface {
+	// Process handles one completed event and its landed facts. A non-nil
+	// error re-queues the whole event (idempotent replay), so it must be
+	// reserved for genuinely retryable failures.
+	Process(ctx context.Context, ev memory.Episodic, facts []memory.SemanticFact) error
+}
+
+// namedStage pairs a stage with its registration name for logging.
+type namedStage struct {
+	name  string
+	stage Stage
+}
+
 // Worker drives the async write path. Construct with New; run the pool with
 // Run, or drive deterministically with Tick / ProcessEvent (tests, repair).
 type Worker struct {
@@ -113,9 +134,29 @@ type Worker struct {
 	embedder   embed.Embedder // optional: nil skips fact embeddings
 	cfg        Config
 	logger     *slog.Logger
+	stages     []namedStage
 
 	// Metrics is exported state, safe for concurrent reads.
 	Metrics Metrics
+}
+
+// RegisterStage adds a post-write pipeline stage (D20). Call it at wiring time
+// before Run; it is not safe to call concurrently with a running pool. Stages
+// run in registration order after each event's facts land.
+func (w *Worker) RegisterStage(name string, s Stage) {
+	w.stages = append(w.stages, namedStage{name: name, stage: s})
+}
+
+// runStages executes every registered stage for a completed event. A stage
+// error is returned so the caller fails the event and lets the outbox retry;
+// stages are documented at-least-once and idempotent.
+func (w *Worker) runStages(ctx context.Context, ev memory.Episodic, facts []memory.SemanticFact) error {
+	for _, s := range w.stages {
+		if err := s.stage.Process(ctx, ev, facts); err != nil {
+			return fmt.Errorf("worker: stage %q processing %s: %w", s.name, ev.EventID, err)
+		}
+	}
+	return nil
 }
 
 // New returns a Worker over the given seams. embedder may be nil (facts are
@@ -283,6 +324,13 @@ func (w *Worker) ProcessEvent(ctx context.Context, ev memory.Episodic) error {
 		if err := w.store.UpdateLedger(ctx, key, state); err != nil {
 			return fmt.Errorf("worker: recording action %s for %s: %w", docID, ev.EventID, err)
 		}
+	}
+
+	// Post-write stages (D20) run before the ledger is marked complete, so a
+	// stage failure re-queues the event rather than silently dropping the
+	// derived work. Phase 3 registers none; P5/P6 register theirs.
+	if err := w.runStages(ctx, ev, facts); err != nil {
+		return err
 	}
 
 	state.Phase = store.LedgerComplete
