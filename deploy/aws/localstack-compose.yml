@@ -1,0 +1,23 @@
+# LocalStack — a local AWS-compatible API for exercising the engram-deploy CLI
+# without a real AWS account. Driven by `make deploy-localstack`.
+#
+# Coverage note: the free Community image implements Secrets Manager and
+# EC2/VPC (what engram-deploy uses for those resource kinds). ECS and the
+# managed OpenSearch Service domain are LocalStack Pro features, so a full
+# `Converge` against this stack succeeds for the VPC + Secret and fails on the
+# domain/services by design. See docs/runbooks/localstack-deploy.md.
+services:
+  localstack:
+    image: docker.io/localstack/localstack:3
+    container_name: engram-localstack
+    ports:
+      - "4566:4566" # the single edge endpoint every service is reached through
+    environment:
+      - SERVICES=secretsmanager,ec2
+      - DEBUG=0
+      - EAGER_SERVICE_LOADING=1
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
