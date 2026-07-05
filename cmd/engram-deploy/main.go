@@ -15,11 +15,14 @@
 //	go run ./cmd/engram-deploy -env staging -image engram:v1.2.3
 //	go run ./cmd/engram-deploy -env staging -rollback engramd
 //
-// This binary requires real AWS credentials (environment/shared config,
-// standard aws-sdk-go-v2 resolution) and a real AWS account to do anything
-// useful — in a build/CI environment without them, NewSDKProvisioner's
-// underlying calls fail, which is the expected, documented behavior (see
-// the Phase-7 report's manual-verification section).
+// Against real AWS this needs real credentials (environment/shared config,
+// standard aws-sdk-go-v2 resolution) and a real account. For local testing
+// without an AWS account, pass -endpoint http://localhost:4566 (or set
+// AWS_ENDPOINT_URL) to point every SDK call at a LocalStack container — see
+// `make deploy-localstack`. LocalStack Community covers Secrets Manager and
+// EC2/VPC; ECS and the managed OpenSearch domain are LocalStack Pro features,
+// so a full converge against Community LocalStack partially fails on those
+// two by design (documented in docs/runbooks/localstack-deploy.md).
 package main
 
 import (
@@ -30,6 +33,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/ryanthedev/engram/deploy/aws/awsapi"
 )
 
@@ -37,6 +41,7 @@ func main() {
 	env := flag.String("env", "", "environment to converge: staging | prod")
 	image := flag.String("image", "", "container image tag to deploy (required for converge, ignored for -rollback)")
 	rollbackService := flag.String("rollback", "", "service name to roll back to its previous task-definition revision, instead of converging")
+	endpoint := flag.String("endpoint", os.Getenv("AWS_ENDPOINT_URL"), "override the AWS API endpoint (e.g. http://localhost:4566 for LocalStack); defaults to $AWS_ENDPOINT_URL, empty means real AWS")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -48,10 +53,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	provisioner, err := awsapi.NewSDKProvisioner(ctx)
+	// WithBaseEndpoint is a no-op on an empty string, so the real-AWS path is
+	// unchanged when -endpoint is unset.
+	provisioner, err := awsapi.NewSDKProvisioner(ctx, config.WithBaseEndpoint(*endpoint))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error building AWS provisioner:", err)
 		os.Exit(1)
+	}
+	if *endpoint != "" {
+		fmt.Printf("using AWS endpoint override: %s\n", *endpoint)
 	}
 
 	if *rollbackService != "" {

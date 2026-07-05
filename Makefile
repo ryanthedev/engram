@@ -12,7 +12,8 @@ E2E_OS_URL := http://localhost:9201
 E2E_ADDR := localhost:7071
 
 .PHONY: build test lint proto proto-check integration apply-templates eval dev-cluster e2e e2e-up e2e-down \
-	deploy-staging deploy-prod loadtest drill e2e-cloud eval-seed eval-gate eval-dashboard eval-drill
+	deploy-staging deploy-prod deploy-localstack deploy-localstack-up deploy-localstack-down \
+	loadtest drill e2e-cloud eval-seed eval-gate eval-dashboard eval-drill
 
 build:
 	go build ./...
@@ -114,6 +115,31 @@ deploy-staging:
 
 deploy-prod:
 	go run ./cmd/engram-deploy -env prod -image $(IMAGE)
+
+# LocalStack: exercise the deploy CLI against a local AWS-compatible API — no
+# AWS account or credentials needed. Community LocalStack implements the VPC +
+# Secrets Manager paths; ECS + OpenSearch domain are Pro-only, so a full
+# `deploy-localstack` converge succeeds on the VPC/Secret and reports the
+# domain/services as failing by design (see docs/runbooks/localstack-deploy.md).
+LOCALSTACK_ENDPOINT ?= http://localhost:4566
+LS_ENV = AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_REGION=us-east-1 AWS_ENDPOINT_URL=$(LOCALSTACK_ENDPOINT)
+
+deploy-localstack-up:
+	podman compose -f deploy/aws/localstack-compose.yml up -d
+	@echo "waiting for LocalStack health at $(LOCALSTACK_ENDPOINT) ..."
+	@for i in $$(seq 1 30); do \
+		curl -sf $(LOCALSTACK_ENDPOINT)/_localstack/health >/dev/null 2>&1 && { echo "LocalStack ready"; exit 0; }; \
+		sleep 2; \
+	done; echo "LocalStack did not become healthy in time" >&2; exit 1
+
+deploy-localstack-down:
+	podman compose -f deploy/aws/localstack-compose.yml down -v
+
+# The real-SDK-against-LocalStack integration test (VPC + Secrets Manager
+# round-trips). Boots LocalStack, runs the `localstack`-tagged tests, tears down.
+deploy-localstack: deploy-localstack-up
+	$(LS_ENV) go test -tags=localstack -count=1 -v ./deploy/aws/awsapi/ ; \
+		status=$$? ; $(MAKE) deploy-localstack-down ; exit $$status
 
 # Phase 8 (D9): release gates. `eval-seed` is the ONLY write-bearing step —
 # idempotent by fixed doc ids, safe to re-run — so `eval-gate` (what
