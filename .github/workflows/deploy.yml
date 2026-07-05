@@ -114,9 +114,33 @@ jobs:
         env:
           ENGRAM_E2E_ADDR: ${{ secrets.STAGING_GRPC_ADDR }}
           ENGRAM_OPENSEARCH_URL: ${{ secrets.STAGING_OPENSEARCH_URL }}
-      # Phase 8 adds: hallucination gate, retrieval-regression gate,
-      # experience-following gate — each a red/green step here that blocks
-      # deploy-prod on failure, same shape as this step.
+      # DW-8.1/8.2/8.3/8.4: the three independent release gates (D9,
+      # internal/eval/gate). `eval-seed` is the only write-bearing step
+      # (idempotent by fixed doc ids — safe to re-run against a persistent
+      # staging environment); `eval-gate` is strictly read-only against
+      # staging (Phase 8's constraint) and its exit code is what actually
+      # blocks `deploy-prod` below (that job already declares
+      # `needs: gates`). Thresholds: docs/eval/thresholds.md. Baseline
+      # re-record procedure: docs/eval/baseline-rerecord-runbook.md. The
+      # bad-release drill (DW-8.4) is a separate, opt-in, non-CI exercise
+      # (`make eval-drill`) — see docs/eval/thresholds.md's "what happens on
+      # a breach" section for why it never runs here automatically.
+      - name: Seed eval fixture corpus (idempotent, staging)
+        run: make eval-seed
+        env:
+          ENGRAM_OPENSEARCH_URL: ${{ secrets.STAGING_OPENSEARCH_URL }}
+      - name: Release gates — hallucination, regression, following (blocks promotion on breach)
+        run: make eval-gate
+        env:
+          ENGRAM_OPENSEARCH_URL: ${{ secrets.STAGING_OPENSEARCH_URL }}
+      - name: Upload eval trend dashboard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-gate-dashboard
+          path: |
+            docs/eval/dashboard.md
+            eval/gate-runs/history.jsonl
 
   deploy-prod:
     if: ${{ github.event.inputs.rollback_service == '' }}

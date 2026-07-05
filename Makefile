@@ -12,7 +12,7 @@ E2E_OS_URL := http://localhost:9201
 E2E_ADDR := localhost:7071
 
 .PHONY: build test lint proto proto-check integration apply-templates eval dev-cluster e2e e2e-up e2e-down \
-	deploy-staging deploy-prod loadtest drill e2e-cloud
+	deploy-staging deploy-prod loadtest drill e2e-cloud eval-seed eval-gate eval-dashboard eval-drill
 
 build:
 	go build ./...
@@ -114,3 +114,41 @@ deploy-staging:
 
 deploy-prod:
 	go run ./cmd/engram-deploy -env prod -image $(IMAGE)
+
+# Phase 8 (D9): release gates. `eval-seed` is the ONLY write-bearing step —
+# idempotent by fixed doc ids, safe to re-run — so `eval-gate` (what
+# .github/workflows/deploy.yml's `gates` job actually calls) stays strictly
+# read-only against its target, per the phase's constraint. Against a
+# throwaway/ephemeral OpenSearch (e.g. ci.yml's `integration` job, which runs
+# the whole ./internal/eval/... package unfiltered), running `eval-seed`
+# first is required; against a persistent environment that already has the
+# fixture corpus, `eval-gate` alone suffices.
+eval-seed:
+	ENGRAM_OPENSEARCH_URL=$(OPENSEARCH_URL) go test -tags=integration -count=1 -v -run '^TestSeedEvalFixtures$$' ./internal/eval/gate/...
+
+# DW-8.1/8.2/8.3: the three independent release gates (hallucination,
+# retrieval-regression, experience-following). Exits non-zero on any
+# threshold breach (or flaky-gate quarantine) — that exit code is what
+# blocks `deploy-prod` in deploy.yml's `gates` job. Typically completes in
+# low single-digit seconds (well inside the ≤15 min budget, DW-8.5) since it
+# only reads already-seeded data plus small local threshold/trend files.
+eval-gate:
+	ENGRAM_OPENSEARCH_URL=$(OPENSEARCH_URL) go test -tags=integration -count=1 -v -run '^TestGate_' ./internal/eval/gate/...
+
+# DW-8.6: regenerate docs/eval/dashboard.md from the accumulated
+# eval/gate-runs/history.jsonl trend log, with no new gate run. eval-gate and
+# eval-drill already regenerate it as a side effect of every run; this
+# target is for a manual refresh (e.g. immediately after a baseline
+# re-record).
+eval-dashboard:
+	go test -tags=integration -count=1 -v -run '^TestRenderDashboardOnly$$' ./internal/eval/gate/...
+
+# DW-8.4: the bad-release drill, opt-in only (ENGRAM_EVAL_DRILL gates the
+# e2e-level drill; the internal/eval/gate one always runs standalone here
+# since it owns its own dedicated, disposable scratch index and never
+# touches staging). Never wired into ci.yml or deploy.yml automatically —
+# same precedent as `make drill` (Phase 7): a deliberately-invoked,
+# adversarial exercise, not a routine gate. Requires `make dev-cluster`.
+eval-drill:
+	ENGRAM_OPENSEARCH_URL=$(OPENSEARCH_URL) go test -tags=integration -count=1 -v -run TestDrillBadRelease_HallucinationGateBlocks ./internal/eval/gate/...
+	ENGRAM_EVAL_DRILL=1 go test -tags=e2e -count=1 -v -run TestBadReleaseDrill ./e2e/

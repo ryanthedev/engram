@@ -312,3 +312,10 @@ Commit: 4e22b24
 Summary: T4 graph is live — per-episode entity/edge upsert with dedup (flat entity count on re-ingest), <=2-hop expansion that re-authorizes every hit through the Phase-4 ACL post-hook (unauthorized-edge nodes never returned; BFS-through-unseen-edges is a benign relevance side-channel, recorded). D8 CONFIRMED: stay on OpenSearch (p95 ~110ms vs 250ms ceiling) — no Neo4j needed at S1/S2. Decision-gate memo in internal/graph/DECISION_GATE.md.
 
 **Known property (Phase 6 review, recorded):** graph BFS traverses through edges the caller cannot see to reach authorized deeper facts. No unauthorized content is ever returned (each hit re-authorized), but the existence of hidden intermediate edges is weakly inferable from which deep facts surface. Consistent with the per-record ACL model; revisit if edge-existence confidentiality becomes a requirement.
+
+### Phase 7: Scale, Ops & Production (Gate: Full, 3-sample review)
+- [x] BUILD: idempotent Go deploy CLI (D24), OTel + domain gauges, blue/green + snapshot rollback, real restore/failure/overspend drills, load test, 5 runbooks, CI deploy workflow
+- [x] REVIEW: majority 3-sample PASS; a class of silent-no-op deploy-convergence defects (image, then CPU/mem/port) found and fixed pre-commit with falsification proofs; dangling runbook refs closed
+- [x] Committed
+Commit: 0c32b79
+Summary: Engram is deployable, observed, and recoverable. The deploy CLI converges idempotently and now rolls out on any task-def change (image/cpu/mem/port); rollback + snapshot-restore are real and drilled; telemetry gauges move under load; budget alarm + kill-switch guard cost. Restore RTO ~0.1s, failure drills lose no data. **Open pre-production gates (recorded):** (1) real-AWS `make deploy-staging/prod` + cloud e2e — tooling built/local-tested, real run is a documented manual step (no cloud creds here); (2) multi-instance staging load-test re-run — burst search p95 breaches on the single-node local cluster (sustained holds); docs/runbooks/load-test-s1-vs-s2.md tracks it as required before prod.

@@ -1,0 +1,11 @@
+{
+  "version": "v1",
+  "git_rev": "0c32b79ae58aa92e60513fc7f78482ab911a7f9c",
+  "recorded_at": "2026-07-05T05:24:44Z",
+  "split": "holdout",
+  "k": 10,
+  "queries": 61,
+  "recall_at_k": 1,
+  "mrr": 0.9508196721311475,
+  "ndcg_at_k": 0.9631826619157567
+}
