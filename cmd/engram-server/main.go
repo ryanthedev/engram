@@ -113,6 +113,16 @@ func main() {
 
 	st := store.NewOpenSearchStore(httpClient, *osURL,
 		store.WithEpisodicIndex(*episodicIndex), store.WithSemanticIndex(*semanticIndex), store.WithLedgerIndex(*ledgerIndex))
+	// Materialize the CONFIGURED index names now that Apply has PUT the
+	// templates: a -semantic/-episodic/-ledger-index override pointing at a
+	// not-yet-created index is created here so the first read/reconcile does
+	// not race a missing index (the read paths also treat a missing index as
+	// empty — belt and suspenders). A name that does not match its template
+	// pattern is rejected loudly rather than silently mis-mapped.
+	if _, err := st.EnsureIndices(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "error ensuring configured indices:", err)
+		os.Exit(1)
+	}
 	st.RegisterWriteGuard(acl.NewScopeGuard(edgeStore))
 	retriever := retrieval.NewOpenSearchRetriever(httpClient, *osURL, embedder,
 		retrieval.WithACL(aclFilter), retrieval.WithIndices(*episodicIndex, *semanticIndex))

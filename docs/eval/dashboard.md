@@ -18,8 +18,18 @@ Generated from eval/gate-runs/history.jsonl — regenerate with `make eval-dashb
 | 10 | 2026-07-05T05:45:32Z | FAIL | 1.0000 | 6e9a32d07a1c | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
 | 11 | 2026-07-05T05:45:37Z | FAIL | 1.0000 | 6e9a32d07a1c | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
 | 12 | 2026-07-05T05:47:16Z | FAIL | 1.0000 | 6e9a32d07a1c | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 13 | 2026-07-05T17:14:21Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 14 | 2026-07-05T17:49:20Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 15 | 2026-07-05T17:49:30Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 16 | 2026-07-05T17:49:36Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 17 | 2026-07-05T17:49:45Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 18 | 2026-07-05T17:49:59Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 19 | 2026-07-05T17:50:08Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 20 | 2026-07-05T17:50:21Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 21 | 2026-07-05T17:53:05Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
+| 22 | 2026-07-05T17:53:34Z | FAIL | 1.0000 | 9112d8b7c9a6 | hallucination rate 1.0000 (9/9 assertions) exceeds the 0.1000 ceiling |
 
-12 run(s) recorded.
+22 run(s) recorded.
 
 ## experience-following
 
@@ -39,8 +49,18 @@ Generated from eval/gate-runs/history.jsonl — regenerate with `make eval-dashb
 | 12 | 2026-07-05T05:45:31Z | PASS | 0.8083 | 6e9a32d07a1c | following correlation 0.8083 is within the documented band (floor 0.3000) |
 | 13 | 2026-07-05T05:45:37Z | PASS | 0.8083 | 6e9a32d07a1c | following correlation 0.8083 is within the documented band (floor 0.3000) |
 | 14 | 2026-07-05T05:47:16Z | PASS | 0.8083 | 6e9a32d07a1c | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 15 | 2026-07-05T17:14:16Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 16 | 2026-07-05T17:49:20Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 17 | 2026-07-05T17:49:29Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 18 | 2026-07-05T17:49:35Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 19 | 2026-07-05T17:49:45Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 20 | 2026-07-05T17:49:58Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 21 | 2026-07-05T17:50:08Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 22 | 2026-07-05T17:50:21Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 23 | 2026-07-05T17:53:04Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
+| 24 | 2026-07-05T17:53:34Z | PASS | 0.8083 | 9112d8b7c9a6 | following correlation 0.8083 is within the documented band (floor 0.3000) |
 
-14 run(s) recorded.
+24 run(s) recorded.
 
 ## hallucination
 
@@ -60,8 +80,18 @@ Generated from eval/gate-runs/history.jsonl — regenerate with `make eval-dashb
 | 12 | 2026-07-05T05:45:31Z | PASS | 0.0000 | 6e9a32d07a1c | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
 | 13 | 2026-07-05T05:45:37Z | PASS | 0.0000 | 6e9a32d07a1c | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
 | 14 | 2026-07-05T05:47:16Z | PASS | 0.0000 | 6e9a32d07a1c | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 15 | 2026-07-05T17:14:16Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 16 | 2026-07-05T17:49:20Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 17 | 2026-07-05T17:49:29Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 18 | 2026-07-05T17:49:35Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 19 | 2026-07-05T17:49:45Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 20 | 2026-07-05T17:49:58Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 21 | 2026-07-05T17:50:08Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 22 | 2026-07-05T17:50:21Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 23 | 2026-07-05T17:53:04Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
+| 24 | 2026-07-05T17:53:34Z | PASS | 0.0000 | 9112d8b7c9a6 | hallucination rate 0.0000 (0/64 assertions) is within the 0.1000 ceiling |
 
-14 run(s) recorded.
+24 run(s) recorded.
 
 ## retrieval-regression
 
@@ -81,6 +111,16 @@ Generated from eval/gate-runs/history.jsonl — regenerate with `make eval-dashb
 | 12 | 2026-07-05T05:45:31Z | PASS | 1.0000 | 6e9a32d07a1c | recall@10=1.0000 (MRR=0.9508 nDCG=0.9632) is non-inferior to baseline 1.0000 |
 | 13 | 2026-07-05T05:45:37Z | PASS | 1.0000 | 6e9a32d07a1c | recall@10=1.0000 (MRR=0.9590 nDCG=0.9692) is non-inferior to baseline 1.0000 |
 | 14 | 2026-07-05T05:47:16Z | PASS | 1.0000 | 6e9a32d07a1c | recall@10=1.0000 (MRR=0.9590 nDCG=0.9692) is non-inferior to baseline 1.0000 |
+| 15 | 2026-07-05T17:14:16Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9508 nDCG=0.9632) is non-inferior to baseline 1.0000 |
+| 16 | 2026-07-05T17:49:20Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9508 nDCG=0.9632) is non-inferior to baseline 1.0000 |
+| 17 | 2026-07-05T17:49:29Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9508 nDCG=0.9632) is non-inferior to baseline 1.0000 |
+| 18 | 2026-07-05T17:49:35Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9508 nDCG=0.9632) is non-inferior to baseline 1.0000 |
+| 19 | 2026-07-05T17:49:45Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9590 nDCG=0.9692) is non-inferior to baseline 1.0000 |
+| 20 | 2026-07-05T17:49:58Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9590 nDCG=0.9692) is non-inferior to baseline 1.0000 |
+| 21 | 2026-07-05T17:50:08Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9590 nDCG=0.9692) is non-inferior to baseline 1.0000 |
+| 22 | 2026-07-05T17:50:21Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9522 nDCG=0.9643) is non-inferior to baseline 1.0000 |
+| 23 | 2026-07-05T17:53:04Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9508 nDCG=0.9632) is non-inferior to baseline 1.0000 |
+| 24 | 2026-07-05T17:53:34Z | PASS | 1.0000 | 9112d8b7c9a6 | recall@10=1.0000 (MRR=0.9508 nDCG=0.9632) is non-inferior to baseline 1.0000 |
 
-14 run(s) recorded.
+24 run(s) recorded.
 

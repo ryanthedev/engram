@@ -183,6 +183,9 @@ func (s *OpenSearchStore) DuplicateLiveContentKeys(ctx context.Context, limit in
 	if err != nil {
 		return nil, fmt.Errorf("store: scanning duplicate content keys: %w", err)
 	}
+	if isIndexNotFound(status, decoded) {
+		return nil, nil // semantic index not created yet: no duplicates
+	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("store: scanning duplicate content keys: unexpected status %d: %v", status, decoded)
 	}
@@ -231,6 +234,9 @@ func (s *OpenSearchStore) FindByEventID(ctx context.Context, eventID string) ([]
 	status, decoded, err := doJSON(ctx, s.client, http.MethodPost, s.baseURL+"/"+s.episodicIndex+"/_search", body)
 	if err != nil {
 		return nil, fmt.Errorf("store: finding event %s: %w", eventID, err)
+	}
+	if isIndexNotFound(status, decoded) {
+		return nil, nil // episodic index not created yet: no matching events
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("store: finding event %s: unexpected status %d: %v", eventID, status, decoded)
@@ -296,6 +302,9 @@ func (s *OpenSearchStore) ClosedOverlapChainKeys(ctx context.Context, limit int)
 	status, decoded, err := doJSON(ctx, s.client, http.MethodPost, s.baseURL+"/"+s.semanticIndex+"/_search", body)
 	if err != nil {
 		return nil, fmt.Errorf("store: scanning overlap chains: %w", err)
+	}
+	if isIndexNotFound(status, decoded) {
+		return nil, nil // semantic index not created yet: no overlap chains
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("store: scanning overlap chains: unexpected status %d: %v", status, decoded)
@@ -370,6 +379,9 @@ func (s *OpenSearchStore) searchFacts(ctx context.Context, verb string, query ma
 	status, decoded, err := doJSON(ctx, s.client, http.MethodPost, s.baseURL+"/"+s.semanticIndex+"/_search", body)
 	if err != nil {
 		return nil, fmt.Errorf("store: %s: %w", verb, err)
+	}
+	if isIndexNotFound(status, decoded) {
+		return nil, nil // the semantic index does not exist yet: no facts, not an error
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("store: %s: unexpected status %d: %v", verb, status, decoded)
