@@ -1,9 +1,9 @@
 # Plan: Fix Verification Findings — Production Hardening
 
 **Created:** 2026-07-05
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-05 (branch fix/verification-findings)
-**Current Phase:** 1
+**Current Phase:** 4 (complete)
 **Complexity:** medium
 **Source:** three code-foundations e2e verifier subagents driving the live local stack (2026-07-05). Their captured-evidence findings are the requirements below.
 
@@ -210,3 +210,9 @@ Summary: Local/dev multi-hop connect-the-dots now works — the FakeEmbedder-onl
 - [x] REVIEW: PASS (survive-restart verified, descriptions honest, missing-index=0)
 - [x] Committed
 Summary: /metrics now shows durable experience-inventory and graph-entity gauges that survive a restart, and the in-process rate gauges no longer misdescribe themselves. Read-only _count polling; no gate/graph logic changed.
+
+### Phase 4: CLI ingest UX (Gate: Standard) — Commit 61e5e7b
+- [x] BUILD: malformed-directive advisory + grammar docs + honest --event-id
+- [x] REVIEW: PASS (silent on prose verified; reuses real parsers; advisory-only)
+- [x] Committed
+Summary: engram ingest now documents the pipe grammar, advises (stderr-only) when a directive-looking line is malformed while staying silent on prose, and states accurate --event-id semantics. No behavioral change to successful ingest.
