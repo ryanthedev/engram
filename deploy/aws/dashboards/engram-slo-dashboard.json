@@ -1,0 +1,78 @@
+{
+  "title": "Engram — Scale & Ops (Phase 7)",
+  "description": "RED metrics + the DW-7.8 domain gauges (outbox/worker lag, repair backlog + convergence age, DLQ depth, experience-gate verdict rates, extraction cost) — all exported by internal/telemetry from a Prometheus-compatible /metrics endpoint. Import into Grafana (or any Prometheus-datasource dashboard tool) pointed at the scrape target; panel `expr` fields are plain PromQL against the metric names in deploy/aws/dashboards/alerts.yml.",
+  "schemaVersion": 39,
+  "tags": ["engram", "phase-7"],
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "title": "Search p95 latency (ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "1000 * histogram_quantile(0.95, sum(rate(engram_grpc_request_duration_seconds_bucket{method=~\".*/Search\"}[5m])) by (le))",
+          "legendFormat": "search p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "thresholds": { "steps": [{ "value": 150, "color": "red" }] } } }
+    },
+    {
+      "title": "Ingest error rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(engram_grpc_request_duration_seconds_count{method=~\".*/Ingest\", code!=\"OK\"}[5m])) / sum(rate(engram_grpc_request_duration_seconds_count{method=~\".*/Ingest\"}[5m]))",
+          "legendFormat": "ingest error rate"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "steps": [{ "value": 0.01, "color": "red" }] } } }
+    },
+    {
+      "title": "Outbox backlog & lag",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "engram_outbox_backlog", "legendFormat": "backlog (events)" },
+        { "expr": "engram_outbox_lag_seconds", "legendFormat": "oldest pending age (s)" }
+      ]
+    },
+    {
+      "title": "Repair sweep: backlog & convergence age",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "engram_repair_backlog", "legendFormat": "backlog" },
+        { "expr": "engram_repair_convergence_age_seconds", "legendFormat": "convergence age (s)" }
+      ]
+    },
+    {
+      "title": "DLQ depth",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 16 },
+      "targets": [{ "expr": "engram_dlq_depth" }],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "red" }] } } }
+    },
+    {
+      "title": "Experience gate verdict rates",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 16 },
+      "targets": [
+        { "expr": "engram_gate_admit_rate", "legendFormat": "admit" },
+        { "expr": "engram_gate_quarantine_rate", "legendFormat": "quarantine" },
+        { "expr": "engram_gate_reject_rate", "legendFormat": "reject" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    },
+    {
+      "title": "Extraction cost (USD / 1k events) & budget alarm",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "engram_extraction_cost_usd_per_1k_events", "legendFormat": "cost per 1k events" },
+        { "expr": "engram_budget_alarm_firing", "legendFormat": "alarm firing (0/1)" }
+      ]
+    }
+  ]
+}

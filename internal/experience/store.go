@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -71,6 +72,12 @@ type Store struct {
 	backend Backend
 	logger  *slog.Logger
 	now     func() time.Time
+
+	// admitted/quarantined/rejected are cumulative, process-lifetime gate
+	// verdict counters — the Phase-7 gate-verdict-rate telemetry source
+	// (DW-7.8). They are a live running tally, unlike Metrics (harness.go),
+	// which is a one-shot post-hoc summary built from an eval run.
+	admitted, quarantined, rejected atomic.Int64
 }
 
 // NewStore returns a store over gate and backend. gate is MANDATORY:
@@ -100,6 +107,7 @@ func NewStore(gate Gatekeeper, backend Backend, logger *slog.Logger) (*Store, er
 // logged — the trust boundary must not let a broken judge admit anything.
 func (s *Store) Admit(ctx context.Context, exp Experience) (Verdict, error) {
 	if exp.TenantID == "" {
+		s.rejected.Add(1)
 		return Reject, fmt.Errorf("experience: cannot admit a record with no tenant")
 	}
 	exp = s.stamp(exp)
@@ -122,6 +130,7 @@ func (s *Store) Admit(ctx context.Context, exp Experience) (Verdict, error) {
 		if err := s.admitMerged(ctx, exp); err != nil {
 			return Admit, err
 		}
+		s.admitted.Add(1)
 		return Admit, nil
 	case Quarantine:
 		q := Quarantined{Experience: exp, Verdict: Quarantine, Reason: reason, At: s.now().UTC()}
@@ -129,11 +138,22 @@ func (s *Store) Admit(ctx context.Context, exp Experience) (Verdict, error) {
 			return Quarantine, fmt.Errorf("experience: quarantining %s: %w", exp.Fingerprint, err)
 		}
 		s.logger.InfoContext(ctx, "experience quarantined", "fingerprint", exp.Fingerprint, "reason", reason)
+		s.quarantined.Add(1)
 		return Quarantine, nil
 	default: // Reject
 		s.logger.WarnContext(ctx, "experience rejected (dropped)", "fingerprint", exp.Fingerprint, "reason", reason)
+		s.rejected.Add(1)
 		return Reject, nil
 	}
+}
+
+// VerdictCounts returns the cumulative gate verdict counts since process
+// start — the Phase-7 gate-verdict-rate telemetry source (DW-7.8). Counts
+// only successfully committed verdicts (a failed admit write is not counted
+// as Admit — see Admit's Quarantine/Reject error returns, which are surfaced
+// to the caller directly and never silently miscounted).
+func (s *Store) VerdictCounts() (admit, quarantine, reject int64) {
+	return s.admitted.Load(), s.quarantined.Load(), s.rejected.Load()
 }
 
 // admitMerged upserts an admitted experience, merging a same-fingerprint

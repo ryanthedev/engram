@@ -1,0 +1,93 @@
+# Engram Phase-7 alert rules, in standard Prometheus alerting-rule format
+# (compatible with Prometheus, Amazon Managed Prometheus, or any Prometheus-
+# rules-compatible engine scraping the /metrics endpoint cmd/engram-server
+# exposes via internal/telemetry). Bound to the phase's documented SLOs:
+# search p95 <=150ms / <=250ms with graph expansion, ingest availability,
+# worker lag, DLQ>0, and the extraction budget alarm.
+#
+# Metric sources (all real, exported by internal/telemetry):
+#   engram_grpc_request_duration_seconds{method,code}  — RED histogram (redmetrics.go)
+#   engram_outbox_backlog / engram_outbox_lag_seconds  — worker/outbox lag (recorder.go)
+#   engram_repair_backlog / engram_repair_convergence_age_seconds — repair sweep health
+#   engram_dlq_depth                                   — dead-lettered episodic docs
+#   engram_gate_admit_rate / _quarantine_rate / _reject_rate — experience gate verdicts
+#   engram_extraction_cost_usd_per_1k_events           — extraction cost
+#   engram_budget_alarm_firing                         — 1 when the cost budget alarm fires
+groups:
+  - name: engram-slo
+    rules:
+      - alert: EngramSearchLatencyHigh
+        # Base SLO: p95 search latency <=150ms. Graph expansion adds its own
+        # budget (see EngramSearchLatencyHighExpanded for the 250ms ceiling);
+        # this rule fires on the plain endpoint-wide p95.
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(engram_grpc_request_duration_seconds_bucket{method=~".*/Search"}[5m])) by (le)
+          ) > 0.150
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Search p95 latency above the 150ms SLO"
+          runbook: docs/runbooks/03-opensearch-node-failure.md
+
+      - alert: EngramIngestAvailabilityLow
+        # Ingest availability: error ratio over the last 5m window.
+        expr: >
+          sum(rate(engram_grpc_request_duration_seconds_count{method=~".*/Ingest", code!="OK"}[5m]))
+          /
+          sum(rate(engram_grpc_request_duration_seconds_count{method=~".*/Ingest"}[5m]))
+          > 0.01
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ingest error rate above 1% over 5m — availability SLO breach"
+          runbook: docs/runbooks/03-opensearch-node-failure.md
+
+      - alert: EngramWorkerLagHigh
+        expr: engram_outbox_lag_seconds > 60
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox lag above 60s — worker may be down or falling behind"
+          runbook: docs/runbooks/01-worker-down-or-lagging.md
+
+      - alert: EngramRepairSweepStalled
+        expr: engram_repair_convergence_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Repair sweep has not completed a pass in 5m — the sweep loop may have stalled"
+          runbook: docs/runbooks/01-worker-down-or-lagging.md
+
+      - alert: EngramDLQNonZero
+        expr: engram_dlq_depth > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-lettered episodic events present"
+          runbook: docs/runbooks/02-dlq-nonzero.md
+
+      - alert: EngramBudgetAlarmFiring
+        expr: engram_budget_alarm_firing == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Extraction cost budget breached — kill-switch has tripped, extraction is halted"
+          runbook: docs/runbooks/04-extraction-budget-breach.md
+
+      - alert: EngramGateRejectRateHigh
+        # A sudden spike in Reject (malicious/structurally invalid) verdicts
+        # is worth a look even though Reject itself is working-as-intended —
+        # it can signal an upstream bug generating malformed experiences.
+        expr: engram_gate_reject_rate > 0.20
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Experience-gate reject rate above 20% over 10m"

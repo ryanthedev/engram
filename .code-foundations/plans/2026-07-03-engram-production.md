@@ -303,3 +303,12 @@ Summary: Provenance-as-ACL is live and enforced at query time inside the retriev
 - [x] Committed
 Commit: ce3ecfd
 Summary: T3 experience memory is live behind a mandatory, fail-closed, no-bypass write-gate — the ExperienceStore is the only T3 writer and cannot admit without a Gatekeeper verdict; timeouts/errors/contradictory evidence quarantine. Quarantine is unreachable via retrieval, released only by human CLI. Admitted experiences serve through the Phase-4 gated tier; prune soft-expires (recoverable). The distillation stage plugs into the D20 worker seam. 242 unit + live-integration + e2e green.
+
+### Phase 6: Incremental Graph (T4) (Gate: Full, 3-sample review)
+- [x] BUILD: entity/edge indices, incremental upsert + single-routine dedup, <=2-hop GraphExpander via RegisterPostHook, D8 decision-gate memo
+- [x] REVIEW: majority 3-sample PASS (security verified — no ACL leak); one param-count design violation fixed pre-commit
+- [x] Committed
+Commit: 4e22b24
+Summary: T4 graph is live — per-episode entity/edge upsert with dedup (flat entity count on re-ingest), <=2-hop expansion that re-authorizes every hit through the Phase-4 ACL post-hook (unauthorized-edge nodes never returned; BFS-through-unseen-edges is a benign relevance side-channel, recorded). D8 CONFIRMED: stay on OpenSearch (p95 ~110ms vs 250ms ceiling) — no Neo4j needed at S1/S2. Decision-gate memo in internal/graph/DECISION_GATE.md.
+
+**Known property (Phase 6 review, recorded):** graph BFS traverses through edges the caller cannot see to reach authorized deeper facts. No unauthorized content is ever returned (each hit re-authorized), but the existence of hidden intermediate edges is weakly inferable from which deep facts surface. Consistent with the per-record ACL model; revisit if edge-existence confidentiality becomes a requirement.

@@ -51,6 +51,10 @@ func DefaultConfig() Config {
 			"internal/authgrpc",
 			"internal/engramclient",
 			"internal/mcp",
+			// internal/telemetrygrpc (Phase 7): the RED-metrics gRPC
+			// interceptor edge, mirroring internal/auth + internal/authgrpc's
+			// split — internal/telemetry itself stays framework-agnostic.
+			"internal/telemetrygrpc",
 		},
 	}
 }
