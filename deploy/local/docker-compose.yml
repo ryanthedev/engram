@@ -1,0 +1,81 @@
+# Local end-to-end stack (D21): pinned OpenSearch 3.1, a deterministic
+# embedding server (BGE-M3 stand-in), a deterministic stub extraction LLM, and
+# engramd (gRPC + outbox worker + repair sweep + auth barricade). Drive it with
+# podman (`make e2e`) or docker. Ports and the container name are deliberately
+# distinct from the dev cluster (engram-dev-os on :9200) so this stack never
+# collides with a running dev OpenSearch.
+#
+# Cold-start ordering is gated by healthchecks: engramd waits for OpenSearch,
+# the embedding server, and the stub LLM to be healthy before it starts.
+services:
+  opensearch:
+    image: opensearchproject/opensearch:3.1.0 # pinned — D14
+    container_name: engram-e2e-os
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx1g
+    ports:
+      - "9201:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  embed:
+    build:
+      context: ../..
+      dockerfile: deploy/local/Dockerfile
+    image: engram-local
+    command: ["engram-embed-server", "-addr", ":8081"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  stub-llm:
+    image: engram-local
+    command: ["engram-stub-llm", "-addr", ":8082"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8082/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  engramd:
+    image: engram-local
+    command:
+      - "engram-server"
+      - "-addr"
+      - ":7070"
+      - "-url"
+      - "http://opensearch:9200"
+      - "-embed-url"
+      - "http://embed:8081"
+      - "-extract-url"
+      - "http://stub-llm:8082"
+      - "-poll-interval"
+      - "500ms"
+      - "-sweep-interval"
+      - "2s"
+      - "-enrich-interval"
+      - "500ms"
+    ports:
+      - "7071:7070" # host 7071 -> engramd 7070 (distinct from a dev engramd on 7070)
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      embed:
+        condition: service_healthy
+      stub-llm:
+        condition: service_healthy
+    healthcheck:
+      # engramd has no HTTP health endpoint; a TCP probe on the gRPC port is
+      # enough for compose to gate readiness.
+      test: ["CMD-SHELL", "nc -z localhost 7070 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

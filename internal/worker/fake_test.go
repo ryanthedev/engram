@@ -364,6 +364,55 @@ func (f *fakeStore) LiveByContentKey(_ context.Context, key string) ([]store.Ver
 	return out, nil
 }
 
+func (f *fakeStore) ClosedOverlapChainKeys(_ context.Context, limit int) ([]store.ChainKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	counts := map[store.ChainKey]int{}
+	for _, row := range f.facts {
+		if row.fact.ExpiredAt != nil {
+			continue
+		}
+		counts[store.ChainKey{TenantID: row.fact.TenantID, Subject: row.fact.Subject, Predicate: row.fact.Predicate}]++
+	}
+	var keys []store.ChainKey
+	for k, n := range counts {
+		if n > 1 {
+			keys = append(keys, k)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Subject != keys[j].Subject {
+			return keys[i].Subject < keys[j].Subject
+		}
+		return keys[i].Predicate < keys[j].Predicate
+	})
+	if limit > 0 && len(keys) > limit {
+		keys = keys[:limit]
+	}
+	return keys, nil
+}
+
+func (f *fakeStore) ChainVersions(_ context.Context, key store.ChainKey) ([]store.VersionedFact, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.VersionedFact
+	for _, id := range f.sortedFactIDs() {
+		row := f.facts[id]
+		if row.fact.ExpiredAt != nil ||
+			row.fact.TenantID != key.TenantID || row.fact.Subject != key.Subject || row.fact.Predicate != key.Predicate {
+			continue
+		}
+		out = append(out, store.VersionedFact{ID: id, Fact: row.fact, SeqNo: row.seqNo, PrimaryTerm: row.primaryTerm})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Fact.ValidAt.Equal(out[j].Fact.ValidAt) {
+			return out[i].Fact.ValidAt.Before(out[j].Fact.ValidAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
 func (f *fakeStore) FindByEventID(_ context.Context, eventID string) ([]memory.Episodic, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -431,6 +480,16 @@ func (f *fakeStore) eventRow(eventID string) (memory.Episodic, bool) {
 		}
 	}
 	return memory.Episodic{}, false
+}
+
+// seedFact inserts a fully-formed fact row directly (bypassing the write
+// protocol) so a test can construct a specific bi-temporal end state — used
+// by the rule (d) regressions, which reproduce the write-skew overlap the
+// Phase-2 review adjudicated unreachable through sequential protocol steps.
+func (f *fakeStore) seedFact(id string, fact memory.SemanticFact) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.facts[id] = &factRow{fact: fact, seqNo: 1, primaryTerm: 1}
 }
 
 // closeFactDirectly simulates a concurrent worker closing a fact out from

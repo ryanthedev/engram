@@ -1,7 +1,9 @@
 # Plan: Engram — Production (Phases 3–8)
 
 **Created:** 2026-07-03
-**Status:** ready
+**Status:** complete
+**Started:** 2026-07-03 12:40 (build worktree: .claude/worktrees/engram-production, branch feature/engram-production)
+**Current Phase:** 8 (complete)
 **Complexity:** complex
 **Chains from:** `.code-foundations/plans/2026-06-29-engram-walking-skeleton.md` (Phases 0–2, build-ready). Together the two plans form the full 9-phase roadmap (0–8). All decisions D0–D16 from the skeleton plan carry over unchanged.
 
@@ -278,3 +280,49 @@ _DAG: 3 → 4 → {5 ∥ 6} → 7 → 8. Phase bodies filled during DETAIL._
 
 ## Execution Log
 _To be filled during /code-foundations:build_
+
+## Execution Log
+
+### Phase 3: Surfaces, Auth & E2E Foundation (Gate: Full, 3-sample review)
+- [x] BUILD: MCP server + CLI + token auth + local compose e2e stack + worker stage seam + carry-over rule (d)
+- [x] REVIEW: unanimous 3-sample PASS (security-focused). Follow-up: cmd/engram-perf runs without the interceptor (out-of-scope perf tool).
+- [x] Committed
+Commit: ff2fbad
+Summary: Engram now has real client surfaces — engram-mcp (stdio) and the engram CLI over the gRPC API — behind a 256-bit hashed-token auth barricade (constant-time verify, ≤5s revocation). A fully local compose stack (pinned OpenSearch 3.1 + deterministic embed + stub LLM + engramd + worker) runs `make e2e` end-to-end through MCP/CLI/gRPC. The worker stage-registration seam (D20) and ACL post-hook/tier/write-guard seams are the plug points Phases 4–6 consume; sweep rule (d) closed the last skeleton write-skew window. 174 unit + integration + e2e tests green.
+
+### Phase 4: Multi-Agent Scope + ACL (Gate: Full, 3-sample review)
+- [x] BUILD: scope contract, acl_edges reachability, ACL filter compiler (fail-closed, in-retriever), write-guard, revocation, Audit RPC/CLI, the four Phase-5/6 seams
+- [x] REVIEW: 2-of-3 PASS; unanimous finding (tier-hit truncation before ACL re-filter) fixed pre-commit with falsification-proven regression
+- [x] Committed
+Commit: 529cb28
+Summary: Provenance-as-ACL is live and enforced at query time inside the retriever (callers cannot bypass), fail-closed on every error path, with write-time scope guarding and instant revocation. The four registration seams (RegisterPostHook, RegisterTier, RegisterWriteGuard, plus D20 RegisterStage) are real and exercised — Phase 5 plugs its gated experience tier + write-gate into them, Phase 6 its graph post-hook. Audit RPC + `engram audit` expose provenance and full bi-temporal history. 200+ tests green incl. live-cluster ACL matrices and the truncation-ordering regression.
+
+### Phase 5: Experience Memory + Write-Gating (T3) (Gate: Full, 3-sample review)
+- [x] BUILD: Experience record + distillation stage, mandatory no-bypass Gatekeeper, quarantine tier, gated retrieval tier, soft-expire prune, injected-bad harness
+- [x] REVIEW: unanimous 3-sample PASS (all six bypass vectors closed); one lint blocker + a silent-integration-skip gap found and fixed pre-commit
+- [x] Committed
+Commit: ce3ecfd
+Summary: T3 experience memory is live behind a mandatory, fail-closed, no-bypass write-gate — the ExperienceStore is the only T3 writer and cannot admit without a Gatekeeper verdict; timeouts/errors/contradictory evidence quarantine. Quarantine is unreachable via retrieval, released only by human CLI. Admitted experiences serve through the Phase-4 gated tier; prune soft-expires (recoverable). The distillation stage plugs into the D20 worker seam. 242 unit + live-integration + e2e green.
+
+### Phase 6: Incremental Graph (T4) (Gate: Full, 3-sample review)
+- [x] BUILD: entity/edge indices, incremental upsert + single-routine dedup, <=2-hop GraphExpander via RegisterPostHook, D8 decision-gate memo
+- [x] REVIEW: majority 3-sample PASS (security verified — no ACL leak); one param-count design violation fixed pre-commit
+- [x] Committed
+Commit: 4e22b24
+Summary: T4 graph is live — per-episode entity/edge upsert with dedup (flat entity count on re-ingest), <=2-hop expansion that re-authorizes every hit through the Phase-4 ACL post-hook (unauthorized-edge nodes never returned; BFS-through-unseen-edges is a benign relevance side-channel, recorded). D8 CONFIRMED: stay on OpenSearch (p95 ~110ms vs 250ms ceiling) — no Neo4j needed at S1/S2. Decision-gate memo in internal/graph/DECISION_GATE.md.
+
+**Known property (Phase 6 review, recorded):** graph BFS traverses through edges the caller cannot see to reach authorized deeper facts. No unauthorized content is ever returned (each hit re-authorized), but the existence of hidden intermediate edges is weakly inferable from which deep facts surface. Consistent with the per-record ACL model; revisit if edge-existence confidentiality becomes a requirement.
+
+### Phase 7: Scale, Ops & Production (Gate: Full, 3-sample review)
+- [x] BUILD: idempotent Go deploy CLI (D24), OTel + domain gauges, blue/green + snapshot rollback, real restore/failure/overspend drills, load test, 5 runbooks, CI deploy workflow
+- [x] REVIEW: majority 3-sample PASS; a class of silent-no-op deploy-convergence defects (image, then CPU/mem/port) found and fixed pre-commit with falsification proofs; dangling runbook refs closed
+- [x] Committed
+Commit: 0c32b79
+Summary: Engram is deployable, observed, and recoverable. The deploy CLI converges idempotently and now rolls out on any task-def change (image/cpu/mem/port); rollback + snapshot-restore are real and drilled; telemetry gauges move under load; budget alarm + kill-switch guard cost. Restore RTO ~0.1s, failure drills lose no data. **Open pre-production gates (recorded):** (1) real-AWS `make deploy-staging/prod` + cloud e2e — tooling built/local-tested, real run is a documented manual step (no cloud creds here); (2) multi-instance staging load-test re-run — burst search p95 breaches on the single-node local cluster (sustained holds); docs/runbooks/load-test-s1-vs-s2.md tracks it as required before prod.
+
+### Phase 8: Eval & Safety Gates (Gate: Standard)
+- [x] BUILD: HaluMem hallucination suite, retrieval-regression gate vs versioned baseline, following-correlation gate, CI gate job, flaky-quarantine, bad-release drill, dashboards
+- [x] REVIEW: PASS — bad-release drill blocks a poisoned release, gates confirmed read-only, flaky-quarantine works, suite <1s
+- [x] Committed
+Commit: 6e9a32d
+Summary: The eval harness is now a CI release gate — three independent detectors (hallucination, retrieval regression, experience-following) with versioned thresholds block deploy-prod on a red exit code; flaky gates auto-quarantine; a bad-release drill proves a poisoned release is blocked; dashboards show >=3-run trend. The full 9-phase Engram build (0-8) is functionally complete.

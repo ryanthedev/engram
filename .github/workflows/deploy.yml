@@ -1,0 +1,201 @@
+# Engram deploy pipeline (Phase 7, D24): build -> staging -> gates -> prod,
+# blue/green ECS via the idempotent Go deploy CLI (cmd/engram-deploy) — no
+# Terraform/HCL. Promotion to prod requires the `prod` GitHub Environment's
+# manual-approval protection rule (configured in repo settings, not in this
+# file) — the gate between "gates" and "deploy-prod" is a human, on top of
+# the automated eval gates.
+#
+# AWS access is via OIDC role assumption (aws-actions/configure-aws-
+# credentials with role-to-assume), never long-lived static keys — the
+# per-environment IAM role ARNs are repo/environment secrets
+# (AWS_DEPLOY_ROLE_ARN), never checked in here.
+#
+# This workflow is authored and structurally complete but has NEVER been run
+# against a real AWS account in this build environment (no credentials are
+# available here) — running it for real against a live AWS account/ECR/ECS
+# setup is a documented manual-verification step (see the Phase-7 report and
+# docs/runbooks/). It is not wired into ci.yml's push/PR triggers so it
+# cannot accidentally fire without the repo secrets it depends on.
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      rollback_service:
+        description: "If set, roll back this ECS service instead of deploying (engramd | worker | embed)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*" # a version tag is a release candidate — build, stage, gate, then wait for prod approval
+
+permissions:
+  id-token: write # required for OIDC AssumeRoleWithWebIdentity
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: engram
+
+jobs:
+  build:
+    if: ${{ github.event.inputs.rollback_service == '' }}
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build + unit test (the same gate every commit passes, DW-0.1)
+        run: |
+          make build
+          make test
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push image
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          tag="${REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+          docker build -f deploy/local/Dockerfile -t "$tag" .
+          docker push "$tag"
+          echo "image=$tag" >> "$GITHUB_OUTPUT"
+
+  deploy-staging:
+    if: ${{ github.event.inputs.rollback_service == '' }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Converge staging (idempotent — re-run is a no-op, DW-7.1)
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+        run: go run ./cmd/engram-deploy -env staging -image "$IMAGE"
+
+  gates:
+    # Release gates run against staging (D22) — Phase 8 owns the eval-gate
+    # content (hallucination/regression/following); this stage is the deploy
+    # pipeline's slot for them plus the e2e "cloud profile" this phase adds:
+    # the SAME e2e suite (e2e/) Phase 3 built, pointed at staging's gRPC
+    # endpoint instead of self-hosting a local stack (Boot() in e2e/harness.go
+    # already supports this "external mode" via ENGRAM_E2E_ADDR — no new
+    # harness code needed, just a different target).
+    if: ${{ github.event.inputs.rollback_service == '' }}
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: e2e cloud profile against staging
+        run: make e2e-cloud
+        env:
+          ENGRAM_E2E_ADDR: ${{ secrets.STAGING_GRPC_ADDR }}
+          ENGRAM_OPENSEARCH_URL: ${{ secrets.STAGING_OPENSEARCH_URL }}
+      # DW-8.1/8.2/8.3/8.4: the three independent release gates (D9,
+      # internal/eval/gate). `eval-seed` is the only write-bearing step
+      # (idempotent by fixed doc ids — safe to re-run against a persistent
+      # staging environment); `eval-gate` is strictly read-only against
+      # staging (Phase 8's constraint) and its exit code is what actually
+      # blocks `deploy-prod` below (that job already declares
+      # `needs: gates`). Thresholds: docs/eval/thresholds.md. Baseline
+      # re-record procedure: docs/eval/baseline-rerecord-runbook.md. The
+      # bad-release drill (DW-8.4) is a separate, opt-in, non-CI exercise
+      # (`make eval-drill`) — see docs/eval/thresholds.md's "what happens on
+      # a breach" section for why it never runs here automatically.
+      - name: Seed eval fixture corpus (idempotent, staging)
+        run: make eval-seed
+        env:
+          ENGRAM_OPENSEARCH_URL: ${{ secrets.STAGING_OPENSEARCH_URL }}
+      - name: Release gates — hallucination, regression, following (blocks promotion on breach)
+        run: make eval-gate
+        env:
+          ENGRAM_OPENSEARCH_URL: ${{ secrets.STAGING_OPENSEARCH_URL }}
+      - name: Upload eval trend dashboard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-gate-dashboard
+          path: |
+            docs/eval/dashboard.md
+            eval/gate-runs/history.jsonl
+
+  deploy-prod:
+    if: ${{ github.event.inputs.rollback_service == '' }}
+    needs: gates
+    runs-on: ubuntu-latest
+    # The `prod` GitHub Environment's required-reviewers protection rule is
+    # the human approval gate — configured in repo Settings > Environments,
+    # not expressible in YAML. This job simply will not start until someone
+    # with reviewer rights approves it.
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Converge prod (blue/green ECS task-definition update)
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+        run: go run ./cmd/engram-deploy -env prod -image "$IMAGE"
+
+  rollback:
+    # Manual trigger only (workflow_dispatch with rollback_service set) —
+    # this is the blue/green revert path docs/runbooks/rollback.md's section
+    # 1 walks through: point the named service back at its previous
+    # task-definition revision. Defaults to prod; re-run against staging by
+    # targeting that environment's role instead if needed.
+    if: ${{ github.event.inputs.rollback_service != '' }}
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Validate rollback_service against the known service allowlist
+        env:
+          ROLLBACK_SERVICE: ${{ github.event.inputs.rollback_service }}
+        run: |
+          case "$ROLLBACK_SERVICE" in
+            engramd|worker|embed) ;;
+            *) echo "::error::rollback_service must be one of engramd, worker, embed (got: $ROLLBACK_SERVICE)"; exit 1 ;;
+          esac
+      - name: Roll back service to its previous task-definition revision
+        env:
+          ROLLBACK_SERVICE: ${{ github.event.inputs.rollback_service }}
+        run: go run ./cmd/engram-deploy -env prod -rollback "$ROLLBACK_SERVICE"

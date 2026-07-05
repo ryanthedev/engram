@@ -25,6 +25,7 @@ else
     -e DISABLE_SECURITY_PLUGIN=true \
     -e DISABLE_INSTALL_DEMO_CONFIG=true \
     -e 'OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx1g' \
+    -e path.repo=/usr/share/opensearch/snapshots \
     "$IMAGE"
 fi
 

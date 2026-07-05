@@ -1,0 +1,24 @@
+{
+  "index_patterns": ["engram-auth-tokens*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "id": { "type": "keyword" },
+        "hash": { "type": "keyword" },
+        "tenant_id": { "type": "keyword" },
+        "user_id": { "type": "keyword" },
+        "agent_id": { "type": "keyword" },
+        "issued_at": { "type": "date" },
+        "expires_at": { "type": "date" },
+        "revoked": { "type": "boolean" },
+        "revoked_at": { "type": "date" }
+      }
+    }
+  }
+}

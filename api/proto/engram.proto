@@ -8,6 +8,15 @@
 //
 // Search is the hybrid read path: BM25 + kNN fused by RRF (D1), scoped by
 // tenancy filters (D16) and the bi-temporal current-state filter (D3).
+//
+// Authentication (Phase 3): every RPC is authenticated by a bearer token in
+// the gRPC `authorization` metadata header, value "Bearer <raw-token>". A
+// unary interceptor (the barricade) verifies the token, resolves the bound
+// Identity{tenant_id, user_id, agent_id}, and injects it; unauthenticated
+// calls are rejected with codes.Unauthenticated and an opaque message (no
+// detail leak). The server derives tenancy/provenance from the resolved
+// Identity, not from client-supplied fields, so a token cannot act outside
+// its binding.
 syntax = "proto3";
 
 package engram.v1;
@@ -27,6 +36,18 @@ service Engram {
   // Search runs one hybrid query (BM25 + kNN -> RRF) and returns a single
   // fused, ranked hit list.
   rpc Search(SearchRequest) returns (SearchResponse);
+
+  // Status reports server health, the caller's resolved identity, and coarse
+  // tier document counts — the backing RPC for `engram status` and the MCP
+  // memory_status tool. It requires a valid token like every other call.
+  rpc Status(StatusRequest) returns (StatusResponse);
+
+  // Audit returns a fact's provenance (who wrote it, from what) and its full
+  // bi-temporal version history (Phase 4, DW-4.6) — the backing RPC for
+  // `engram audit <id>`. The caller must be authorized to READ the target
+  // fact; an unauthorized or unknown id returns NOT_FOUND (no existence
+  // oracle). Scope enforcement applies here exactly as it does to search.
+  rpc Audit(AuditRequest) returns (AuditResponse);
 }
 
 // IngestRequest is one episodic event.
@@ -82,4 +103,67 @@ message Hit {
 // SearchResponse is the single fused, ranked list.
 message SearchResponse {
   repeated Hit hits = 1;
+}
+
+// AuditRequest names one fact by its semantic doc id.
+message AuditRequest {
+  // Semantic fact doc id (as returned in a search Hit).
+  string id = 1;
+}
+
+// Provenance is who wrote a fact and from what (D6 provenance-as-ACL).
+message Provenance {
+  string tenant_id = 1;
+  string team_id = 2;
+  string scope = 3;
+  string owner_agent_id = 4;
+  // Episodic event ids this fact was extracted from.
+  repeated string source_ids = 5;
+  // Extraction pipeline version that produced it (D13).
+  string extractor_version = 6;
+  // System append time of the audited version.
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// FactVersion is one record in a fact's bi-temporal chain.
+message FactVersion {
+  string id = 1;
+  string subject = 2;
+  string predicate = 3;
+  string object = 4;
+  string statement = 5;
+  string content_key = 6;
+  // Doc id of the version this one supersedes (UPDATE/INVALIDATE); "" for ADD.
+  string supersedes = 7;
+  // Valid time [valid_at, invalid_at): real-world truth interval.
+  google.protobuf.Timestamp valid_at = 8;
+  google.protobuf.Timestamp invalid_at = 9;
+  // Transaction time [created_at, expired_at): system currency interval.
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp expired_at = 11;
+}
+
+// AuditResponse carries the target fact's provenance and its full history,
+// ordered oldest-first by transaction then valid time.
+message AuditResponse {
+  Provenance provenance = 1;
+  repeated FactVersion versions = 2;
+}
+
+// StatusRequest is empty; the caller is identified by the bearer token.
+message StatusRequest {}
+
+// StatusResponse reports liveness, the resolved identity, and tier counts.
+message StatusResponse {
+  // healthy is true when the backing store answered the count probe.
+  bool healthy = 1;
+  // Resolved identity of the caller (from the verified token).
+  string tenant_id = 2;
+  string user_id = 3;
+  string agent_id = 4;
+  // Coarse per-tier document counts for the caller's tenant.
+  int64 episodic_count = 5;
+  int64 semantic_count = 6;
+  // OpenSearch version line the server is pinned to (D14).
+  string opensearch_version = 7;
 }

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ryanthedev/engram/internal/acl"
+	"github.com/ryanthedev/engram/internal/auth"
 	"github.com/ryanthedev/engram/internal/memory"
 )
 
@@ -43,6 +45,11 @@ type OpenSearchStore struct {
 	semanticIndex string
 	ledgerIndex   string
 	ledgerLease   time.Duration
+	// writeGuards authorize client-driven writes at the store barricade
+	// (defense in depth, Phase 4). They run only when the request context
+	// carries a verified Identity — i.e. for calls originating past the auth
+	// barricade; internal/worker writes (no client identity) are trusted.
+	writeGuards []acl.WriteGuard
 }
 
 var _ Store = (*OpenSearchStore)(nil)
@@ -65,12 +72,59 @@ func NewOpenSearchStore(client *http.Client, baseURL string, opts ...Option) *Op
 	return s
 }
 
+// RegisterWriteGuard adds a write-time authorization guard (Phase 4). Call it
+// at wiring time before serving; it is not safe to call concurrently with
+// active writes. Guards run in registration order on client-driven writes;
+// the first denial (non-nil error) aborts the write and is returned unwrapped
+// enough for callers to errors.Is the typed reason.
+func (s *OpenSearchStore) RegisterWriteGuard(g acl.WriteGuard) {
+	s.writeGuards = append(s.writeGuards, g)
+}
+
+// authorizeWrite runs every registered guard against r using the Identity in
+// ctx (injected by the auth barricade). It is a no-op when no guard is
+// registered or no client identity is present — internal/worker writes run
+// without a client Identity and are trusted (the source event was already
+// authorized at ingest). A guard denial is returned verbatim so the typed
+// sentinel (acl.ErrScopeDenied / acl.ErrUnknownScope) survives errors.Is.
+func (s *OpenSearchStore) authorizeWrite(ctx context.Context, r acl.Record) error {
+	if len(s.writeGuards) == 0 {
+		return nil
+	}
+	id, ok := auth.IdentityFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	for _, g := range s.writeGuards {
+		if err := g.Check(ctx, id, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// normalizeScope defaults an empty scope to private so every stored doc carries
+// a concrete scope keyword — this keeps the OpenSearch read filter (which terms
+// on scope) aligned with the in-Go ACL predicate (which treats "" as private).
+func normalizeScope(scope string) string {
+	if scope == "" {
+		return acl.ScopePrivate
+	}
+	return scope
+}
+
 // Append implements Store: it POSTs rec to the episodic index and lets
 // OpenSearch assign the doc id (episodic append has no content-addressing
 // contract — D11 only pins the semantic fact id scheme). The append is the
 // enqueue (D12): once this returns, rec exists in the durable log Phase 2's
-// worker scans.
+// worker scans. A registered write guard authorizes the scope first (Phase 4).
 func (s *OpenSearchStore) Append(ctx context.Context, rec memory.Episodic) (string, error) {
+	rec.Scope = normalizeScope(rec.Scope)
+	if err := s.authorizeWrite(ctx, acl.Record{
+		TenantID: rec.TenantID, TeamID: rec.TeamID, Scope: rec.Scope, OwnerAgentID: rec.OwnerAgentID,
+	}); err != nil {
+		return "", err
+	}
 	body, err := json.Marshal(rec)
 	if err != nil {
 		return "", fmt.Errorf("store: encoding episodic record: %w", err)
@@ -93,6 +147,12 @@ func (s *OpenSearchStore) Append(ctx context.Context, rec memory.Episodic) (stri
 // existing id collides with 409, mapped to ErrConflict (D11's ADD-vs-ADD
 // duplicate-extraction race).
 func (s *OpenSearchStore) Create(ctx context.Context, id string, f memory.SemanticFact) error {
+	f.Scope = normalizeScope(f.Scope)
+	if err := s.authorizeWrite(ctx, acl.Record{
+		TenantID: f.TenantID, TeamID: f.TeamID, Scope: f.Scope, OwnerAgentID: f.OwnerAgentID,
+	}); err != nil {
+		return err
+	}
 	body, err := json.Marshal(f)
 	if err != nil {
 		return fmt.Errorf("store: encoding semantic fact: %w", err)

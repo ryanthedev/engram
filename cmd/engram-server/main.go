@@ -30,12 +30,18 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/ryanthedev/engram/api/engrampb"
+	"github.com/ryanthedev/engram/internal/acl"
+	"github.com/ryanthedev/engram/internal/auth"
+	"github.com/ryanthedev/engram/internal/authgrpc"
 	"github.com/ryanthedev/engram/internal/embed"
 	"github.com/ryanthedev/engram/internal/enrich"
+	"github.com/ryanthedev/engram/internal/graph"
 	"github.com/ryanthedev/engram/internal/ingest"
 	"github.com/ryanthedev/engram/internal/retrieval"
 	"github.com/ryanthedev/engram/internal/server"
 	"github.com/ryanthedev/engram/internal/store"
+	"github.com/ryanthedev/engram/internal/telemetry"
+	"github.com/ryanthedev/engram/internal/telemetrygrpc"
 	"github.com/ryanthedev/engram/internal/worker"
 )
 
@@ -63,6 +69,20 @@ func main() {
 	sweepInterval := flag.Duration("sweep-interval", 30*time.Second, "repair sweep cadence (D10 convergence SLO <=5m at S1)")
 	priceIn := flag.Float64("extract-price-in", ingest.DefaultPricing.InputUSDPer1M, "extraction model list price, USD per 1M input tokens")
 	priceOut := flag.Float64("extract-price-out", ingest.DefaultPricing.OutputUSDPer1M, "extraction model list price, USD per 1M output tokens")
+	gateURL := flag.String("gate-url", "", "OpenAI-compatible experience write-gate (LLM judge) endpoint; empty uses the deterministic rule judge (fail-closed either way)")
+	gateModel := flag.String("gate-model", "gpt-4o-mini", "experience write-gate judge model id")
+	prunePhi := flag.Float64("prune-phi-max", 0.2, "experience prune: soft-expire admitted experiences with utility <= this")
+	pruneRetrievalMax := flag.Int("prune-retrieval-max", 0, "experience prune: only soft-expire experiences with retrieval_count <= this")
+	pruneInterval := flag.Duration("prune-interval", 5*time.Minute, "experience utility-prune cadence")
+	graphJudgeURL := flag.String("graph-judge-url", "", "OpenAI-compatible dedup tie-break judge endpoint; empty uses the deterministic rule judge (fail-safe either way)")
+	graphJudgeModel := flag.String("graph-judge-model", "gpt-4o-mini", "graph dedup judge model id")
+	graphExpandDepth := flag.Int("graph-expand-depth", graph.MaxDepth, "graph connect-the-dots expansion depth (<=2, D8)")
+	metricsAddr := flag.String("metrics-addr", ":9464", "Prometheus /metrics scrape endpoint address (Phase 7 telemetry, DW-7.8)")
+	metricsInterval := flag.Duration("metrics-interval", 5*time.Second, "domain-gauge poll cadence")
+	budgetPer1k := flag.Float64("budget-per-1k-usd", 5.0, "extraction cost budget alarm threshold, USD per 1k events (DW-2.6/DW-7.6); a breach trips the extraction kill-switch")
+	episodicIndex := flag.String("episodic-index", store.EpisodicIndex, "episodic (T1) index name — override to run an isolated instance (e.g. a load test or failure drill) against scratch indices on a shared cluster")
+	semanticIndex := flag.String("semantic-index", store.SemanticIndex, "semantic (T2) index name — see -episodic-index")
+	ledgerIndex := flag.String("ledger-index", store.LedgerIndex, "extraction-ledger index name — see -episodic-index")
 	flag.Parse()
 
 	httpClient := &http.Client{Timeout: store.DefaultTimeout}
@@ -85,8 +105,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	st := store.NewOpenSearchStore(httpClient, *osURL)
-	retriever := retrieval.NewOpenSearchRetriever(httpClient, *osURL, embedder)
+	// Phase 4 ACL: the reachability store backs both the query-time read filter
+	// (compiled inside the retriever) and the write-time scope guard registered
+	// on the store — scope enforced at read AND write (defense in depth).
+	edgeStore := store.NewACLEdgeStore(httpClient, *osURL)
+	aclFilter := acl.NewFilter(edgeStore, slog.Default())
+
+	st := store.NewOpenSearchStore(httpClient, *osURL,
+		store.WithEpisodicIndex(*episodicIndex), store.WithSemanticIndex(*semanticIndex), store.WithLedgerIndex(*ledgerIndex))
+	st.RegisterWriteGuard(acl.NewScopeGuard(edgeStore))
+	retriever := retrieval.NewOpenSearchRetriever(httpClient, *osURL, embedder,
+		retrieval.WithACL(aclFilter), retrieval.WithIndices(*episodicIndex, *semanticIndex))
+	tokenStore := store.NewAuthTokenStore(httpClient, *osURL)
+	authenticator := auth.NewAuthenticator(tokenStore, nil)
 
 	job := &enrich.Job{Store: st, Embedder: embedder}
 	go job.Run(ctx, *enrichInterval, *enrichBatch)
@@ -102,6 +133,14 @@ func main() {
 	} else {
 		extractor = &ingest.RuleExtractor{Meter: meter}
 	}
+	// Phase 7 cost control (DW-7.6): a budget breach trips the kill-switch,
+	// which makes the gated extractor fail closed instead of spending further
+	// — the worker's existing retry/backoff/dead-letter path takes over, same
+	// as any other extractor failure, so a breach costs availability, not data.
+	killSwitch := &telemetry.KillSwitch{}
+	budgetAlarm := &telemetry.BudgetAlarm{ThresholdUSD: *budgetPer1k, Switch: killSwitch}
+	extractor = &telemetry.GatedExtractor{Extractor: extractor, Switch: killSwitch}
+
 	wk := worker.New(st, extractor, ingest.RuleReconciler{}, embedder, worker.Config{
 		ExtractorVersion: *extractorVersion,
 		BatchSize:        *claimBatch,
@@ -110,6 +149,30 @@ func main() {
 		MaxAttempts:      *maxAttempts,
 		Workers:          *workers,
 	}, slog.Default())
+	// Phase 5: experience memory (T3) + mandatory write-gate. Registers the
+	// distillation stage (D20) and the gated experience tier (Phase-4 seam) and
+	// starts the utility-prune job — all without editing the worker/retriever
+	// cores. Registration must precede wk.Run so the stage is active for the
+	// first claimed batch.
+	experienceStore, err := wireExperience(ctx, httpClient, *osURL, experienceConfig{
+		gateURL: *gateURL, gateModel: *gateModel,
+		prunePhi: *prunePhi, pruneRetrieval: *pruneRetrievalMax, pruneInterval: *pruneInterval,
+	}, wk, retriever, slog.Default())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error wiring experience memory:", err)
+		os.Exit(1)
+	}
+	// Phase 6: incremental graph (T4) + bounded connect-the-dots expansion.
+	// Registers the graph worker stage (D20) and the ACL-bounded post-hook
+	// expander (Phase-4 seam) — no worker/retriever core edits. Registration
+	// must precede wk.Run so the stage is active for the first claimed batch.
+	if err := wireGraph(ctx, httpClient, *osURL, graphConfig{
+		judgeURL: *graphJudgeURL, judgeModel: *graphJudgeModel, expandDepth: *graphExpandDepth,
+	}, embedder, wk, retriever, slog.Default()); err != nil {
+		fmt.Fprintln(os.Stderr, "error wiring graph memory:", err)
+		os.Exit(1)
+	}
+
 	go wk.Run(ctx)
 	sweeper := &worker.Sweeper{Store: st, Worker: wk}
 	go sweeper.Run(ctx, *sweepInterval)
@@ -132,13 +195,70 @@ func main() {
 		}
 	}()
 
+	// Phase 7: OTel/Prometheus telemetry (DW-7.8's domain gauges) + the
+	// budget alarm's live cost feed (DW-7.6). Every source is the same live
+	// object the request/worker paths already use — no shadow bookkeeping.
+	telemetryProvider, err := telemetry.NewProvider()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error building telemetry provider:", err)
+		os.Exit(1)
+	}
+	gauges, err := telemetry.NewGauges(telemetryProvider.Meter("engram-server"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error building telemetry gauges:", err)
+		os.Exit(1)
+	}
+	red, err := telemetry.NewRED(telemetryProvider.Meter("engram-server"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error building RED metrics:", err)
+		os.Exit(1)
+	}
+	recorder := &telemetry.Recorder{
+		Gauges: gauges,
+		Outbox: st,
+		DLQ:    st,
+		Repair: sweeper,
+		Gate:   experienceStore,
+		Cost:   costSourceFunc(func() float64 { return meter.Snapshot().CostPer1kEventsUSD(pricing) }),
+		Alarm:  budgetAlarm,
+		Logger: slog.Default(),
+	}
+	go recorder.Run(ctx, *metricsInterval)
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", telemetryProvider.Handler())
+	metricsServer := &http.Server{Addr: *metricsAddr, Handler: metricsMux}
+	go func() {
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = metricsServer.Shutdown(shutdownCtx)
+	}()
+
 	lis, err := net.Listen("tcp", *addr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error listening on", *addr, ":", err)
 		os.Exit(1)
 	}
-	grpcServer := grpc.NewServer()
-	engrampb.RegisterEngramServer(grpcServer, server.New(st, retriever))
+	// The auth interceptor is the barricade: every gRPC call is authenticated
+	// and its Identity injected before any handler runs (D17). The RED
+	// interceptor (Phase 7) records every call's duration/outcome regardless
+	// of auth result — an auth rejection is itself an observable RED event.
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			telemetrygrpc.UnaryServerInterceptor(red),
+			authgrpc.UnaryServerInterceptor(authenticator, slog.Default()),
+		),
+	)
+	svc := server.New(st, retriever)
+	svc.Probe = st
+	svc.Auditor = st
+	svc.ACL = aclFilter
+	engrampb.RegisterEngramServer(grpcServer, svc)
 
 	go func() {
 		<-ctx.Done()

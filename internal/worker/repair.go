@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/ryanthedev/engram/internal/memory"
@@ -26,6 +27,12 @@ type SweepStore interface {
 	LiveByContentKey(ctx context.Context, key string) ([]store.VersionedFact, error)
 	// FindByEventID returns the episodic docs carrying eventID.
 	FindByEventID(ctx context.Context, eventID string) ([]memory.Episodic, error)
+	// ClosedOverlapChainKeys returns chains that may carry a closed-closed
+	// valid-time overlap (rule d input).
+	ClosedOverlapChainKeys(ctx context.Context, limit int) ([]store.ChainKey, error)
+	// ChainVersions returns all non-expired records for a chain, ascending by
+	// (valid_at, doc id) — rule d walks this to trim overlaps.
+	ChainVersions(ctx context.Context, key store.ChainKey) ([]store.VersionedFact, error)
 }
 
 // SweepReport counts what one sweep converged.
@@ -42,6 +49,11 @@ type SweepReport struct {
 	// LedgersResumed counts incomplete past-lease ledger entries re-driven
 	// through the worker (rule c).
 	LedgersResumed int
+	// OverlapsTrimmed counts closed records whose interval was trimmed down to
+	// their nearest valid-time successor to remove a closed-closed overlap
+	// (rule d — the irreducible write-skew residual from the Phase-2 review's
+	// Issue 3).
+	OverlapsTrimmed int
 }
 
 // Sweeper is the repair sweep (D10): a scheduled pass that converges every
@@ -56,6 +68,13 @@ type SweepReport struct {
 //	     close the rest with an empty interval (never-valid record).
 //	(c)  ledger entries incomplete past their lease → resume through the
 //	     worker (cached extraction when present — the LLM is not re-called).
+//	(d)  a chain's closed record whose valid-time interval extends past a
+//	     later record's valid_at → trim the earlier record down to that
+//	     successor's valid_at (monotone, guarded). This is the retroactive
+//	     closure of the per-document-OCC write-skew window the Phase-2 review
+//	     adjudicated irreducible at prevention time (Issue 3): two closed
+//	     records for one (tenant, subject, predicate) must never cover the
+//	     same instant.
 //
 // Scheduling is the caller's concern (Run); at S1 the convergence SLO is
 // ≤5 min, so any interval well under that satisfies D10.
@@ -66,6 +85,10 @@ type Sweeper struct {
 	Limit int
 	// Logger defaults to slog.Default().
 	Logger *slog.Logger
+
+	// lastSweepAt is the UnixNano timestamp of the last successfully
+	// completed Sweep pass — ConvergenceAge's data source (DW-7.8).
+	lastSweepAt atomic.Int64
 }
 
 // Run sweeps every interval until ctx is done. A failed sweep is logged, not
@@ -107,7 +130,186 @@ func (s *Sweeper) Sweep(ctx context.Context) (SweepReport, error) {
 	if err := s.sweepLedgers(ctx, &rep); err != nil {
 		return rep, err
 	}
+	if err := s.sweepClosedOverlaps(ctx, &rep); err != nil {
+		return rep, err
+	}
+	s.lastSweepAt.Store(time.Now().UnixNano())
 	return rep, nil
+}
+
+// Backlog counts outstanding repair work — the Phase-7 repair-backlog
+// telemetry source (DW-7.8) — WITHOUT converging anything. It deliberately
+// mirrors each sweep* rule's own "does this actually need action" predicate
+// rather than the coarse candidate scans those rules start from: raw
+// LiveSuperseders/ClosedOverlapChainKeys results include plenty of steady-
+// state, already-converged records (a live head's supersedes pointer stays
+// set forever; a chain naturally accumulates multiple closed historical
+// versions), so counting candidates directly would make the gauge non-zero
+// at rest. Read-only: safe to poll concurrently with a running Sweep/Run
+// loop, and calling it does not change what a subsequent Sweep converges.
+func (s *Sweeper) Backlog(ctx context.Context) (int, error) {
+	pending := 0
+
+	live, err := s.Store.LiveSuperseders(ctx, s.limit())
+	if err != nil {
+		return 0, fmt.Errorf("worker: backlog scanning superseders: %w", err)
+	}
+
+	// Rule (a): only a target that is NOT yet closed is outstanding work.
+	byTarget := map[string][]store.VersionedFact{}
+	for _, vf := range live {
+		byTarget[vf.Fact.Supersedes] = append(byTarget[vf.Fact.Supersedes], vf)
+	}
+	for target, sibs := range byTarget {
+		sortByValidThenID(sibs)
+		pred, ok, err := s.Store.GetFact(ctx, target)
+		if err != nil {
+			return 0, fmt.Errorf("worker: backlog reading supersedes target %s: %w", target, err)
+		}
+		if !ok || pred.Fact.InvalidAt != nil || pred.Fact.ExpiredAt != nil {
+			continue // already converged
+		}
+		if _, found := earliestNonInverted(sibs, pred.Fact.ValidAt); found {
+			pending++
+		}
+	}
+
+	// Rule (a'): only a root with >=2 live descendants has divergence to
+	// converge; each pairwise close in the sorted chain is one action.
+	roots := newRootResolver(s.Store)
+	byRoot := map[string][]store.VersionedFact{}
+	for _, vf := range live {
+		root, err := roots.resolve(ctx, vf)
+		if err != nil {
+			return 0, fmt.Errorf("worker: backlog resolving chain root of %s: %w", vf.ID, err)
+		}
+		byRoot[root] = append(byRoot[root], vf)
+	}
+	for _, sibs := range byRoot {
+		if len(sibs) >= 2 {
+			pending += len(sibs) - 1
+		}
+	}
+
+	// Rule (b): a content key still carrying >1 live doc is outstanding;
+	// the aggregation candidate can have converged since it ran.
+	dupKeys, err := s.Store.DuplicateLiveContentKeys(ctx, s.limit())
+	if err != nil {
+		return 0, fmt.Errorf("worker: backlog scanning duplicate content keys: %w", err)
+	}
+	for _, key := range dupKeys {
+		dups, err := s.Store.LiveByContentKey(ctx, key)
+		if err != nil {
+			return 0, fmt.Errorf("worker: backlog reading duplicates of %s: %w", key, err)
+		}
+		if len(dups) >= 2 {
+			pending += len(dups) - 1
+		}
+	}
+
+	// Rule (d): only a chain whose closed record actually extends past its
+	// nearest successor's valid_at needs a trim — most multi-version chains
+	// are normal converged history and contribute nothing here.
+	overlapKeys, err := s.Store.ClosedOverlapChainKeys(ctx, s.limit())
+	if err != nil {
+		return 0, fmt.Errorf("worker: backlog scanning overlap chains: %w", err)
+	}
+	for _, key := range overlapKeys {
+		versions, err := s.Store.ChainVersions(ctx, key)
+		if err != nil {
+			return 0, fmt.Errorf("worker: backlog reading chain %+v: %w", key, err)
+		}
+		sortByValidThenID(versions)
+		for i := range versions {
+			rec := versions[i]
+			if rec.Fact.InvalidAt == nil {
+				continue
+			}
+			if succ, ok := firstAfter(versions, i); ok && rec.Fact.InvalidAt.After(succ.Fact.ValidAt) {
+				pending++
+			}
+		}
+	}
+
+	// Rule (c): an incomplete ledger entry for this pipeline version is
+	// genuinely stalled work regardless of what caused it.
+	incomplete, err := s.Store.ScanIncomplete(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("worker: backlog scanning incomplete ledgers: %w", err)
+	}
+	for _, e := range incomplete {
+		if e.Key.ExtractorVersion == s.Worker.cfg.ExtractorVersion {
+			pending++
+		}
+	}
+
+	return pending, nil
+}
+
+// ConvergenceAge returns time elapsed since the last successfully completed
+// Sweep pass — zero before the first pass ever runs. A large or growing age
+// signals the sweep loop has stalled (DW-7.8's alert-bound gauge).
+func (s *Sweeper) ConvergenceAge() time.Duration {
+	ns := s.lastSweepAt.Load()
+	if ns == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, ns))
+}
+
+// sweepClosedOverlaps applies rule (d): within each chain, a closed record
+// whose interval extends past its nearest valid-time successor's valid_at is
+// trimmed down to that successor, so no two records ever cover the same
+// instant. The trim funnels through the same monotone, guarded trimInterval
+// primitive the late-arrival path uses; a chain already disjoint is a no-op.
+// Live records are never trimmed here — closing a live fact is the write
+// protocol's and rules (a)/(a')'s job, never rule (d)'s.
+func (s *Sweeper) sweepClosedOverlaps(ctx context.Context, rep *SweepReport) error {
+	keys, err := s.Store.ClosedOverlapChainKeys(ctx, s.limit())
+	if err != nil {
+		return fmt.Errorf("worker: sweep scanning overlap chains: %w", err)
+	}
+	for _, key := range keys {
+		versions, err := s.Store.ChainVersions(ctx, key)
+		if err != nil {
+			return fmt.Errorf("worker: sweep reading chain %+v: %w", key, err)
+		}
+		sortByValidThenID(versions)
+		for i := range versions {
+			rec := versions[i]
+			if rec.Fact.InvalidAt == nil {
+				continue // live head: not rule (d)'s to touch
+			}
+			// Nearest record strictly after rec by valid time is the true
+			// interval boundary. Trimming rec's close down to it removes any
+			// overlap; trimInterval no-ops when rec already ends at/before it.
+			succ, ok := firstAfter(versions, i)
+			if !ok || !rec.Fact.InvalidAt.After(succ.Fact.ValidAt) {
+				continue
+			}
+			if err := s.Worker.trimInterval(ctx, rec, succ.Fact.ValidAt); err != nil {
+				if !errors.Is(err, store.ErrConflict) {
+					s.logger().WarnContext(ctx, "sweep overlap trim failed", "doc_id", rec.ID, "error", err)
+				}
+				continue
+			}
+			rep.OverlapsTrimmed++
+		}
+	}
+	return nil
+}
+
+// firstAfter returns the first record after index i (in the (valid_at, id)
+// sorted slice) whose valid_at is strictly greater than versions[i]'s — the
+// nearest true valid-time successor. Records sharing the exact valid_at are
+// skipped: they cannot bound each other's interval.
+func firstAfter(versions []store.VersionedFact, i int) (store.VersionedFact, bool) {
+	for j := i + 1; j < len(versions); j++ {
+		if versions[j].Fact.ValidAt.After(versions[i].Fact.ValidAt) {
+			return versions[j], true
+		}
+	}
+	return store.VersionedFact{}, false
 }
 
 // sweepSupersessions applies rules (a) and (a').

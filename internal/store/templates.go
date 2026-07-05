@@ -29,6 +29,17 @@ const (
 	// with op_type=create before extraction.
 	LedgerTemplateName = "engram-ledger"
 	LedgerIndex        = "engram-ledger-000001"
+	// AuthTokenTemplateName / AuthTokenIndex name the token-auth index
+	// (Phase 3): one row per issued token, keyed by the token hash; the raw
+	// token is never stored.
+	AuthTokenTemplateName = "engram-auth-tokens"
+	AuthTokenIndex        = "engram-auth-tokens-000001"
+	// ACLEdgesTemplateName / ACLEdgesIndex name the ACL reachability index
+	// (Phase 4): one doc per grant (user↔agent, membership, org grant), keyed
+	// by a deterministic edge id so grant/revoke are idempotent. Query-time
+	// enforcement reads it fresh, so deleting an edge revokes on the next call.
+	ACLEdgesTemplateName = "engram-acl-edges"
+	ACLEdgesIndex        = "engram-acl-edges-000001"
 	// RRFPipelineName is the hybrid-search fusion pipeline (D1).
 	RRFPipelineName = "engram-rrf"
 )
@@ -50,6 +61,18 @@ var SemanticTemplateJSON []byte
 //
 //go:embed templates/ledger.json
 var LedgerTemplateJSON []byte
+
+// AuthTokenTemplateJSON is the token-auth index template (Phase 3): hashed
+// tokens only, bound to (tenant_id, user_id, agent_id), TTL'd and revocable.
+//
+//go:embed templates/auth-tokens.json
+var AuthTokenTemplateJSON []byte
+
+// ACLEdgesTemplateJSON is the ACL reachability index template (Phase 4):
+// user↔agent, membership, and org-grant edges, strict-mapped keyword fields.
+//
+//go:embed templates/acl-edges.json
+var ACLEdgesTemplateJSON []byte
 
 // RRFPipelineJSON is the RRF search pipeline (score-ranker-processor,
 // rank_constant=60 — D1/D14).

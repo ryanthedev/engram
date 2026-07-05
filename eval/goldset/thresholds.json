@@ -1,0 +1,5 @@
+{
+  "hallucination_rate_max": 0.10,
+  "regression_margin_pp": 0.02,
+  "following_correlation_min": 0.3
+}
