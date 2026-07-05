@@ -35,6 +35,11 @@ type Backend interface {
 	// CountEntities returns the number of LIVE entities for tenant — the
 	// entity-count-stability metric (DW-6.3).
 	CountEntities(ctx context.Context, tenantID string) (int, error)
+	// CountAllEntities returns the number of LIVE entities across ALL
+	// tenants — Phase 3's durable graph telemetry signal (the all-tenant
+	// DW-6.3 stability signal wired onto /metrics), distinct from
+	// CountEntities' per-tenant scope.
+	CountAllEntities(ctx context.Context) (int, error)
 
 	// PutEdge upserts e keyed by its ID.
 	PutEdge(ctx context.Context, e Edge) error
@@ -251,6 +256,13 @@ func (s *Store) CountEntities(ctx context.Context, tenantID string) (int, error)
 	return s.backend.CountEntities(ctx, tenantID)
 }
 
+// CountAllEntities returns the number of live entities across all tenants —
+// Phase 3's graph telemetry gauge's data source (the all-tenant DW-6.3
+// stability signal rendered on /metrics).
+func (s *Store) CountAllEntities(ctx context.Context) (int, error) {
+	return s.backend.CountAllEntities(ctx)
+}
+
 // embed returns the dedup-similarity embedding for m: the fact's full
 // context by default (production — preserves real-embedder homonym
 // separation via context), or m's normalized name alone when
@@ -358,6 +370,19 @@ func (m *MemBackend) CountEntities(_ context.Context, tenantID string) (int, err
 	n := 0
 	for _, e := range m.entities {
 		if e.TenantID == tenantID && e.Live() {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// CountAllEntities implements Backend: live entities across every tenant.
+func (m *MemBackend) CountAllEntities(_ context.Context) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, e := range m.entities {
+		if e.Live() {
 			n++
 		}
 	}

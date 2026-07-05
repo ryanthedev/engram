@@ -43,6 +43,22 @@ type fakeGate struct{ admit, quarantine, reject int64 }
 
 func (f fakeGate) VerdictCounts() (int64, int64, int64) { return f.admit, f.quarantine, f.reject }
 
+type fakeGateInventory struct {
+	admitted, quarantined int64
+	err                   error
+}
+
+func (f fakeGateInventory) InventoryCounts(context.Context) (int64, int64, error) {
+	return f.admitted, f.quarantined, f.err
+}
+
+type fakeGraph struct {
+	count int
+	err   error
+}
+
+func (f fakeGraph) CountAllEntities(context.Context) (int, error) { return f.count, f.err }
+
 type fakeCost struct{ perK float64 }
 
 func (f fakeCost) CostPer1kEventsUSD() float64 { return f.perK }
@@ -172,6 +188,99 @@ func TestRecorder_SourceErrorDoesNotBlockOthers(t *testing.T) {
 		Gauges: g,
 		Outbox: fakeOutbox{err: context.DeadlineExceeded},
 		DLQ:    fakeDLQ{count: 4},
+	}
+	rec.Poll(context.Background())
+	wantGauge(t, scrape(t, p), "engram_dlq_depth", 4)
+}
+
+// TestDW_3_1_DurableInventoryGaugesReflectBackendNotZero is the Phase-3
+// evidence: the durable experience-inventory gauges render the
+// GateInventorySource's counts on the very first poll — proving they do not
+// depend on any in-process accumulation the way GateSource's rates do.
+func TestDW_3_1_DurableInventoryGaugesReflectBackendNotZero(t *testing.T) {
+	p, g := newTestProvider(t)
+	rec := &Recorder{
+		Gauges:        g,
+		GateInventory: fakeGateInventory{admitted: 42, quarantined: 7},
+	}
+	rec.Poll(context.Background())
+	body := scrape(t, p)
+	wantGauge(t, body, "engram_experience_admitted_count", 42)
+	wantGauge(t, body, "engram_experience_quarantined_count", 7)
+}
+
+// TestDW_3_1_GateRateGaugeDescriptionsStateResetOnRestart proves every
+// in-process gate-verdict-rate gauge's HELP text now says it resets on
+// restart, so its description no longer misstates what it computes (it does
+// NOT reflect durable OpenSearch state — that's what the new inventory
+// gauges are for).
+func TestDW_3_1_GateRateGaugeDescriptionsStateResetOnRestart(t *testing.T) {
+	p, g := newTestProvider(t)
+	rec := &Recorder{Gauges: g, Gate: fakeGate{admit: 1}}
+	rec.Poll(context.Background())
+	body := scrape(t, p)
+	for _, name := range []string{"engram_gate_admit_rate", "engram_gate_quarantine_rate", "engram_gate_reject_rate"} {
+		help := helpLine(t, body, name)
+		if !strings.Contains(help, "resets to 0 on restart") {
+			t.Errorf("gauge %s HELP text = %q, want it to state it resets on restart", name, help)
+		}
+	}
+}
+
+// helpLine returns the "# HELP <name> ..." line for name from a Prometheus
+// exposition body.
+func helpLine(t *testing.T, body, name string) string {
+	t.Helper()
+	prefix := "# HELP " + name + " "
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return line
+		}
+	}
+	t.Fatalf("no HELP line found for %s in scrape body:\n%s", name, body)
+	return ""
+}
+
+// TestDW_3_2_GraphEntityGaugeTracksCount is the Phase-3 evidence: the graph
+// entity gauge is registered on /metrics and its recorded value moves as the
+// GraphSource's count changes across polls (the "increments as entities are
+// added" requirement).
+func TestDW_3_2_GraphEntityGaugeTracksCount(t *testing.T) {
+	p, g := newTestProvider(t)
+	rec := &Recorder{Gauges: g, Graph: fakeGraph{count: 3}}
+	rec.Poll(context.Background())
+	first := scrape(t, p)
+	if !strings.Contains(first, "engram_graph_entity_count") {
+		t.Fatalf("first scrape missing engram_graph_entity_count gauge:\n%s", first)
+	}
+	wantGauge(t, first, "engram_graph_entity_count", 3)
+
+	rec.Graph = fakeGraph{count: 9}
+	rec.Poll(context.Background())
+	second := scrape(t, p)
+	wantGauge(t, second, "engram_graph_entity_count", 9)
+}
+
+// TestRecorder_GateInventoryAndGraphNilSourcesSkipped proves a Recorder with
+// GateInventory/Graph left nil (unconfigured) does not panic — mirroring
+// TestRecorder_NilSourcesSkipped for the two Phase-3 sources.
+func TestRecorder_GateInventoryAndGraphNilSourcesSkipped(t *testing.T) {
+	_, g := newTestProvider(t)
+	rec := &Recorder{Gauges: g, Gate: fakeGate{admit: 1}}
+	rec.Poll(context.Background()) // must not panic with GateInventory/Graph nil
+}
+
+// TestDW_3_4_TelemetrySourceErrorDoesNotBlockOthers proves a failing
+// GateInventory/Graph source (e.g. a transient OpenSearch read, or the
+// genuine-error path DW-3.4 also covers at the backend layer) does not
+// block the other gauges from recording.
+func TestDW_3_4_TelemetrySourceErrorDoesNotBlockOthers(t *testing.T) {
+	p, g := newTestProvider(t)
+	rec := &Recorder{
+		Gauges:        g,
+		GateInventory: fakeGateInventory{err: context.DeadlineExceeded},
+		Graph:         fakeGraph{err: context.DeadlineExceeded},
+		DLQ:           fakeDLQ{count: 4},
 	}
 	rec.Poll(context.Background())
 	wantGauge(t, scrape(t, p), "engram_dlq_depth", 4)

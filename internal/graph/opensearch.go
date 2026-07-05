@@ -166,7 +166,10 @@ func (b *OpenSearchBackend) GetEntity(ctx context.Context, tenantID, id string) 
 	return e, true, nil
 }
 
-// CountEntities implements Backend via _count, live-only.
+// CountEntities implements Backend via _count, live-only. A missing index
+// (e.g. a fresh/scratch instance whose first entity hasn't landed yet)
+// reads 0, not an error — the same index_not_found_exception guard Phase 1
+// established for internal/store's read paths.
 func (b *OpenSearchBackend) CountEntities(ctx context.Context, tenantID string) (int, error) {
 	q := map[string]any{"query": map[string]any{"bool": map[string]any{
 		"filter":   []any{map[string]any{"term": map[string]any{"tenant_id": tenantID}}},
@@ -177,8 +180,34 @@ func (b *OpenSearchBackend) CountEntities(ctx context.Context, tenantID string) 
 	if err != nil {
 		return 0, err
 	}
+	if isIndexNotFound(status, decoded) {
+		return 0, nil // index not created yet: count 0
+	}
 	if status != http.StatusOK {
 		return 0, fmt.Errorf("graph: count entities status %d: %v", status, decoded)
+	}
+	count, _ := decoded["count"].(float64)
+	return int(count), nil
+}
+
+// CountAllEntities implements Backend via a live-only _count with no tenant
+// filter — Phase 3's all-tenant graph telemetry signal (the DW-6.3
+// stability metric wired onto /metrics). A missing index reads 0, not an
+// error (same guard as CountEntities).
+func (b *OpenSearchBackend) CountAllEntities(ctx context.Context) (int, error) {
+	q := map[string]any{"query": map[string]any{"bool": map[string]any{
+		"must_not": []any{map[string]any{"exists": map[string]any{"field": "expired_at"}}},
+	}}}
+	body, _ := json.Marshal(q)
+	status, decoded, err := osJSON(ctx, b.client, http.MethodPost, b.baseURL+"/"+b.entityIndex+"/_count", body)
+	if err != nil {
+		return 0, err
+	}
+	if isIndexNotFound(status, decoded) {
+		return 0, nil // index not created yet: count 0
+	}
+	if status != http.StatusOK {
+		return 0, fmt.Errorf("graph: count all entities status %d: %v", status, decoded)
 	}
 	count, _ := decoded["count"].(float64)
 	return int(count), nil
@@ -257,6 +286,22 @@ func (b *OpenSearchBackend) Neighbors(ctx context.Context, tenantID, entityID st
 // --- small OpenSearch HTTP helpers (self-contained; internal/store's are
 // unexported, so graph carries its own thin copies, matching experience's
 // osDo/osJSON/osSearchHits/osDecodeSource precedent) ---
+
+// isIndexNotFound reports whether an OpenSearch response is the specific
+// index_not_found_exception (HTTP 404 whose error.type is exactly that
+// literal) — a read that reached an index which does not exist yet. The
+// entity-count reads translate this ONE shape to an empty result: a
+// not-yet-created entity index has 0 entities, not an error. Mirrors
+// internal/store's and internal/experience's isIndexNotFound; this package
+// keeps its own copy per the self-contained-helpers convention above.
+func isIndexNotFound(status int, decoded map[string]any) bool {
+	if status != http.StatusNotFound {
+		return false
+	}
+	errObj, _ := decoded["error"].(map[string]any)
+	typ, _ := errObj["type"].(string)
+	return typ == "index_not_found_exception"
+}
 
 func osDo(ctx context.Context, client *http.Client, method, url string, body []byte) error {
 	status, decoded, err := osJSON(ctx, client, method, url, body)

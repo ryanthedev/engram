@@ -29,12 +29,16 @@ type graphConfig struct {
 // LLM judge, config-selected), registers the graph worker stage (D20
 // RegisterStage) and the bounded expander (Phase-4 RegisterPostHook). The
 // worker stage lives in this file per the D20 convention (each phase
-// registers its stages in its own file).
+// registers its stages in its own file). wireGraph returns the constructed
+// *graph.Store (mirroring wireExperience's shape) so main.go can wire its
+// CountAllEntities into the Phase-7/3 telemetry recorder (the graph entity
+// gauge, DW-3.2) without this file's callers reaching past the registration
+// seams for anything else.
 func wireGraph(ctx context.Context, httpClient *http.Client, osURL string, cfg graphConfig,
-	embedder embed.Embedder, wk *worker.Worker, retriever *retrieval.MultiRetriever, logger *slog.Logger) error {
+	embedder embed.Embedder, wk *worker.Worker, retriever *retrieval.MultiRetriever, logger *slog.Logger) (*graph.Store, error) {
 
 	if err := graph.Apply(ctx, httpClient, osURL); err != nil {
-		return fmt.Errorf("applying graph contract: %w", err)
+		return nil, fmt.Errorf("applying graph contract: %w", err)
 	}
 
 	// The dedup tie-break judge: LLM judge when configured, deterministic
@@ -50,7 +54,7 @@ func wireGraph(ctx context.Context, httpClient *http.Client, osURL string, cfg g
 	}
 	dedup, err := graph.NewDeduper(judge)
 	if err != nil {
-		return fmt.Errorf("building graph deduper: %w", err)
+		return nil, fmt.Errorf("building graph deduper: %w", err)
 	}
 
 	backend := graph.NewOpenSearchBackend(httpClient, osURL)
@@ -77,9 +81,9 @@ func wireGraph(ctx context.Context, httpClient *http.Client, osURL string, cfg g
 	// owner is dropped before the caller ever sees it.
 	expander, err := graph.NewExpander(store, cfg.expandDepth, logger)
 	if err != nil {
-		return fmt.Errorf("building graph expander: %w", err)
+		return nil, fmt.Errorf("building graph expander: %w", err)
 	}
 	retriever.RegisterPostHook(expander)
 
-	return nil
+	return store, nil
 }

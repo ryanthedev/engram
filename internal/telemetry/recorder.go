@@ -27,9 +27,29 @@ type RepairSource interface {
 }
 
 // GateSource is the gate-verdict-rate gauges' data source. Satisfied
-// structurally by *experience.Store (VerdictCounts).
+// structurally by *experience.Store (VerdictCounts). These rates are
+// in-process and reset on restart — see GateInventorySource for the durable
+// counterpart.
 type GateSource interface {
 	VerdictCounts() (admit, quarantine, reject int64)
+}
+
+// GateInventorySource is the durable experience-inventory gauges' data
+// source (Phase 3). Satisfied structurally by *experience.Store
+// (InventoryCounts) — a per-poll OpenSearch _count of the admitted and
+// quarantine indices, so the gauges reflect real live composition across a
+// server restart instead of resetting to 0 like GateSource's in-process
+// rates.
+type GateInventorySource interface {
+	InventoryCounts(ctx context.Context) (admitted, quarantined int64, err error)
+}
+
+// GraphSource is the graph entity-count gauge's data source (Phase 3).
+// Satisfied structurally by *graph.Store (CountAllEntities) — a per-poll
+// OpenSearch _count of live entities across all tenants, the DW-6.3
+// stability signal wired onto /metrics.
+type GraphSource interface {
+	CountAllEntities(ctx context.Context) (int, error)
 }
 
 // CostSource is the extraction-cost gauge's data source. main.go supplies a
@@ -46,12 +66,14 @@ type CostSource interface {
 type Recorder struct {
 	Gauges *Gauges
 
-	Outbox OutboxSource
-	DLQ    DLQSource
-	Repair RepairSource
-	Gate   GateSource
-	Cost   CostSource
-	Alarm  *BudgetAlarm
+	Outbox        OutboxSource
+	DLQ           DLQSource
+	Repair        RepairSource
+	Gate          GateSource
+	GateInventory GateInventorySource
+	Graph         GraphSource
+	Cost          CostSource
+	Alarm         *BudgetAlarm
 
 	// Logger receives poll errors (best-effort observability; a failed poll
 	// is not fatal — the next tick retries).
@@ -110,6 +132,23 @@ func (r *Recorder) Poll(ctx context.Context) {
 		r.Gauges.GateAdmitRate.Record(ctx, admitRate)
 		r.Gauges.GateQuarantineRate.Record(ctx, quarantineRate)
 		r.Gauges.GateRejectRate.Record(ctx, rejectRate)
+	}
+	if r.GateInventory != nil {
+		admitted, quarantined, err := r.GateInventory.InventoryCounts(ctx)
+		if err != nil {
+			r.logger().WarnContext(ctx, "telemetry: polling experience inventory failed", "error", err)
+		} else {
+			r.Gauges.ExperienceAdmittedInventory.Record(ctx, float64(admitted))
+			r.Gauges.ExperienceQuarantinedInventory.Record(ctx, float64(quarantined))
+		}
+	}
+	if r.Graph != nil {
+		count, err := r.Graph.CountAllEntities(ctx)
+		if err != nil {
+			r.logger().WarnContext(ctx, "telemetry: polling graph entity count failed", "error", err)
+		} else {
+			r.Gauges.GraphEntityCount.Record(ctx, float64(count))
+		}
 	}
 	if r.Cost != nil {
 		costPer1k := r.Cost.CostPer1kEventsUSD()

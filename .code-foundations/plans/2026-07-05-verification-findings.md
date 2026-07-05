@@ -198,3 +198,9 @@ _To be filled during /code-foundations:build_
 - [x] REVIEW: PASS (reviewer reran fail-before/pass-after; auth/ACL correctly unguarded)
 - [x] Committed
 Summary: The infinite-reconcile-retry bug is fixed — a fresh/overridden semantic index now yields empty candidates instead of a 404 loop, and the server materializes its configured index names on boot. Auth/ACL barricade reads stay loud on a missing index (security). Bi-temporal + worker suites unregressed.
+
+### Phase 2: Graph dev-embedder clustering (Gate: Full) — Commit 4c1973a
+- [x] BUILD: WithNameKeyedDedup dev-only override + UpsertMention scope pre-filter
+- [x] REVIEW: PASS (dedup.go + homonym test byte-identical to Phase 6; dev-only gate; fail-before/pass-after reproduced)
+- [x] Committed
+Summary: Local/dev multi-hop connect-the-dots now works — the FakeEmbedder-only name-keyed dedup clusters same-named entities so A→B→C connects, while production HTTPEmbedder embedding and the homonym guarantee are untouched. Scope boundary enforced in UpsertMention. No regression to graph ACL (DW-6.4).
