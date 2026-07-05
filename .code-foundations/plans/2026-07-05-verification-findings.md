@@ -204,3 +204,9 @@ Summary: The infinite-reconcile-retry bug is fixed — a fresh/overridden semant
 - [x] REVIEW: PASS (dedup.go + homonym test byte-identical to Phase 6; dev-only gate; fail-before/pass-after reproduced)
 - [x] Committed
 Summary: Local/dev multi-hop connect-the-dots now works — the FakeEmbedder-only name-keyed dedup clusters same-named entities so A→B→C connects, while production HTTPEmbedder embedding and the homonym guarantee are untouched. Scope boundary enforced in UpsertMention. No regression to graph ACL (DW-6.4).
+
+### Phase 3: Durable telemetry + graph gauge (Gate: Standard) — Commit 052613b
+- [x] BUILD: durable inventory gauges + graph entity gauge + corrected descriptions
+- [x] REVIEW: PASS (survive-restart verified, descriptions honest, missing-index=0)
+- [x] Committed
+Summary: /metrics now shows durable experience-inventory and graph-entity gauges that survive a restart, and the in-process rate gauges no longer misdescribe themselves. Read-only _count polling; no gate/graph logic changed.

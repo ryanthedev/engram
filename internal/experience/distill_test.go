@@ -88,3 +88,51 @@ func TestDistill_PoisonedDirectiveQuarantined(t *testing.T) {
 		t.Fatalf("poisoned directive not quarantined; %d in quarantine", len(q))
 	}
 }
+
+// TestIsExperienceDirective pins the directive-line detector the CLI ingest
+// advisory (internal/cli) relies on: true only for the experience: prefix,
+// false on plain prose.
+func TestIsExperienceDirective(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"experience prefix", "experience: fix bug | patch the reader | success", true},
+		{"leading/trailing whitespace tolerated", "   experience: t | s | success   ", true},
+		{"plain prose", "the experience was pretty good overall", false},
+		{"empty line", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsExperienceDirective(tt.line); got != tt.want {
+				t.Errorf("IsExperienceDirective(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseExperienceLine pins well-formed vs malformed experience: lines
+// using the SAME parser Distill runs, so the CLI advisory can never disagree
+// with what actually gets distilled. Well-formed requires both positional
+// fields (task, distilled skill) to be non-empty.
+func TestParseExperienceLine(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"well-formed, full grammar", "experience: fix the leak | close the reader | success | phi=0.7", true},
+		{"well-formed, task and skill only", "experience: fix bug | patch code", true},
+		{"malformed: no pipe at all (prose after prefix)", "experience: just a note with no pipes", false},
+		{"malformed: skill field empty", "experience: fix bug | ", false},
+		{"non-directive line", "the experience was memorable", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ParseExperienceLine(tt.line); got != tt.want {
+				t.Errorf("ParseExperienceLine(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
