@@ -206,6 +206,30 @@ func (b *OpenSearchBackend) SoftExpire(ctx context.Context, _, fingerprint strin
 	return osDo(ctx, b.client, http.MethodPost, url, body)
 }
 
+// CountAdmitted implements Backend via a live-only (non-expired) _count
+// across all tenants — Phase 3's durable inventory telemetry signal. A
+// missing index (e.g. a fresh/scratch instance whose first Admit hasn't
+// landed yet) reads 0, not an error — the same index_not_found_exception
+// guard Phase 1 established for internal/store's read paths.
+func (b *OpenSearchBackend) CountAdmitted(ctx context.Context) (int64, error) {
+	q := map[string]any{"query": map[string]any{"bool": map[string]any{
+		"must_not": []any{map[string]any{"exists": map[string]any{"field": "expired_at"}}},
+	}}}
+	body, _ := json.Marshal(q)
+	status, decoded, err := osJSON(ctx, b.client, http.MethodPost, b.baseURL+"/"+b.admittedIndex+"/_count", body)
+	if err != nil {
+		return 0, err
+	}
+	if isIndexNotFound(status, decoded) {
+		return 0, nil // index not created yet: inventory is empty
+	}
+	if status != http.StatusOK {
+		return 0, fmt.Errorf("experience: counting admitted inventory: status %d: %v", status, decoded)
+	}
+	count, _ := decoded["count"].(float64)
+	return int64(count), nil
+}
+
 // BumpRetrieval implements the tier's optional retrievalBumper via a script update.
 func (b *OpenSearchBackend) BumpRetrieval(ctx context.Context, _, fingerprint string) error {
 	body, _ := json.Marshal(map[string]any{
@@ -300,8 +324,47 @@ func (b *OpenSearchBackend) DeleteQuarantine(ctx context.Context, _, fingerprint
 	return nil
 }
 
+// CountQuarantine implements Backend via an unfiltered _count across all
+// tenants — Phase 3's durable inventory telemetry signal. Every quarantined
+// record is "live" (release deletes it outright; there is no soft-expire
+// concept in quarantine), so no expired-doc exclusion is needed here,
+// unlike CountAdmitted. A missing index reads 0, not an error (same guard).
+func (b *OpenSearchBackend) CountQuarantine(ctx context.Context) (int64, error) {
+	status, decoded, err := osJSON(ctx, b.client, http.MethodPost, b.baseURL+"/"+b.quarantineIdx+"/_count", nil)
+	if err != nil {
+		return 0, err
+	}
+	if isIndexNotFound(status, decoded) {
+		return 0, nil // index not created yet: inventory is empty
+	}
+	if status != http.StatusOK {
+		return 0, fmt.Errorf("experience: counting quarantine inventory: status %d: %v", status, decoded)
+	}
+	count, _ := decoded["count"].(float64)
+	return int64(count), nil
+}
+
 // --- small OpenSearch HTTP helpers (self-contained; internal/store's are
 // unexported, so experience carries its own thin copies) ---
+
+// isIndexNotFound reports whether an OpenSearch response is the specific
+// index_not_found_exception (HTTP 404 whose error.type is exactly that
+// literal) — a read that reached an index which does not exist yet. The
+// inventory _count reads translate this ONE shape to an empty result: a
+// not-yet-created admitted/quarantine index has 0 documents, not an error.
+// Every other outcome (a transport failure, any non-404 status, or a 404
+// carrying a different error.type) is deliberately left for the caller to
+// surface as an error. Mirrors internal/store's isIndexNotFound; this
+// package keeps its own copy per the self-contained-helpers convention
+// above (no import of internal/store).
+func isIndexNotFound(status int, decoded map[string]any) bool {
+	if status != http.StatusNotFound {
+		return false
+	}
+	errObj, _ := decoded["error"].(map[string]any)
+	typ, _ := errObj["type"].(string)
+	return typ == "index_not_found_exception"
+}
 
 func osDo(ctx context.Context, client *http.Client, method, url string, body []byte) error {
 	status, decoded, err := osJSON(ctx, client, method, url, body)

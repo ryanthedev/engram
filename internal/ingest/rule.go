@@ -84,6 +84,46 @@ func synthesizeWire(events []memory.Episodic) (raw []byte, textLen, factCount in
 	return raw, textLen, len(wire)
 }
 
+// factDirectivePrefixes are the recognized fact-extraction directive
+// prefixes, in the order checked. Kept unexported: callers use
+// IsFactDirectiveLine rather than matching prefixes themselves.
+var factDirectivePrefixes = []string{"fact:", "retract:"}
+
+// IsFactDirectiveLine reports whether the trimmed line starts with a
+// fact:/retract: directive prefix. It lets a caller outside this package
+// (e.g. the CLI ingest advisory in internal/cli) detect a directive-looking
+// line without duplicating the grammar — pair with ParseFactDirectiveLine to
+// tell a well-formed directive from a malformed one.
+func IsFactDirectiveLine(line string) bool {
+	line = strings.TrimSpace(line)
+	for _, p := range factDirectivePrefixes {
+		if strings.HasPrefix(line, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseFactDirectiveLine attempts to parse a trimmed line already known to
+// carry a fact:/retract: prefix (see IsFactDirectiveLine), reporting whether
+// it is well-formed pipe-delimited grammar. It dispatches to the same
+// parseDirective call, with the same required-part counts, that
+// synthesizeWire uses — so this function and the real extraction path can
+// never disagree on "well-formed".
+func ParseFactDirectiveLine(line string) bool {
+	line = strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(line, "fact:"):
+		_, ok := parseDirective(strings.TrimPrefix(line, "fact:"), 3)
+		return ok
+	case strings.HasPrefix(line, "retract:"):
+		_, ok := parseDirective(strings.TrimPrefix(line, "retract:"), 2)
+		return ok
+	default:
+		return false
+	}
+}
+
 // parseDirective splits "s | p | o [@ time]" into a wireFact with n required
 // parts (3 for fact, 2 for retract). ok=false drops silently: the fake
 // mirrors an LLM, and an LLM never errors on prose it merely ignores.

@@ -35,6 +35,11 @@ type Backend interface {
 	// CountEntities returns the number of LIVE entities for tenant — the
 	// entity-count-stability metric (DW-6.3).
 	CountEntities(ctx context.Context, tenantID string) (int, error)
+	// CountAllEntities returns the number of LIVE entities across ALL
+	// tenants — Phase 3's durable graph telemetry signal (the all-tenant
+	// DW-6.3 stability signal wired onto /metrics), distinct from
+	// CountEntities' per-tenant scope.
+	CountAllEntities(ctx context.Context) (int, error)
 
 	// PutEdge upserts e keyed by its ID.
 	PutEdge(ctx context.Context, e Edge) error
@@ -55,17 +60,63 @@ type Store struct {
 	embedder embed.Embedder // optional: nil degrades dedup to lexical-only
 	logger   *slog.Logger
 	now      func() time.Time
+	// nameKeyedDedup switches the dedup-embedding INPUT from the fact
+	// context to the mention's normalized name alone. See
+	// WithNameKeyedDedup — production wiring must never set this.
+	nameKeyedDedup bool
+}
+
+// StoreOption configures optional Store behavior beyond the required
+// constructor arguments (mirrors ExpanderOption/BackendOption's convention
+// in this package).
+type StoreOption func(*Store)
+
+// WithNameKeyedDedup makes Store embed each mention's normalized NAME alone
+// for the dedup-similarity signal, instead of the fact's full context.
+//
+// Why this exists: the deterministic dev/e2e embedder (embed.FakeEmbedder)
+// is a literal hash of its input string — sha256(text) seeds a PRNG that
+// produces a unit vector. There is no partial or fuzzy similarity for a hash
+// function: two input strings that differ by even one token hash to
+// effectively uncorrelated vectors; only byte-identical input reliably
+// yields equal vectors. The production default (embedding the fact's full
+// context) means the SAME entity mentioned in two different facts always
+// gets two uncorrelated vectors under FakeEmbedder, indistinguishable from
+// a true homonym — Deduper.Decide (correctly, and unchanged by this option)
+// never merges them, so the local/dev stack cannot demonstrate multi-hop
+// connect-the-dots at all. Embedding the normalized name alone makes every
+// mention of the same entity hash identically, so they cluster and merge
+// through Decide's EXISTING weighted rule — Decide itself is not touched.
+//
+// This is a deliberate, DOCUMENTED trade, not a free lunch: with this
+// option enabled, the dev embedder also merges real homonyms (same name,
+// different real-world entity), because it no longer sees ANY
+// disambiguating context. That is an ACCEPTED dev-fixture limitation, not a
+// production regression — homonym separation is fundamentally a
+// real-semantic-embedder property (a real embedder given full context
+// distinguishes "Jordan the country" from "Jordan the athlete" by meaning;
+// a hash function given only "jordan" cannot distinguish anything). callers
+// MUST only enable this for a deterministic/fake embedder; production
+// wiring (a real embedder) must leave it off so real-embedder homonym
+// separation is preserved exactly as before.
+func WithNameKeyedDedup() StoreOption {
+	return func(s *Store) { s.nameKeyedDedup = true }
 }
 
 // NewStore returns a Store over backend and dedup. embedder may be nil
 // (dedup then relies on the lexical signal alone — degraded, not fatal,
 // matching the worker's optional-embedder convention). logger nil uses
-// slog.Default().
-func NewStore(backend Backend, dedup Deduper, embedder embed.Embedder, logger *slog.Logger) *Store {
+// slog.Default(). opts is empty in production; WithNameKeyedDedup is the
+// dev/e2e-only exception (see its doc comment).
+func NewStore(backend Backend, dedup Deduper, embedder embed.Embedder, logger *slog.Logger, opts ...StoreOption) *Store {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Store{backend: backend, dedup: dedup, embedder: embedder, logger: logger, now: time.Now}
+	s := &Store{backend: backend, dedup: dedup, embedder: embedder, logger: logger, now: time.Now}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // UpsertMention resolves m to a canonical entity: fetch name-key candidates,
@@ -79,7 +130,7 @@ func (s *Store) UpsertMention(ctx context.Context, m Mention) (entityID string, 
 	if m.TenantID == "" || strings.TrimSpace(m.Name) == "" {
 		return "", Decision{}, fmt.Errorf("graph: mention requires a tenant and a non-empty name")
 	}
-	vec := s.embed(ctx, m.Context)
+	vec := s.embed(ctx, m)
 
 	existing, err := s.backend.CandidateEntities(ctx, m.TenantID, m.Name)
 	if err != nil {
@@ -89,6 +140,16 @@ func (s *Store) UpsertMention(ctx context.Context, m Mention) (entityID string, 
 	byID := make(map[string]Entity, len(existing))
 	for _, e := range existing {
 		if !e.Live() {
+			continue
+		}
+		// (tenant, scope) merge boundary (plan-review finding): a
+		// same-normalized-name entity in a DIFFERENT scope (e.g. a
+		// private note's "Acme" vs a team's "Acme") is never a merge
+		// candidate for this mention. Enforced HERE, before Decide
+		// ever sees the candidate set, so Decide's signature/contract
+		// (Candidate carries no Scope) stays untouched — Decide simply
+		// never learns the scope-excluded candidates existed.
+		if e.Scope != m.Scope {
 			continue
 		}
 		byID[e.ID] = e
@@ -195,10 +256,24 @@ func (s *Store) CountEntities(ctx context.Context, tenantID string) (int, error)
 	return s.backend.CountEntities(ctx, tenantID)
 }
 
-// embed returns the context embedding for text, or nil if no embedder is
-// configured or embedding fails (degraded, not fatal — dedup falls back to
-// the lexical signal alone).
-func (s *Store) embed(ctx context.Context, text string) []float32 {
+// CountAllEntities returns the number of live entities across all tenants —
+// Phase 3's graph telemetry gauge's data source (the all-tenant DW-6.3
+// stability signal rendered on /metrics).
+func (s *Store) CountAllEntities(ctx context.Context) (int, error) {
+	return s.backend.CountAllEntities(ctx)
+}
+
+// embed returns the dedup-similarity embedding for m: the fact's full
+// context by default (production — preserves real-embedder homonym
+// separation via context), or m's normalized name alone when
+// nameKeyedDedup is enabled (dev/e2e only — see WithNameKeyedDedup). Returns
+// nil if no embedder is configured or embedding fails (degraded, not
+// fatal — dedup falls back to the lexical signal alone).
+func (s *Store) embed(ctx context.Context, m Mention) []float32 {
+	text := m.Context
+	if s.nameKeyedDedup {
+		text = normalizeName(m.Name)
+	}
 	if s.embedder == nil || strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -295,6 +370,19 @@ func (m *MemBackend) CountEntities(_ context.Context, tenantID string) (int, err
 	n := 0
 	for _, e := range m.entities {
 		if e.TenantID == tenantID && e.Live() {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// CountAllEntities implements Backend: live entities across every tenant.
+func (m *MemBackend) CountAllEntities(_ context.Context) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, e := range m.entities {
+		if e.Live() {
 			n++
 		}
 	}

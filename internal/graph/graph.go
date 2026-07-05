@@ -133,6 +133,9 @@ type Mention struct {
 	// fact's full Statement, not just Name. Two mentions with an identical
 	// Name but unrelated Context (the same-name-different-entity edge case)
 	// embed far apart even though their lexical score is a perfect match.
+	// (Store.WithNameKeyedDedup overrides this for the deterministic
+	// dev/e2e embedder only — see its doc comment; production always
+	// embeds Context as described here.)
 	Context  string
 	SourceID string
 }

@@ -195,6 +195,25 @@ func (s *OpenSearchStore) Update(ctx context.Context, id string, f memory.Semant
 	}
 }
 
+// isIndexNotFound reports whether an OpenSearch response is the specific
+// index_not_found_exception (HTTP 404 whose error.type is exactly that
+// literal) — a read that reached an index which does not exist yet. Read
+// paths translate this ONE shape to an empty result: a not-yet-created index
+// is empty, not broken (the first fact must not retry forever waiting for an
+// index a write has yet to create). Every other outcome is deliberately NOT
+// matched and left for the caller to surface as an error: a transport failure
+// (decoded is nil), any non-404 status, or a 404 carrying a different
+// error.type — so a genuine fault stays loud, and the distinct 404 handling on
+// a _doc/{id} GET (absence → ok=false) is never blurred into this.
+func isIndexNotFound(status int, decoded map[string]any) bool {
+	if status != http.StatusNotFound {
+		return false
+	}
+	errObj, _ := decoded["error"].(map[string]any)
+	typ, _ := errObj["type"].(string)
+	return typ == "index_not_found_exception"
+}
+
 // doJSON issues one JSON request and returns the status code and decoded
 // body. It is the Store package's shared HTTP primitive, alongside apply.go's
 // do (which discards the body — Apply never needs it).

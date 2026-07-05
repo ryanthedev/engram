@@ -39,6 +39,31 @@ func (RuleDistiller) Distill(text string) (Experience, bool) {
 	return Experience{}, false
 }
 
+// IsExperienceDirective reports whether the trimmed line starts with the
+// experience: directive prefix. It lets a caller outside this package (e.g.
+// the CLI ingest advisory in internal/cli) detect a directive-looking line
+// without duplicating the grammar — pair with ParseExperienceLine to tell a
+// well-formed directive from a malformed one.
+func IsExperienceDirective(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "experience:")
+}
+
+// ParseExperienceLine attempts to parse a trimmed line already known to
+// carry the experience: prefix (see IsExperienceDirective), reporting
+// whether the pipe-delimited grammar is well-formed: the two required
+// positional fields (task, distilled skill) both present and non-empty. It
+// shares parseExperienceDirective's field parsing with Distill, so this
+// function and the real distillation path can never disagree on
+// "well-formed".
+func ParseExperienceLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "experience:") {
+		return false
+	}
+	exp := parseExperienceDirective(strings.TrimPrefix(line, "experience:"))
+	return strings.TrimSpace(exp.Task) != "" && strings.TrimSpace(exp.DistilledSkill) != ""
+}
+
 func parseExperienceDirective(body string) Experience {
 	parts := strings.Split(body, "|")
 	exp := Experience{Utility: 0.5}

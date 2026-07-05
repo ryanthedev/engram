@@ -113,6 +113,16 @@ func main() {
 
 	st := store.NewOpenSearchStore(httpClient, *osURL,
 		store.WithEpisodicIndex(*episodicIndex), store.WithSemanticIndex(*semanticIndex), store.WithLedgerIndex(*ledgerIndex))
+	// Materialize the CONFIGURED index names now that Apply has PUT the
+	// templates: a -semantic/-episodic/-ledger-index override pointing at a
+	// not-yet-created index is created here so the first read/reconcile does
+	// not race a missing index (the read paths also treat a missing index as
+	// empty — belt and suspenders). A name that does not match its template
+	// pattern is rejected loudly rather than silently mis-mapped.
+	if _, err := st.EnsureIndices(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "error ensuring configured indices:", err)
+		os.Exit(1)
+	}
 	st.RegisterWriteGuard(acl.NewScopeGuard(edgeStore))
 	retriever := retrieval.NewOpenSearchRetriever(httpClient, *osURL, embedder,
 		retrieval.WithACL(aclFilter), retrieval.WithIndices(*episodicIndex, *semanticIndex))
@@ -166,9 +176,10 @@ func main() {
 	// Registers the graph worker stage (D20) and the ACL-bounded post-hook
 	// expander (Phase-4 seam) — no worker/retriever core edits. Registration
 	// must precede wk.Run so the stage is active for the first claimed batch.
-	if err := wireGraph(ctx, httpClient, *osURL, graphConfig{
+	graphStore, err := wireGraph(ctx, httpClient, *osURL, graphConfig{
 		judgeURL: *graphJudgeURL, judgeModel: *graphJudgeModel, expandDepth: *graphExpandDepth,
-	}, embedder, wk, retriever, slog.Default()); err != nil {
+	}, embedder, wk, retriever, slog.Default())
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "error wiring graph memory:", err)
 		os.Exit(1)
 	}
@@ -214,14 +225,16 @@ func main() {
 		os.Exit(1)
 	}
 	recorder := &telemetry.Recorder{
-		Gauges: gauges,
-		Outbox: st,
-		DLQ:    st,
-		Repair: sweeper,
-		Gate:   experienceStore,
-		Cost:   costSourceFunc(func() float64 { return meter.Snapshot().CostPer1kEventsUSD(pricing) }),
-		Alarm:  budgetAlarm,
-		Logger: slog.Default(),
+		Gauges:        gauges,
+		Outbox:        st,
+		DLQ:           st,
+		Repair:        sweeper,
+		Gate:          experienceStore,
+		GateInventory: experienceStore,
+		Graph:         graphStore,
+		Cost:          costSourceFunc(func() float64 { return meter.Snapshot().CostPer1kEventsUSD(pricing) }),
+		Alarm:         budgetAlarm,
+		Logger:        slog.Default(),
 	}
 	go recorder.Run(ctx, *metricsInterval)
 	metricsMux := http.NewServeMux()

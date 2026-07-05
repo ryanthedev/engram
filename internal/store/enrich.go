@@ -40,6 +40,9 @@ func (s *OpenSearchStore) FindUnembedded(ctx context.Context, limit int) ([]Unem
 	if err != nil {
 		return nil, fmt.Errorf("store: scanning for unembedded episodic docs: %w", err)
 	}
+	if isIndexNotFound(status, decoded) {
+		return nil, nil // episodic index not created yet: nothing to embed
+	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("store: scanning for unembedded episodic docs: unexpected status %d: %v", status, decoded)
 	}

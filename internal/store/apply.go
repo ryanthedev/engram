@@ -75,26 +75,77 @@ func Apply(ctx context.Context, client *http.Client, baseURL string) (ApplyResul
 	}
 
 	for _, idx := range []string{EpisodicIndex, SemanticIndex, LedgerIndex, AuthTokenIndex, ACLEdgesIndex} {
-		exists, err := indexExists(ctx, client, base, idx)
+		action, err := ensureIndex(ctx, client, base, idx)
 		if err != nil {
-			return res, fmt.Errorf("store: checking index %s: %w", idx, err)
+			return res, err
 		}
-		if exists {
-			res.Actions[idx] = "unchanged"
-			continue
-		}
-		switch err := do(ctx, client, http.MethodPut, base+"/"+idx, nil); {
-		case err == nil:
-			res.Actions[idx] = "created"
-		case strings.Contains(err.Error(), "resource_already_exists_exception"):
-			// A concurrent Apply won the exists-check/create race; the index
-			// is there, which is all idempotency promises.
-			res.Actions[idx] = "unchanged"
-		default:
-			return res, fmt.Errorf("store: creating index %s: %w", idx, err)
-		}
+		res.Actions[idx] = action
 	}
 	return res, nil
+}
+
+// ensureIndex idempotently creates index if absent, inheriting whatever
+// engram-<tier>* template already matches its name (Apply PUTs the templates
+// first). It returns "unchanged" when the index already exists — including
+// when a concurrent creator won the exists-check/create race — and "created"
+// when this call made it. It is the shared body behind both Apply's default
+// indices and EnsureIndices' configured ones.
+func ensureIndex(ctx context.Context, client *http.Client, base, index string) (action string, err error) {
+	exists, err := indexExists(ctx, client, base, index)
+	if err != nil {
+		return "", fmt.Errorf("store: checking index %s: %w", index, err)
+	}
+	if exists {
+		return "unchanged", nil
+	}
+	switch err := do(ctx, client, http.MethodPut, base+"/"+index, nil); {
+	case err == nil:
+		return "created", nil
+	case strings.Contains(err.Error(), "resource_already_exists_exception"):
+		// A concurrent creator won the exists-check/create race; the index is
+		// there, which is all idempotency promises.
+		return "unchanged", nil
+	default:
+		return "", fmt.Errorf("store: creating index %s: %w", index, err)
+	}
+}
+
+// EnsureIndices materializes THIS store's configured episodic/semantic/ledger
+// index names on the cluster so a fresh instance whose -episodic/-semantic/
+// -ledger-index override points at not-yet-created indices reconciles its
+// first fact with no manual bootstrap. It is the boot-time suspenders to the
+// read-path 404-as-empty belt: call it once at startup, AFTER Apply has PUT
+// the index templates, so each created index inherits the engram-<tier>*
+// mapping (knn_vector + bi-temporal fields).
+//
+// Each configured name is first validated against its required engram-<tier>*
+// template prefix: an override that would inherit the WRONG template (e.g. a
+// semantic index misnamed under the episodic pattern) is rejected here as a
+// loud boot error rather than silently created with a wrong dynamic mapping.
+// Creation is idempotent — re-running reports every index "unchanged" — and
+// returns each configured index name mapped to its action.
+func (s *OpenSearchStore) EnsureIndices(ctx context.Context) (map[string]string, error) {
+	base := strings.TrimRight(s.baseURL, "/")
+	configured := []struct {
+		name   string
+		prefix string
+	}{
+		{s.episodicIndex, EpisodicTemplateName},
+		{s.semanticIndex, SemanticTemplateName},
+		{s.ledgerIndex, LedgerTemplateName},
+	}
+	actions := make(map[string]string, len(configured))
+	for _, c := range configured {
+		if !strings.HasPrefix(c.name, c.prefix) {
+			return actions, fmt.Errorf("store: configured index %q does not match template pattern %q* — it would inherit the wrong mapping; rename it to start with %q", c.name, c.prefix, c.prefix)
+		}
+		action, err := ensureIndex(ctx, s.client, base, c.name)
+		if err != nil {
+			return actions, err
+		}
+		actions[c.name] = action
+	}
+	return actions, nil
 }
 
 // clusterVersion fetches version.number from the cluster root endpoint.

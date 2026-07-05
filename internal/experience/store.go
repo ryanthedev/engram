@@ -44,6 +44,12 @@ type Backend interface {
 	ScanPrunable(ctx context.Context, phiMax float64, retrievalMax int) ([]Experience, error)
 	// SoftExpire stamps expired_at on the admitted doc (never deletes — D3).
 	SoftExpire(ctx context.Context, tenantID, fingerprint string, at time.Time) error
+	// CountAdmitted returns the number of LIVE documents currently in the
+	// admitted index, across all tenants — durable CURRENT INVENTORY (Phase
+	// 3's telemetry signal), NOT a cumulative admit-verdict count: a
+	// pruned/soft-expired doc is excluded, matching SearchAdmitted's
+	// live-only contract.
+	CountAdmitted(ctx context.Context) (int64, error)
 
 	// PutQuarantine upserts q into the quarantine index (never retrievable).
 	PutQuarantine(ctx context.Context, q Quarantined) error
@@ -53,6 +59,12 @@ type Backend interface {
 	GetQuarantine(ctx context.Context, tenantID, fingerprint string) (Quarantined, bool, error)
 	// DeleteQuarantine removes a quarantined record (on release).
 	DeleteQuarantine(ctx context.Context, tenantID, fingerprint string) error
+	// CountQuarantine returns the number of documents currently in the
+	// quarantine index, across all tenants — durable CURRENT INVENTORY
+	// (Phase 3's telemetry signal). Quarantine has no soft-expire concept
+	// (a released record is deleted outright), so this count is naturally
+	// always "live."
+	CountQuarantine(ctx context.Context) (int64, error)
 }
 
 // Store is the SOLE writer of the admitted T3 index and the mandatory
@@ -154,6 +166,27 @@ func (s *Store) Admit(ctx context.Context, exp Experience) (Verdict, error) {
 // to the caller directly and never silently miscounted).
 func (s *Store) VerdictCounts() (admit, quarantine, reject int64) {
 	return s.admitted.Load(), s.quarantined.Load(), s.rejected.Load()
+}
+
+// InventoryCounts returns the CURRENT LIVE document counts in the admitted
+// and quarantine indices — Phase 3's durable telemetry signal. Unlike
+// VerdictCounts (a cumulative, in-process, resets-on-restart tally of gate
+// decisions since this process started), InventoryCounts reflects durable
+// OpenSearch state: it survives a restart, and it measures live
+// COMPOSITION, not a cumulative verdict RATE — an admitted doc can be
+// pruned/soft-expired out of the live count over time, and Reject never
+// appears here at all (Admit's Reject branch drops the record; there is no
+// durable reject trace by design, see Admit's doc comment).
+func (s *Store) InventoryCounts(ctx context.Context) (admitted, quarantined int64, err error) {
+	admitted, err = s.backend.CountAdmitted(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("experience: counting admitted inventory: %w", err)
+	}
+	quarantined, err = s.backend.CountQuarantine(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("experience: counting quarantine inventory: %w", err)
+	}
+	return admitted, quarantined, nil
 }
 
 // admitMerged upserts an admitted experience, merging a same-fingerprint
@@ -380,6 +413,20 @@ func (m *MemBackend) ScanPrunable(_ context.Context, phiMax float64, retrievalMa
 	return out, nil
 }
 
+// CountAdmitted implements Backend: live docs in the in-memory admitted map,
+// across all tenants.
+func (m *MemBackend) CountAdmitted(_ context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	for _, exp := range m.admitted {
+		if exp.Live() {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // SoftExpire implements Backend: stamps expired_at once, never deletes.
 func (m *MemBackend) SoftExpire(_ context.Context, tenantID, fingerprint string, at time.Time) error {
 	m.mu.Lock()
@@ -435,6 +482,14 @@ func (m *MemBackend) DeleteQuarantine(_ context.Context, tenantID, fingerprint s
 	defer m.mu.Unlock()
 	delete(m.quarantine, memKey(tenantID, fingerprint))
 	return nil
+}
+
+// CountQuarantine implements Backend: every quarantined record currently
+// held, across all tenants.
+func (m *MemBackend) CountQuarantine(_ context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return int64(len(m.quarantine)), nil
 }
 
 // BumpRetrieval increments an admitted experience's retrieval count (used by

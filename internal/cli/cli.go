@@ -47,7 +47,7 @@ func Run(ctx context.Context, args []string, env Env, out, errW io.Writer) int {
 	case "quarantine":
 		err = runQuarantine(ctx, rest, env, out)
 	case "ingest":
-		err = runIngest(ctx, rest, env, out)
+		err = runIngest(ctx, rest, env, out, errW)
 	case "search":
 		err = runSearch(ctx, rest, env, out)
 	case "status":
@@ -83,6 +83,20 @@ Usage:
   engram audit          <fact-id> [-addr HOST:PORT] [-token TOK]
   engram quarantine list    --tenant T [--url URL]
   engram quarantine release <fingerprint> --tenant T [--url URL]
+
+Ingest text is normally plain prose — the production extractor is an LLM that
+reads prose directly, so plain prose needs no special formatting. --text may
+also carry optional pipe-delimited directive lines (one per line), mainly
+useful for deterministic fixtures/local runs without an LLM:
+  fact: subject | predicate | object [@ RFC3339 valid_at]
+  retract: subject | predicate [@ RFC3339 valid_at]
+  experience: task | distilled skill | success|failure | phi=0..1 | evidence=e1;e2 | signals=s1;s2 | context=...
+A line starting with fact:/retract:/experience: that fails to parse this
+grammar prints a non-fatal advisory to stderr; it never blocks the ingest.
+
+--event-id is not a full idempotency key: derived semantic facts are deduped by content;
+the raw episodic log entry for --text, however, is appended on every ingest call — replaying
+the same --event-id does not deduplicate the raw log.
 
 Environment: ENGRAM_OPENSEARCH_URL, ENGRAM_ADDR, ENGRAM_TOKEN.`
 
@@ -195,10 +209,12 @@ func dialClient(env Env, addr, token string) (*engramclient.Client, error) {
 	return engramclient.Dial(a, tok)
 }
 
-func runIngest(ctx context.Context, args []string, env Env, out io.Writer) error {
+func runIngest(ctx context.Context, args []string, env Env, out, errW io.Writer) error {
 	fs := flag.NewFlagSet("ingest", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	eventID := fs.String("event-id", "", "idempotency event id (required)")
+	eventID := fs.String("event-id", "",
+		"event id (required); derived semantic facts are deduped by content, not by this id — "+
+			"the raw episodic log entry is appended on every call regardless")
 	text := fs.String("text", "", "event text (required)")
 	source := fs.String("source", "", "source id")
 	scope := fs.String("scope", "", "scope: private|team|org (default private)")
@@ -210,6 +226,11 @@ func runIngest(ctx context.Context, args []string, env Env, out io.Writer) error
 	}
 	if *eventID == "" || *text == "" {
 		return errors.New("ingest: --event-id and --text are required")
+	}
+	// Client-side advisory only: never blocks or changes the ingest outcome,
+	// just flags a directive-looking line that won't extract as intended.
+	if msg := directiveAdvisory(*text); msg != "" {
+		fmt.Fprintln(errW, msg)
 	}
 	client, err := dialClient(env, *addr, *token)
 	if err != nil {

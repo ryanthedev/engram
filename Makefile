@@ -39,7 +39,7 @@ proto-check: proto
 # (pinned 3.1) — includes the Phase-2 worker/outbox/ledger live tests and the
 # Phase-7 versioned-index/alias-flip mechanism (deploy/aws/reindex).
 integration:
-	ENGRAM_OPENSEARCH_URL=$(OPENSEARCH_URL) go test -tags=integration -count=1 -v ./internal/spike/ ./internal/store/ ./internal/retrieval/ ./internal/server/ ./internal/eval/... ./internal/worker/ ./internal/ingest/ ./internal/experience/ ./internal/graph/ ./deploy/aws/reindex/...
+	ENGRAM_OPENSEARCH_URL=$(OPENSEARCH_URL) go test -tags=integration -count=1 -v ./internal/spike/ ./internal/store/ ./internal/retrieval/ ./internal/server/ ./internal/eval/... ./internal/worker/ ./internal/ingest/ ./internal/experience/ ./internal/graph/ ./internal/telemetry/ ./deploy/aws/reindex/...
 
 # DW-1.5: performance harness (perf environment, not CI — see the plan).
 perf:

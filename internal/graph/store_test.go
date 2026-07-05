@@ -18,6 +18,16 @@ func newTestStore(t *testing.T) (*Store, *MemBackend) {
 	return NewStore(backend, dedup, embedder, slog.Default()), backend
 }
 
+// newNameKeyedTestStore is newTestStore with WithNameKeyedDedup enabled —
+// the dev/e2e-only mode finding #2's fix introduces (DW-2.1/DW-2.2/DW-2.3).
+func newNameKeyedTestStore(t *testing.T) (*Store, *MemBackend) {
+	t.Helper()
+	backend := NewMemBackend()
+	dedup := mustDeduper(t, RuleJudge{})
+	embedder := embed.NewFakeEmbedder(8, nil)
+	return NewStore(backend, dedup, embedder, slog.Default(), WithNameKeyedDedup()), backend
+}
+
 // TestDW_6_1_IngestTouchesOnlyItsOwnEntities: ingesting one episode's
 // mentions never recomputes or mutates an unrelated, already-landed entity —
 // no batch recompute, ever (D2).
@@ -117,6 +127,135 @@ func TestHomonymDisambiguation_ThroughStore(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("entity count = %d, want 2 (disambiguated homonyms)", count)
+	}
+}
+
+// TestDW_2_1_NameKeyedDedup_SameEntityDifferentFactContextMerges: under the
+// deterministic dev embedder in name-keyed mode (WithNameKeyedDedup), the
+// SAME entity mentioned in two facts with UNRELATED fact context resolves
+// to exactly ONE entity doc — this is finding #2's dev-stack fragmentation,
+// fixed. Before this option existed, this scenario (exercised without the
+// option — see TestNameKeyedDedup_IsOptInOnly_DefaultStoreStillFragments
+// below) produced TWO entity docs; WithNameKeyedDedup is the fix.
+func TestDW_2_1_NameKeyedDedup_SameEntityDifferentFactContextMerges(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newNameKeyedTestStore(t)
+
+	id1, dec1, err := store.UpsertMention(ctx, Mention{TenantID: "t1", Scope: "private", Name: "Acme Corp", Context: "Acme Corp shipped the Q1 release", SourceID: "ev-1"})
+	if err != nil {
+		t.Fatalf("first mention: %v", err)
+	}
+	if dec1.Merge {
+		t.Fatalf("first-ever mention of an entity should create, not merge: %+v", dec1)
+	}
+	id2, dec2, err := store.UpsertMention(ctx, Mention{TenantID: "t1", Scope: "private", Name: "Acme Corp", Context: "Acme Corp announced a merger with Widget Inc", SourceID: "ev-2"})
+	if err != nil {
+		t.Fatalf("second mention: %v", err)
+	}
+	if !dec2.Merge {
+		t.Fatalf("second mention of the same entity (different fact context) did not merge: %+v", dec2)
+	}
+	if id1 != id2 {
+		t.Fatalf("same entity across two facts resolved to two different entity ids: %s vs %s", id1, id2)
+	}
+	count, err := store.CountEntities(ctx, "t1")
+	if err != nil {
+		t.Fatalf("CountEntities: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("entity count = %d, want 1 (same entity merged across facts, not fragmented)", count)
+	}
+}
+
+// TestNameKeyedDedup_IsOptInOnly_DefaultStoreStillFragments pins the "before"
+// half of DW-2.1's fails-before/passes-after proof: the DEFAULT Store (no
+// WithNameKeyedDedup, i.e. every existing production/test construction path)
+// still embeds full fact context, so the identical same-entity-two-facts
+// scenario from TestDW_2_1_... still fragments into two entities under the
+// fake embedder. This also documents that WithNameKeyedDedup is additive —
+// it changes nothing for a caller who doesn't opt in.
+func TestNameKeyedDedup_IsOptInOnly_DefaultStoreStillFragments(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(t) // default: NOT name-keyed
+
+	id1, _, err := store.UpsertMention(ctx, Mention{TenantID: "t1", Scope: "private", Name: "Acme Corp", Context: "Acme Corp shipped the Q1 release", SourceID: "ev-1"})
+	if err != nil {
+		t.Fatalf("first mention: %v", err)
+	}
+	id2, dec, err := store.UpsertMention(ctx, Mention{TenantID: "t1", Scope: "private", Name: "Acme Corp", Context: "Acme Corp announced a merger with Widget Inc", SourceID: "ev-2"})
+	if err != nil {
+		t.Fatalf("second mention: %v", err)
+	}
+	if dec.Merge || id1 == id2 {
+		t.Fatalf("expected the DEFAULT (non-name-keyed) store to still fragment same-entity mentions under the fake embedder (id1=%s id2=%s merge=%v) — if this now merges, the production embedding contract has silently changed", id1, id2, dec.Merge)
+	}
+}
+
+// TestDW_2_3_NameKeyedDedup_RepeatedIngestEntityCountStable: DW-6.3's
+// stability contract (10x re-ingest of an identical mention never grows the
+// entity count) still holds under the NEW name-keyed dev mode, not just the
+// default store the existing DW-6.3 tests exercise.
+func TestDW_2_3_NameKeyedDedup_RepeatedIngestEntityCountStable(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newNameKeyedTestStore(t)
+
+	mention := Mention{TenantID: "t1", Scope: "private", Name: "acme-svc", Context: "acme-svc owns checkout", SourceID: "ev-x"}
+	var firstID string
+	for i := 0; i < 10; i++ {
+		id, dec, err := store.UpsertMention(ctx, mention)
+		if err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
+		if i == 0 {
+			firstID = id
+		} else if id != firstID {
+			t.Fatalf("iteration %d: entity id changed (%s -> %s)", i, firstID, id)
+		} else if !dec.Merge {
+			t.Fatalf("iteration %d: expected a merge decision, got new-entity", i)
+		}
+	}
+	count, err := store.CountEntities(ctx, "t1")
+	if err != nil {
+		t.Fatalf("CountEntities: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("entity count = %d, want 1 (stable under name-keyed dedup)", count)
+	}
+}
+
+// TestScopePreFilter_PrivateAndTeamSameNameStaySeparate: the (tenant, scope)
+// merge boundary (plan-review finding) — a private-scope entity and a
+// team-scope entity sharing an exact name AND identical context in the SAME
+// tenant are never merge candidates for each other, because UpsertMention
+// pre-filters candidates by scope before Decide ever sees them (Decide's
+// signature carries no Scope field and is not asked to enforce this).
+// Without the pre-filter, identical name+context would clear the merge
+// threshold easily (embed sim = lex sim = 1.0) — this test would fail.
+func TestScopePreFilter_PrivateAndTeamSameNameStaySeparate(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(t)
+	sameContext := "Acme is discussed in this note"
+
+	privID, _, err := store.UpsertMention(ctx, Mention{TenantID: "t1", Scope: "private", OwnerAgentID: "a1", Name: "Acme", Context: sameContext, SourceID: "ev-1"})
+	if err != nil {
+		t.Fatalf("private mention: %v", err)
+	}
+	teamID, dec, err := store.UpsertMention(ctx, Mention{TenantID: "t1", Scope: "team", TeamID: "team-x", Name: "Acme", Context: sameContext, SourceID: "ev-2"})
+	if err != nil {
+		t.Fatalf("team mention: %v", err)
+	}
+	if dec.Merge {
+		t.Fatalf("private-scope and team-scope same-name entities merged across the scope boundary: %+v", dec)
+	}
+	if privID == teamID {
+		t.Fatal("private-scope and team-scope same-name entities resolved to the same entity id")
+	}
+	count, err := store.CountEntities(ctx, "t1")
+	if err != nil {
+		t.Fatalf("CountEntities: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("entity count = %d, want 2 (scope-separated despite identical name+context)", count)
 	}
 }
 

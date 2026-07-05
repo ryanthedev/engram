@@ -44,6 +44,9 @@ func (s *OpenSearchStore) countTenant(ctx context.Context, index, tenantID strin
 	if err != nil {
 		return 0, fmt.Errorf("store: counting %s: %w", index, err)
 	}
+	if isIndexNotFound(status, decoded) {
+		return 0, nil // index not created yet: count 0
+	}
 	if status != http.StatusOK {
 		return 0, fmt.Errorf("store: counting %s: unexpected status %d: %v", index, status, decoded)
 	}

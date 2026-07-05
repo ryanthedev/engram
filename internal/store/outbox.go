@@ -47,6 +47,9 @@ func (s *OpenSearchStore) ClaimBatch(ctx context.Context, n int, lease time.Dura
 	if err != nil {
 		return nil, fmt.Errorf("store: scanning outbox: %w", err)
 	}
+	if isIndexNotFound(status, decoded) {
+		return nil, nil // episodic index not created yet: nothing to claim
+	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("store: scanning outbox: unexpected status %d: %v", status, decoded)
 	}

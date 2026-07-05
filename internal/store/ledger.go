@@ -140,6 +140,9 @@ func (s *OpenSearchStore) ScanIncomplete(ctx context.Context) ([]LedgerEntry, er
 	if err != nil {
 		return nil, fmt.Errorf("store: scanning incomplete ledger entries: %w", err)
 	}
+	if isIndexNotFound(status, decoded) {
+		return nil, nil // ledger index not created yet: no incomplete entries
+	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("store: scanning incomplete ledger entries: unexpected status %d: %v", status, decoded)
 	}

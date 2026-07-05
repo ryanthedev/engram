@@ -26,6 +26,9 @@ func (s *OpenSearchStore) PendingBacklog(ctx context.Context) (count int64, olde
 	if err != nil {
 		return 0, 0, fmt.Errorf("store: counting pending backlog: %w", err)
 	}
+	if isIndexNotFound(status, decoded) {
+		return 0, 0, nil // episodic index not created yet: empty backlog, zero lag
+	}
 	if status != http.StatusOK {
 		return 0, 0, fmt.Errorf("store: counting pending backlog: unexpected status %d: %v", status, decoded)
 	}
@@ -48,6 +51,9 @@ func (s *OpenSearchStore) PendingBacklog(ctx context.Context) (count int64, olde
 	status, decoded, err = doJSON(ctx, s.client, http.MethodPost, s.baseURL+"/"+s.episodicIndex+"/_search", body)
 	if err != nil {
 		return count, 0, fmt.Errorf("store: reading oldest pending: %w", err)
+	}
+	if isIndexNotFound(status, decoded) {
+		return count, 0, nil // index vanished between count and search: no oldest doc
 	}
 	if status != http.StatusOK {
 		return count, 0, fmt.Errorf("store: reading oldest pending: unexpected status %d: %v", status, decoded)
@@ -91,6 +97,9 @@ func (s *OpenSearchStore) DeadLetteredCount(ctx context.Context) (int64, error) 
 	status, decoded, err := doJSON(ctx, s.client, http.MethodPost, s.baseURL+"/"+s.episodicIndex+"/_count", body)
 	if err != nil {
 		return 0, fmt.Errorf("store: counting dead-lettered docs: %w", err)
+	}
+	if isIndexNotFound(status, decoded) {
+		return 0, nil // episodic index not created yet: no dead-lettered docs
 	}
 	if status != http.StatusOK {
 		return 0, fmt.Errorf("store: counting dead-lettered docs: unexpected status %d: %v", status, decoded)

@@ -12,6 +12,7 @@ import (
 	"github.com/ryanthedev/engram/internal/acl"
 	"github.com/ryanthedev/engram/internal/auth"
 	"github.com/ryanthedev/engram/internal/embed"
+	"github.com/ryanthedev/engram/internal/memory"
 	"github.com/ryanthedev/engram/internal/retrieval"
 	"github.com/ryanthedev/engram/internal/store"
 	"github.com/ryanthedev/engram/internal/testutil"
@@ -61,6 +62,18 @@ func newLiveStore(t *testing.T) (*Store, *OpenSearchBackend) {
 	dedup := mustDeduper(t, RuleJudge{})
 	embedder := embed.NewFakeEmbedder(store.EmbeddingDim, nil)
 	return NewStore(backend, dedup, embedder, slog.Default()), backend
+}
+
+// newLiveNameKeyedStore is newLiveStore with WithNameKeyedDedup enabled —
+// the dev/e2e wiring cmd/engram-server/stages_graph.go applies whenever the
+// configured embedder is the deterministic fake embedder (finding #2's fix).
+func newLiveNameKeyedStore(t *testing.T) (*Store, *OpenSearchBackend) {
+	t.Helper()
+	backend, cleanup := scratchBackend(t)
+	t.Cleanup(cleanup)
+	dedup := mustDeduper(t, RuleJudge{})
+	embedder := embed.NewFakeEmbedder(store.EmbeddingDim, nil)
+	return NewStore(backend, dedup, embedder, slog.Default(), WithNameKeyedDedup()), backend
 }
 
 // TestIntegration_ApplyIsIdempotent: re-running Apply against an up-to-date
@@ -213,6 +226,88 @@ func TestDW_6_2_Integration_TwoHopConnectTheDots(t *testing.T) {
 	}
 	if !foundC {
 		t.Fatalf("2-hop expansion did not reach C: %+v", hits)
+	}
+}
+
+// TestDW_2_2_Integration_NameKeyedDedup_TwoHopThroughRealStage reproduces
+// the verifier's exact failing scenario: a 3-fact A->B->C chain, ingested
+// through the REAL graph.Stage.Process — not hand-built via UpsertMention +
+// UpsertEdge with already-known ids the way
+// TestDW_6_2_Integration_TwoHopConnectTheDots above does (that test only
+// ever mentions B ONCE, so it never actually exercises the fragmentation
+// bug). Stage.Process upserts BOTH the subject and object mention of every
+// fact using that fact's OWN Statement as context, so entity B is
+// independently mentioned TWICE: once as fact 1's object (context
+// "A works_at B") and once as fact 2's subject (context "B located_in C").
+// Under the default (non-name-keyed) store this fragments B into two
+// entities and a 2-hop query anchored on A fails to reach C. Under
+// name-keyed dedup (finding #2's fix, wired for the deterministic fake
+// embedder), B's second mention merges into the SAME entity id, so the
+// edge chain stays connected and C is reached.
+func TestDW_2_2_Integration_NameKeyedDedup_TwoHopThroughRealStage(t *testing.T) {
+	ctx := context.Background()
+	st, _ := newLiveNameKeyedStore(t)
+	stage := NewStage(st, slog.Default())
+
+	ev1 := memory.Episodic{EventID: "ev-1", TenantID: "t1", OwnerAgentID: "a1", Scope: "private"}
+	fact1 := memory.SemanticFact{
+		Subject: "A", Predicate: "works_at", Object: "B", Statement: "A works_at B",
+		TenantID: "t1", OwnerAgentID: "a1", Scope: "private", ValidAt: time.Now().UTC(),
+	}
+	if err := stage.Process(ctx, ev1, []memory.SemanticFact{fact1}); err != nil {
+		t.Fatalf("process fact 1 (A works_at B): %v", err)
+	}
+
+	ev2 := memory.Episodic{EventID: "ev-2", TenantID: "t1", OwnerAgentID: "a1", Scope: "private"}
+	fact2 := memory.SemanticFact{
+		Subject: "B", Predicate: "located_in", Object: "C", Statement: "B located_in C",
+		TenantID: "t1", OwnerAgentID: "a1", Scope: "private", ValidAt: time.Now().UTC(),
+	}
+	if err := stage.Process(ctx, ev2, []memory.SemanticFact{fact2}); err != nil {
+		t.Fatalf("process fact 2 (B located_in C): %v", err)
+	}
+
+	// If B fragmented (the bug), there are 4 entities (A, B1, B2, C)
+	// instead of 3 (A, B, C) — this pins the entity-count half of the
+	// regression, independent of the traversal check below.
+	count, err := st.CountEntities(ctx, "t1")
+	if err != nil {
+		t.Fatalf("CountEntities: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("entity count = %d, want 3 (A, B, C) — B fragmented into more than one entity across the two facts", count)
+	}
+
+	expander, err := NewExpander(st, 2, slog.Default())
+	if err != nil {
+		t.Fatalf("NewExpander: %v", err)
+	}
+	edges := fakeEdgeSource{reach: map[string]acl.Reach{"u1": {Agents: []string{"a1"}}}}
+	aclFilter := acl.NewFilter(edges, slog.Default())
+	httpClient := testutil.HTTPClient
+	retriever := retrieval.NewOpenSearchRetriever(httpClient, testutil.OpenSearchURL(), embed.NewFakeEmbedder(store.EmbeddingDim, nil), retrieval.WithACL(aclFilter))
+	retriever.RegisterPostHook(expander)
+	retriever.RegisterTier(&seedTier{hits: []retrieval.Hit{semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}})
+
+	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
+	hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", K: 10}, retrieval.Filter{Identity: caller})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	foundC := false
+	for _, h := range hits {
+		if h.Source != "graph" {
+			continue
+		}
+		if s, _ := h.Fields["subject"].(string); s == "C" {
+			foundC = true
+		}
+		if o, _ := h.Fields["object"].(string); o == "C" {
+			foundC = true
+		}
+	}
+	if !foundC {
+		t.Fatalf("2-hop expansion over a real Stage-ingested A->B->C chain did not reach C: %+v", hits)
 	}
 }
 
