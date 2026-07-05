@@ -54,7 +54,18 @@ func wireGraph(ctx context.Context, httpClient *http.Client, osURL string, cfg g
 	}
 
 	backend := graph.NewOpenSearchBackend(httpClient, osURL)
-	store := graph.NewStore(backend, dedup, embedder, logger)
+	// Name-keyed dedup (finding #2) is enabled ONLY for the deterministic
+	// dev/e2e fake embedder — tied directly to the embedder's own concrete
+	// identity (not a separately-threaded config flag that could drift out
+	// of sync with reality). Production's real embedder (embed.HTTPEmbedder)
+	// never enables this, so real-embedder homonym separation via fact
+	// context is unaffected. See graph.WithNameKeyedDedup's doc comment.
+	var storeOpts []graph.StoreOption
+	if _, ok := embedder.(*embed.FakeEmbedder); ok {
+		storeOpts = append(storeOpts, graph.WithNameKeyedDedup())
+		logger.Info("graph dedup: name-keyed mention embedding enabled (deterministic dev/fake embedder detected)")
+	}
+	store := graph.NewStore(backend, dedup, embedder, logger, storeOpts...)
 
 	// Graph worker stage (D20): registered in its own file, no worker-core
 	// edits. Derives entity/edge upserts from each event's landed facts.

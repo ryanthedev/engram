@@ -190,3 +190,11 @@
 
 ## Execution Log
 _To be filled during /code-foundations:build_
+
+## Execution Log
+
+### Phase 1: Read-path index robustness (Gate: Full) — Commit $(git rev-parse --short HEAD)
+- [x] BUILD: isIndexNotFound guard at all 14 read sites + EnsureIndices boot-ensure
+- [x] REVIEW: PASS (reviewer reran fail-before/pass-after; auth/ACL correctly unguarded)
+- [x] Committed
+Summary: The infinite-reconcile-retry bug is fixed — a fresh/overridden semantic index now yields empty candidates instead of a 404 loop, and the server materializes its configured index names on boot. Auth/ACL barricade reads stay loud on a missing index (security). Bi-temporal + worker suites unregressed.
