@@ -1,9 +1,9 @@
 # Plan: Engram — Production (Phases 3–8)
 
 **Created:** 2026-07-03
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-03 12:40 (build worktree: .claude/worktrees/engram-production, branch feature/engram-production)
-**Current Phase:** 3
+**Current Phase:** 8 (complete)
 **Complexity:** complex
 **Chains from:** `.code-foundations/plans/2026-06-29-engram-walking-skeleton.md` (Phases 0–2, build-ready). Together the two plans form the full 9-phase roadmap (0–8). All decisions D0–D16 from the skeleton plan carry over unchanged.
 
@@ -319,3 +319,10 @@ Summary: T4 graph is live — per-episode entity/edge upsert with dedup (flat en
 - [x] Committed
 Commit: 0c32b79
 Summary: Engram is deployable, observed, and recoverable. The deploy CLI converges idempotently and now rolls out on any task-def change (image/cpu/mem/port); rollback + snapshot-restore are real and drilled; telemetry gauges move under load; budget alarm + kill-switch guard cost. Restore RTO ~0.1s, failure drills lose no data. **Open pre-production gates (recorded):** (1) real-AWS `make deploy-staging/prod` + cloud e2e — tooling built/local-tested, real run is a documented manual step (no cloud creds here); (2) multi-instance staging load-test re-run — burst search p95 breaches on the single-node local cluster (sustained holds); docs/runbooks/load-test-s1-vs-s2.md tracks it as required before prod.
+
+### Phase 8: Eval & Safety Gates (Gate: Standard)
+- [x] BUILD: HaluMem hallucination suite, retrieval-regression gate vs versioned baseline, following-correlation gate, CI gate job, flaky-quarantine, bad-release drill, dashboards
+- [x] REVIEW: PASS — bad-release drill blocks a poisoned release, gates confirmed read-only, flaky-quarantine works, suite <1s
+- [x] Committed
+Commit: 6e9a32d
+Summary: The eval harness is now a CI release gate — three independent detectors (hallucination, retrieval regression, experience-following) with versioned thresholds block deploy-prod on a red exit code; flaky gates auto-quarantine; a bad-release drill proves a poisoned release is blocked; dashboards show >=3-run trend. The full 9-phase Engram build (0-8) is functionally complete.
