@@ -13,7 +13,8 @@ E2E_ADDR := localhost:7071
 
 .PHONY: build test lint proto proto-check integration apply-templates eval dev-cluster e2e e2e-up e2e-down \
 	deploy-staging deploy-prod deploy-localstack deploy-localstack-up deploy-localstack-down \
-	loadtest drill e2e-cloud eval-seed eval-gate eval-dashboard eval-drill
+	loadtest drill e2e-cloud eval-seed eval-gate eval-dashboard eval-drill \
+	extract-shim smoke-extract-shim
 
 build:
 	go build ./...
@@ -71,6 +72,25 @@ drill:
 # address baked in.
 e2e-cloud:
 	go test -tags=e2e -count=1 -timeout=300s ./e2e/
+
+# Phase 1 (extraction-cli-shim): build + run the host-side extraction shim
+# that satisfies engramd's chat-completions contract by shelling out to a
+# selectable cheap-model CLI (agy default; codex/claude via BACKEND=). Runs
+# on the HOST (not in the compose stack) because the CLI backends' auth
+# lives there — see deploy/local/docker-compose.yml's engramd -extract-url
+# and .code-foundations/research/2026-07-08-extraction-cli-shim.md.
+SHIM_ADDR ?= :8088
+BACKEND ?= agy
+
+extract-shim:
+	go run ./cmd/engram-extract-shim -addr $(SHIM_ADDR) -backend $(BACKEND)
+
+# DW-1.6: the live smoke test — real agy CLI, cheap model, one sample
+# sentence through the real HTTP endpoint. Gated behind the `smoke` build
+# tag (like `integration`'s live-OpenSearch tag) so it never runs as part of
+# `make test`; skips cleanly with a reason if agy isn't on PATH/authed.
+smoke-extract-shim:
+	go test -tags=smoke -count=1 -v ./cmd/engram-extract-shim/... -run TestDW_1_6_LiveSmokeAgyExtractsFaithfulTriple
 
 apply-templates:
 	go run ./cmd/engram-apply-templates -url $(OPENSEARCH_URL)

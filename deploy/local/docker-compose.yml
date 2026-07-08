@@ -56,7 +56,13 @@ services:
       - "-embed-url"
       - "http://embed:8081"
       - "-extract-url"
-      - "http://stub-llm:8082"
+      # cmd/engram-extract-shim runs on the HOST (it shells out to CLI
+      # backends — agy/codex/claude — whose auth lives there), not as a
+      # compose service. host.docker.internal resolves it from inside the
+      # container; extra_hosts below makes that resolve on Linux too, where
+      # Docker Desktop's automatic mapping isn't present. See
+      # .code-foundations/research/2026-07-08-extraction-cli-shim.md.
+      - "http://host.docker.internal:8088"
       - "-poll-interval"
       - "500ms"
       - "-sweep-interval"
@@ -65,13 +71,17 @@ services:
       - "500ms"
     ports:
       - "7071:7070" # host 7071 -> engramd 7070 (distinct from a dev engramd on 7070)
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Linux portability; no-op on Docker Desktop
     depends_on:
       opensearch:
         condition: service_healthy
       embed:
         condition: service_healthy
-      stub-llm:
-        condition: service_healthy
+      # stub-llm's own healthcheck dependency is intentionally dropped: the
+      # host-side extract-shim isn't a compose service and has no compose
+      # healthcheck to gate on. Extraction calls retry on failure, so a
+      # briefly-unreachable shim is tolerable at cold start.
     healthcheck:
       # engramd has no HTTP health endpoint; a TCP probe on the gRPC port is
       # enough for compose to gate readiness.
