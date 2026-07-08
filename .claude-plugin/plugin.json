@@ -16,7 +16,7 @@
   ],
   "mcpServers": {
     "engram": {
-      "command": "${HOME}/repos/engram/bin/engram-mcp",
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/engram-mcp",
       "args": [
         "-addr",
         "${ENGRAM_ADDR}"
