@@ -1,0 +1,30 @@
+{
+  "name": "engram",
+  "version": "0.1.0",
+  "description": "Engram agent-memory platform — hybrid retrieval over episodic/semantic/experience/graph tiers, exposed to Claude Code as memory_ingest / memory_search / memory_status. Requires a running engramd (see ENGRAM_ADDR) and a bearer token (ENGRAM_TOKEN).",
+  "author": {
+    "name": "rtd"
+  },
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "opensearch",
+    "hybrid-retrieval",
+    "knowledge-graph",
+    "bi-temporal"
+  ],
+  "mcpServers": {
+    "engram": {
+      "command": "${HOME}/repos/engram/bin/engram-mcp",
+      "args": [
+        "-addr",
+        "${ENGRAM_ADDR}"
+      ],
+      "env": {
+        "ENGRAM_TOKEN": "${ENGRAM_TOKEN}",
+        "ENGRAM_ADDR": "${ENGRAM_ADDR}"
+      }
+    }
+  }
+}
