@@ -48,6 +48,37 @@ type Backend interface {
 	// Neighbors returns every LIVE edge touching entityID in either
 	// direction (the traversal primitive GraphExpander's BFS uses).
 	Neighbors(ctx context.Context, tenantID, entityID string) ([]Edge, error)
+
+	// ScanEntities returns one page (ascending id order) of LIVE entities
+	// for tenantID, resuming after cursor. A zero Cursor starts at the
+	// beginning; a zero returned next Cursor means the tier is exhausted —
+	// this page was the last one. Unlike CandidateEntities/Neighbors, Scan
+	// never silently truncates: repeated calls with the advancing cursor
+	// eventually visit every live entity in tenantID exactly once. An
+	// empty or not-yet-created index returns an empty page and a zero
+	// cursor, never an error.
+	ScanEntities(ctx context.Context, tenantID string, cursor Cursor) (items []Entity, next Cursor, err error)
+	// ScanEdges is ScanEntities' edge-tier counterpart: one page of LIVE
+	// edges (InvalidAt==nil && ExpiredAt==nil) for tenantID, same cursor
+	// contract.
+	ScanEdges(ctx context.Context, tenantID string, cursor Cursor) (items []Edge, next Cursor, err error)
+}
+
+// Cursor is an opaque pagination token returned by Scan{Entities,Edges} and
+// passed back in to resume. The zero value means "start from the
+// beginning" when passed in, and "no more pages" when returned as next —
+// callers never construct or inspect a non-zero Cursor themselves, they
+// only round-trip the value a previous Scan call handed back. Shared by
+// both entity and edge scans because both tiers sort on the same kind of
+// field: a deterministic, non-empty id (see graph.go's newEntityID /
+// edgeFingerprint) that alone is sufficient as a total-order tie-break —
+// no realistic need for a multi-field sort key has been identified.
+type Cursor struct {
+	// after is the last id seen on the previous page (ascending order);
+	// the next page's query resumes strictly after this id. Entity/Edge
+	// ids are always non-empty sha256 hex, so "" unambiguously means "no
+	// cursor" and can never collide with a real id.
+	after string
 }
 
 // Store is the deep module callers use: it hides the candidate-lookup +
@@ -263,6 +294,21 @@ func (s *Store) CountAllEntities(ctx context.Context) (int, error) {
 	return s.backend.CountAllEntities(ctx)
 }
 
+// ScanEntities returns one page of LIVE entities for tenantID, resuming
+// after cursor — see Backend.ScanEntities for the full pagination contract.
+// This is the read foundation the export endpoint's full-graph walk builds
+// on: unlike CandidateEntities/Neighbors, it never silently truncates a
+// tier.
+func (s *Store) ScanEntities(ctx context.Context, tenantID string, cursor Cursor) ([]Entity, Cursor, error) {
+	return s.backend.ScanEntities(ctx, tenantID, cursor)
+}
+
+// ScanEdges is ScanEntities' edge-tier counterpart — see
+// Backend.ScanEdges.
+func (s *Store) ScanEdges(ctx context.Context, tenantID string, cursor Cursor) ([]Edge, Cursor, error) {
+	return s.backend.ScanEdges(ctx, tenantID, cursor)
+}
+
 // embed returns the dedup-similarity embedding for m: the fact's full
 // context by default (production — preserves real-embedder homonym
 // separation via context), or m's normalized name alone when
@@ -302,6 +348,13 @@ func containsFold(xs []string, want string) bool {
 	}
 	return false
 }
+
+// scanBatchSize is the page size Scan{Entities,Edges} uses on both
+// MemBackend and OpenSearchBackend. A var, not a const: in-package
+// white-box tests shrink it to exercise real multi-page pagination without
+// needing thousands of fixture records. No exported surface reaches it, so
+// it cannot be misused outside this package.
+var scanBatchSize = 500
 
 // MemBackend is the in-memory Backend for unit tests. Safe for concurrent
 // use. CandidateEntities does token-overlap prefiltering (bounded) rather
@@ -424,4 +477,66 @@ func (m *MemBackend) Neighbors(_ context.Context, tenantID, entityID string) ([]
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+// ScanEntities implements Backend: one page (ascending id order) of live,
+// tenant-scoped entities, resuming after cursor.after. Mirrors
+// OpenSearchBackend.ScanEntities' page-boundary contract (next is zero iff
+// this page held fewer than scanBatchSize items) so MemBackend is a
+// faithful stand-in for pagination behavior in unit tests.
+func (m *MemBackend) ScanEntities(_ context.Context, tenantID string, cursor Cursor) ([]Entity, Cursor, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var all []Entity
+	for _, e := range m.entities {
+		if e.TenantID == tenantID && e.Live() {
+			all = append(all, e)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	return scanPage(all, cursor, func(e Entity) string { return e.ID })
+}
+
+// ScanEdges implements Backend: one page of live, tenant-scoped edges,
+// resuming after cursor.after. Same page-boundary contract as
+// ScanEntities.
+func (m *MemBackend) ScanEdges(_ context.Context, tenantID string, cursor Cursor) ([]Edge, Cursor, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var all []Edge
+	for _, e := range m.edges {
+		if e.TenantID == tenantID && e.Live() {
+			all = append(all, e)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	return scanPage(all, cursor, func(e Edge) string { return e.ID })
+}
+
+// scanPage slices one scanBatchSize-bounded page out of a slice already
+// sorted ascending by id, resuming strictly after cursor.after. Shared by
+// MemBackend.ScanEntities/ScanEdges so the pagination arithmetic (binary
+// search for the resume point) lives in exactly one place regardless of
+// tier. Page-boundary next-cursor detection is delegated to
+// nextScanCursor — deliberately, even though MemBackend could look ahead
+// and know for certain whether start+scanBatchSize is the true end: using
+// the SAME "full page ⇒ assume more, verify on the next call" rule
+// OpenSearchBackend must use (it cannot look ahead) keeps MemBackend a
+// faithful pagination stand-in rather than a backend that behaves more
+// intelligently than production ever can.
+func scanPage[T any](sorted []T, cursor Cursor, id func(T) string) ([]T, Cursor, error) {
+	start := 0
+	if cursor.after != "" {
+		start = sort.Search(len(sorted), func(i int) bool { return id(sorted[i]) > cursor.after })
+	}
+	if start >= len(sorted) {
+		return nil, Cursor{}, nil
+	}
+	end := start + scanBatchSize
+	if end > len(sorted) {
+		end = len(sorted)
+	}
+	page := append([]T{}, sorted[start:end]...)
+	next := nextScanCursor(len(page), func() string { return id(page[len(page)-1]) })
+	return page, next, nil
 }

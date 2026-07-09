@@ -283,6 +283,111 @@ func (b *OpenSearchBackend) Neighbors(ctx context.Context, tenantID, entityID st
 	return out, nil
 }
 
+// ScanEntities implements Backend: one page of live, tenant-scoped entities
+// sorted ascending by id, using OpenSearch's search_after over that sort —
+// a deterministic total order, so repeated calls with the advancing cursor
+// paginate the whole tier completely and stably (no duplicate/skipped docs
+// across pages, even as the underlying index keeps accepting writes
+// elsewhere — this is a snapshot-per-page, not a point-in-time snapshot of
+// the whole tier; see the plan's "acceptable that concurrent writes during
+// export may be missed" note). A missing index (isIndexNotFound) reads as
+// an empty, exhausted page rather than an error — the same guard
+// CountEntities uses.
+func (b *OpenSearchBackend) ScanEntities(ctx context.Context, tenantID string, cursor Cursor) ([]Entity, Cursor, error) {
+	q := scanQuery(tenantID, cursor, []any{map[string]any{"exists": map[string]any{"field": "expired_at"}}})
+	body, err := json.Marshal(q)
+	if err != nil {
+		return nil, Cursor{}, fmt.Errorf("graph: encoding scan-entities query: %w", err)
+	}
+	status, decoded, err := osJSON(ctx, b.client, http.MethodPost, b.baseURL+"/"+b.entityIndex+"/_search", body)
+	if err != nil {
+		return nil, Cursor{}, err
+	}
+	if isIndexNotFound(status, decoded) {
+		return nil, Cursor{}, nil
+	}
+	if status != http.StatusOK {
+		return nil, Cursor{}, fmt.Errorf("graph: scan entities returned status %d: %v", status, decoded)
+	}
+	hits := osSearchHits(decoded)
+	out := make([]Entity, 0, len(hits))
+	for _, hit := range hits {
+		var e Entity
+		if err := osDecodeSource(hit, &e); err != nil {
+			return nil, Cursor{}, err
+		}
+		out = append(out, e)
+	}
+	return out, nextScanCursor(len(out), func() string { return out[len(out)-1].ID }), nil
+}
+
+// ScanEdges is ScanEntities' edge-tier counterpart. The live filter differs
+// from the entity tier per the plan constraint: an edge must have neither
+// expired_at nor invalid_at set (Edge.Live()), whereas an entity checks
+// expired_at alone.
+func (b *OpenSearchBackend) ScanEdges(ctx context.Context, tenantID string, cursor Cursor) ([]Edge, Cursor, error) {
+	q := scanQuery(tenantID, cursor, []any{
+		map[string]any{"exists": map[string]any{"field": "expired_at"}},
+		map[string]any{"exists": map[string]any{"field": "invalid_at"}},
+	})
+	body, err := json.Marshal(q)
+	if err != nil {
+		return nil, Cursor{}, fmt.Errorf("graph: encoding scan-edges query: %w", err)
+	}
+	status, decoded, err := osJSON(ctx, b.client, http.MethodPost, b.baseURL+"/"+b.edgeIndex+"/_search", body)
+	if err != nil {
+		return nil, Cursor{}, err
+	}
+	if isIndexNotFound(status, decoded) {
+		return nil, Cursor{}, nil
+	}
+	if status != http.StatusOK {
+		return nil, Cursor{}, fmt.Errorf("graph: scan edges returned status %d: %v", status, decoded)
+	}
+	hits := osSearchHits(decoded)
+	out := make([]Edge, 0, len(hits))
+	for _, hit := range hits {
+		var e Edge
+		if err := osDecodeSource(hit, &e); err != nil {
+			return nil, Cursor{}, err
+		}
+		out = append(out, e)
+	}
+	return out, nextScanCursor(len(out), func() string { return out[len(out)-1].ID }), nil
+}
+
+// scanQuery builds the shared shape Scan{Entities,Edges} sends: tenant-term
+// filter, size-bounded, sorted ascending by id (the search_after tie-break
+// field), must_not the tier's own liveness-exclusion clauses, and
+// search_after set from cursor.after when resuming.
+func scanQuery(tenantID string, cursor Cursor, liveExclusions []any) map[string]any {
+	q := map[string]any{
+		"size": scanBatchSize,
+		"sort": []any{map[string]any{"id": "asc"}},
+		"query": map[string]any{"bool": map[string]any{
+			"filter":   []any{map[string]any{"term": map[string]any{"tenant_id": tenantID}}},
+			"must_not": liveExclusions,
+		}},
+	}
+	if cursor.after != "" {
+		q["search_after"] = []any{cursor.after}
+	}
+	return q
+}
+
+// nextScanCursor derives the returned next Cursor from a page's hit count:
+// a full page (== scanBatchSize) may have more behind it, so next resumes
+// after lastID(); a short page is the tier's last page, so next is zero
+// (exhausted). A tenant whose live-record count is an exact multiple of
+// scanBatchSize costs one extra, empty round trip to discover exhaustion —
+// an accepted, standard pagination trade.
+func nextScanCursor(hitCount int, lastID func() string) Cursor {
+	if hitCount == scanBatchSize {
+		return Cursor{after: lastID()}
+	}
+	return Cursor{}
+}
+
 // --- small OpenSearch HTTP helpers (self-contained; internal/store's are
 // unexported, so graph carries its own thin copies, matching experience's
 // osDo/osJSON/osSearchHits/osDecodeSource precedent) ---
