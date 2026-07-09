@@ -1,9 +1,10 @@
 # Plan: CLI-backed extraction shim for engram
 
 **Created:** 2026-07-08
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-08 17:05
-**Current Phase:** 2
+**Completed:** 2026-07-08 22:04
+**Duration:** 2026-07-08 17:05 → 22:04
 **Complexity:** simple
 
 ---
@@ -132,3 +133,10 @@ Full contract, CLI test results, and risks: `.code-foundations/research/2026-07-
 - [x] Committed
 Commit: cd59abe
 Summary: Delivered cmd/engram-extract-shim — a host HTTP server on :8088 speaking engramd's /chat/completions + /health contract, delegating to a pluggable cheap-model CLI backend (agy default; codex/claude opt-in) via an exec arg-slice with fence-stripping + degrade-to-[] barricading and a bounded per-call timeout; rewired deploy/local/docker-compose.yml to point -extract-url at host.docker.internal:8088 (extra_hosts added, stub dependency relaxed) and added Makefile targets. 56 shim tests + full repo green; live agy smoke extracts a faithful triple. This is the live endpoint Phase 2 re-extracts through.
+
+### Phase 2: Backfill re-extraction + verification (Gate: Standard)
+- [x] BUILD: Discovery + design + operational execution complete
+- [x] REVIEW: Verification passed — single sonnet review, all 4 DW items PASS against live system state; safety-critical tenant-scoping of the reset script independently confirmed
+- [x] Committed
+Commit: 30718a3
+Summary: Re-extracted the rtd events through the live agy-backed shim and populated the semantic tier — semantic_count 0 → 367 for tenant rtd, directly observed via memory_status. Required BOTH the -extractor-version v1→v2 bump (re-keys the ledger so the worker doesn't short-circuit) AND a tenant-scoped processed_at reset (ClaimBatch keys the outbox on processed_at, not extractor_version) — confirmed against outbox.go/worker.go source. Added scripts/backfill-reextract-rtd.sh (snapshots ids, exact term filter on tenant_id, no cross-tenant reach). Reconciliation converged clean: 0 dead-lettered, 367 distinct content_keys (no dup explosion), 185 events each yielding ≥1 fact.
