@@ -3,7 +3,7 @@
 **Created:** 2026-07-08
 **Status:** in-progress
 **Started:** 2026-07-08 22:10
-**Current Phase:** 1
+**Current Phase:** 2
 **Complexity:** simple
 
 ---
@@ -97,7 +97,7 @@ Full wire contract, CLI flags, and per-CLI gotchas: `.code-foundations/research/
 - [ ] DW-2.1: With the shim on `-backend ensemble`, re-extraction of the `rtd` events into the `v3` ledger fires — observed in engramd logs (extraction calls, not `ErrNoFacts` for prose-bearing events).
 - [ ] DW-2.2: `memory_status` shows the semantic tier populated by the v3 ensemble pass (report the count; note v2-vs-v3 coexistence/supersede as observed).
 - [ ] DW-2.3: A documented A/B spot-check of ≥3 events shows the ensemble triple is at least as faithful as — and in ≥3 cases better than — the v2 single-pass; and confirms NO CLAUDE.md-derived facts leaked into the live store.
-- [ ] DW-2.4: Reconciliation converges — no dead-lettered events, no duplicate-fact explosion beyond the documented cross-version behavior; repair backlog drains.
+- [ ] DW-2.4: Reconciliation converges — repair backlog drains (0 pending), no duplicate-fact explosion beyond the documented cross-version behavior. **Amended by user decision 2026-07-09**: 3 permanent dead-letters were found and root-caused (fixed 30s extraction-client timeout undersized for the ensemble's 3-model pipeline; dead-lettering is coded non-self-healing) — but all 3 events already have full v3 fact coverage in the live store, confirming no data loss. The user accepted this as a documented, non-blocking follow-up rather than a phase-blocking failure; DW-2.4 is met on that basis (backlog drained, no data loss, root cause identified) rather than the original literal "zero dead-letters" bar.
 
 ---
 
@@ -124,8 +124,16 @@ Full wire contract, CLI flags, and per-CLI gotchas: `.code-foundations/research/
 - **Cross-version accumulation is an open build-time question** (like the v1→v2 re-claim was): whether v3 supersedes or coexists with v2 facts is confirmed against the reconciler in Phase 2, not assumed. Coexistence is acceptable for an A/B; a destructive cleanup is out of scope.
 - **Latency compounds:** ~15-20s/event × 182 ≈ 45-60 min for the sweep, three models per event. On-demand only — never the live default (per the scope decision).
 - **Optional follow-on (not planned here):** a periodic "dream"-style re-extract cadence that reruns the ensemble over the corpus on a schedule; pairs naturally with this on-demand deep pass.
+- **Follow-up 1 (accepted, non-blocking, 2026-07-09):** the extraction client's fixed 30s timeout (`store.DefaultTimeout`, `cmd/engram-server/main.go`) is undersized for the ensemble backend's 3-model pipeline (2 candidates + judge), which produced 3 permanent dead-letters during the v3 sweep. Dead-lettering is coded non-self-healing (`internal/store/outbox.go`). No data loss occurred (all 3 events have full v3 fact coverage), but a future ensemble run would hit the same timeout. Fix: raise the timeout (or make it backend-aware) before the next `-backend ensemble` sweep.
+- **Follow-up 2 (accepted, non-blocking, 2026-07-09):** engramd was left on `-extractor-version v3` while the live shim was switched back to `-backend agy` for steady-state (per this plan's "agy stays default" intent). This means new events ingested going forward are labeled `v3` in the ledger but are actually extracted via the fast agy single-pass, not the ensemble — a label/reality mismatch. Not destructive, but worth realigning (bump back to `v2`, or accept `v3` as the new steady-state label) in a future pass.
 
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Ensemble backend (agy ∥ codex → sonnet judge) (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed — 3-sample fable majority, PASS 3/3 (one reviewer also ran an unprompted adversarial prompt-injection probe against the live judge; held clean)
+- [x] Committed
+Commit: ca8e7b8
+Summary: Delivered `-backend ensemble` — agy and codex run concurrently as independent candidate extractors, claude-sonnet-5 (subscription CLI auth, no API key) judges the two sets against the source event and returns the reconciled, deduped triple array through the existing envelope/barricade. Composes the Phase-1 leaf backends rather than reimplementing exec/timeout machinery. A live guard test proves the judge does not leak CLAUDE.md-derived facts despite the CLI's global CLAUDE.md injection. agy remains the fast live default; ensemble is opt-in. This is the backend Phase 2 points the deep re-extract sweep at.
