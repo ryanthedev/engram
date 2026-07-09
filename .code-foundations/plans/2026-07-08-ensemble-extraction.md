@@ -1,9 +1,10 @@
 # Plan: Triple-pass ensemble extraction for engram
 
 **Created:** 2026-07-08
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-08 22:10
-**Current Phase:** 2
+**Completed:** 2026-07-09 07:56
+**Duration:** 2026-07-08 22:10 → 2026-07-09 07:56
 **Complexity:** simple
 
 ---
@@ -137,3 +138,10 @@ Full wire contract, CLI flags, and per-CLI gotchas: `.code-foundations/research/
 - [x] Committed
 Commit: ca8e7b8
 Summary: Delivered `-backend ensemble` — agy and codex run concurrently as independent candidate extractors, claude-sonnet-5 (subscription CLI auth, no API key) judges the two sets against the source event and returns the reconciled, deduped triple array through the existing envelope/barricade. Composes the Phase-1 leaf backends rather than reimplementing exec/timeout machinery. A live guard test proves the judge does not leak CLAUDE.md-derived facts despite the CLI's global CLAUDE.md injection. agy remains the fast live default; ensemble is opt-in. This is the backend Phase 2 points the deep re-extract sweep at.
+
+### Phase 2: Deep re-extract to v3 + quality A/B (Gate: Standard)
+- [x] BUILD: Discovery + design + operational execution complete (resumed once after a user interruption of the first dispatch — the live sweep had already completed unattended; a second agent independently re-verified settlement and finished the required analysis). Returned UPDATE_PLAN on one amended DW; user reviewed and accepted (see DW-2.4 amendment above and Notes follow-ups).
+- [x] REVIEW: Verification passed — single sonnet review, independently re-derived every number from live OpenSearch aggregations rather than trusting the discovery doc; closed one gap the discovery doc had left unverified (confirmed the `invalid_at` supersede stamp directly)
+- [x] Committed
+Commit: 9b2cb63
+Summary: Deep-re-extracted the 186 rtd events through `-backend ensemble` into a v2→v3 ledger — semantic tier 367 → 730 facts (370 v2 + 360 v3, 0 content_key collisions). Confirmed reconciliation is content-key-scoped: exact-match facts supersede (16 pairs, `invalid_at` stamped), distinct facts coexist. A/B spot-check (5 pairs) showed 4 strict quality wins + 1 parity for the ensemble. CLAUDE.md-leak scan clean under live, uncontrolled conditions. Two non-blocking follow-ups accepted and documented: a timeout-undersized-for-ensemble bug (3 benign dead-letters, no data loss, root-caused) and a v3-label/agy-runtime mismatch now that the live shim is back on the fast `agy` default (PID 55653).
