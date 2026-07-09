@@ -54,6 +54,8 @@ func Run(ctx context.Context, args []string, env Env, out, errW io.Writer) int {
 		err = runStatus(ctx, rest, env, out)
 	case "audit":
 		err = runAudit(ctx, rest, env, out)
+	case "export":
+		err = runExport(ctx, rest, env, out)
 	case "help", "-h", "--help":
 		fmt.Fprintln(out, usage)
 		return 0
@@ -81,6 +83,7 @@ Usage:
   engram search         QUERY [-k 10] [-addr HOST:PORT] [-token TOK]
   engram status         [-addr HOST:PORT] [-token TOK]
   engram audit          <fact-id> [-addr HOST:PORT] [-token TOK]
+  engram export         <dir> [--force] [-addr HOST:PORT] [-token TOK]
   engram quarantine list    --tenant T [--url URL]
   engram quarantine release <fingerprint> --tenant T [--url URL]
 

@@ -11,9 +11,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.42.5
 	github.com/aws/smithy-go v1.27.3
 	github.com/prometheus/client_golang v1.23.2
+	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/prometheus v0.66.0
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
+	go.yaml.in/yaml/v2 v2.4.4
 	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -41,10 +43,8 @@ require (
 	github.com/prometheus/otlptranslator v1.0.0 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
-	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.36.0 // indirect

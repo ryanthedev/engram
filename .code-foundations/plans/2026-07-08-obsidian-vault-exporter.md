@@ -277,5 +277,12 @@ Summary: Added cursor-paginated `ScanEntities`/`ScanEdges` to `graph.Backend`/`S
 - [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
 - [x] REVIEW: 3-sample security review — first round PASS/FAIL/FAIL on a test-coverage-only gap (code confirmed correct by all 3); coverage closed to 100% (test-only fix, no production change); re-review 3/3 PASS
 - [x] Committed
-Commit: _pending_
+Commit: a46d82e
 Summary: Added unary `Export(ExportRequest) returns (ExportResponse)` RPC — tenant pinned from verified identity (cursor carries no tenancy), per-record ACL fail-closed, `Unimplemented` on nil seam, opaque rejection of garbage cursors. Wire cursor (base64url JSON) chains the Phase 1 graph cursor entities-then-edges. Added `Exporter` seam on `Server`, `engramclient.Export(ctx, cursor)`, and `Cursor` text (un)marshal. Runs under the existing unary auth chain — no new interceptor. `Export` handler at 100% coverage; 487 tests green.
+
+### Phase 3: CLI `export` + Obsidian vault rendering (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: 3-sample security review — 3/3 PASS; path confinement (DW-3.6) held under adversarial tracing (two-layer barricade). One non-blocking follow-up recorded: symlinked `--force` target could bypass the extra root/$HOME catastrophic-delete guard (outside DW-3.6 threat model; fix = `filepath.EvalSymlinks`)
+- [x] Committed
+Commit: _pending_
+Summary: Added `engram export <dir> [--force]` subcommand: pages the Export RPC to exhaustion, accumulates, and renders an Obsidian vault via a pure `writeVault` renderer — entity notes (H1 + YAML frontmatter with aliases/mention_count/provenance) and edges as `- <predicate> [[file|Name]]` piped bullets. Deterministic id-suffixed homonym filenames; two-layer path-traversal barricade (sanitize + `confinedNotePath` re-check) so untrusted names can't escape `<dir>`; danglers dropped with a printed count; marker-owned dir with clean-late `--force` clobber. Added `engramclient.ExportPage` plain-struct adapter (respects the `importlint` boundary that bars `api/engrampb` from `internal/cli`). 19 unit tests + live e2e scenario (16/16 against local OpenSearch); 506 tests green.
