@@ -60,8 +60,17 @@ func newBackend(name, model string) (Backend, error) {
 		return codexBackend{Model: model}, nil
 	case "claude":
 		return claudeBackend{Model: model}, nil
+	case "ensemble":
+		// The judge is always claude-sonnet-5 (judgeModel, ensemble.go) — an
+		// internal constant per the plan, never the -model override, which
+		// only threads through to the two candidate extractors.
+		return ensembleBackend{
+			Agy:   agyBackend{Model: model},
+			Codex: codexBackend{Model: model},
+			Judge: claudeBackend{Model: judgeModel},
+		}, nil
 	default:
-		return nil, fmt.Errorf("%w: %q (want agy, codex, or claude)", ErrUnknownBackend, name)
+		return nil, fmt.Errorf("%w: %q (want agy, codex, claude, or ensemble)", ErrUnknownBackend, name)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8088", "listen address")
-	backendName := flag.String("backend", envOr("SHIM_BACKEND", "agy"), "extraction backend: agy, codex, or claude")
+	backendName := flag.String("backend", envOr("SHIM_BACKEND", "agy"), "extraction backend: agy, codex, claude, or ensemble (agy+codex reconciled by a claude-sonnet judge)")
 	model := flag.String("model", envOr("SHIM_MODEL", ""), "backend-specific model override (defaults to each backend's cheap-model preset)")
 	timeout := flag.Duration("timeout", envDurationOr("SHIM_TIMEOUT", 60*time.Second), "per-call timeout for the backend CLI")
 	flag.Parse()
