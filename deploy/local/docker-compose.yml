@@ -69,6 +69,14 @@ services:
       - "2s"
       - "-enrich-interval"
       - "500ms"
+      - "-extractor-version"
+      # Bumped v1 -> v2 to re-key the ledger for the Phase 2 backfill
+      # (.code-foundations/plans/2026-07-08-extraction-cli-shim.md): the
+      # already-processed rtd events are re-claimed via a scoped
+      # processed_at reset (scripts/backfill-reextract-rtd.sh) and the v2
+      # ledger key ensures they actually re-extract instead of short-
+      # circuiting on the existing v1 LedgerComplete entries.
+      - "v2"
     ports:
       - "7071:7070" # host 7071 -> engramd 7070 (distinct from a dev engramd on 7070)
     extra_hosts:

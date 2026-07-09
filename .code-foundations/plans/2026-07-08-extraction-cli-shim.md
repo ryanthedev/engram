@@ -3,7 +3,7 @@
 **Created:** 2026-07-08
 **Status:** in-progress
 **Started:** 2026-07-08 17:05
-**Current Phase:** 1
+**Current Phase:** 2
 **Complexity:** simple
 
 ---
@@ -125,4 +125,10 @@ Full contract, CLI test results, and risks: `.code-foundations/research/2026-07-
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Extraction shim + local-stack rewire (Gate: Full)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: Verification passed — 3-sample fable majority, PASS 3/3 after one fail→pass fix cycle (a forking-backend timeout hang, closed via process-group SIGKILL + cmd.WaitDelay)
+- [x] Committed
+Commit: cd59abe
+Summary: Delivered cmd/engram-extract-shim — a host HTTP server on :8088 speaking engramd's /chat/completions + /health contract, delegating to a pluggable cheap-model CLI backend (agy default; codex/claude opt-in) via an exec arg-slice with fence-stripping + degrade-to-[] barricading and a bounded per-call timeout; rewired deploy/local/docker-compose.yml to point -extract-url at host.docker.internal:8088 (extra_hosts added, stub dependency relaxed) and added Makefile targets. 56 shim tests + full repo green; live agy smoke extracts a faithful triple. This is the live endpoint Phase 2 re-extracts through.
