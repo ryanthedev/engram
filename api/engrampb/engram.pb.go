@@ -724,6 +724,367 @@ func (x *AuditResponse) GetVersions() []*FactVersion {
 	return nil
 }
 
+// ExportRequest resumes a paged graph export. cursor is the opaque
+// continuation token from the previous ExportResponse; empty starts from the
+// beginning. Clients never construct or inspect a non-empty cursor.
+type ExportRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cursor        string                 `protobuf:"bytes,1,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExportRequest) Reset() {
+	*x = ExportRequest{}
+	mi := &file_engram_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExportRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExportRequest) ProtoMessage() {}
+
+func (x *ExportRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExportRequest.ProtoReflect.Descriptor instead.
+func (*ExportRequest) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ExportRequest) GetCursor() string {
+	if x != nil {
+		return x.Cursor
+	}
+	return ""
+}
+
+// ExportEntity is one live, deduplicated graph entity in an export page —
+// the structured record the CLI renders into an Obsidian note. Internal
+// fields (embedding, name_key) are deliberately not exported; tenant_id is
+// omitted because every record is the caller's own tenant by construction.
+type ExportEntity struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Canonical display name (first-seen surface form).
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// Every other merged surface form (dedup accounting).
+	Aliases      []string `protobuf:"bytes,3,rep,name=aliases,proto3" json:"aliases,omitempty"`
+	MentionCount int64    `protobuf:"varint,4,opt,name=mention_count,json=mentionCount,proto3" json:"mention_count,omitempty"`
+	// Episodic event ids that contributed mentions (provenance).
+	SourceIds []string `protobuf:"bytes,5,rep,name=source_ids,json=sourceIds,proto3" json:"source_ids,omitempty"`
+	// Provenance / ACL fields (D6/D16).
+	Scope         string                 `protobuf:"bytes,6,opt,name=scope,proto3" json:"scope,omitempty"`
+	TeamId        string                 `protobuf:"bytes,7,opt,name=team_id,json=teamId,proto3" json:"team_id,omitempty"`
+	OwnerAgentId  string                 `protobuf:"bytes,8,opt,name=owner_agent_id,json=ownerAgentId,proto3" json:"owner_agent_id,omitempty"`
+	ValidAt       *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=valid_at,json=validAt,proto3" json:"valid_at,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExportEntity) Reset() {
+	*x = ExportEntity{}
+	mi := &file_engram_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExportEntity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExportEntity) ProtoMessage() {}
+
+func (x *ExportEntity) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExportEntity.ProtoReflect.Descriptor instead.
+func (*ExportEntity) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ExportEntity) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ExportEntity) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ExportEntity) GetAliases() []string {
+	if x != nil {
+		return x.Aliases
+	}
+	return nil
+}
+
+func (x *ExportEntity) GetMentionCount() int64 {
+	if x != nil {
+		return x.MentionCount
+	}
+	return 0
+}
+
+func (x *ExportEntity) GetSourceIds() []string {
+	if x != nil {
+		return x.SourceIds
+	}
+	return nil
+}
+
+func (x *ExportEntity) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *ExportEntity) GetTeamId() string {
+	if x != nil {
+		return x.TeamId
+	}
+	return ""
+}
+
+func (x *ExportEntity) GetOwnerAgentId() string {
+	if x != nil {
+		return x.OwnerAgentId
+	}
+	return ""
+}
+
+func (x *ExportEntity) GetValidAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ValidAt
+	}
+	return nil
+}
+
+func (x *ExportEntity) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+// ExportEdge is one live, predicate-typed relation in an export page. The
+// endpoints are resolved entity ids (ExportEntity.id values).
+type ExportEdge struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	FromEntityId string                 `protobuf:"bytes,2,opt,name=from_entity_id,json=fromEntityId,proto3" json:"from_entity_id,omitempty"`
+	ToEntityId   string                 `protobuf:"bytes,3,opt,name=to_entity_id,json=toEntityId,proto3" json:"to_entity_id,omitempty"`
+	Predicate    string                 `protobuf:"bytes,4,opt,name=predicate,proto3" json:"predicate,omitempty"`
+	// Natural-language rendering of the relation (from the source fact).
+	Statement     string                 `protobuf:"bytes,5,opt,name=statement,proto3" json:"statement,omitempty"`
+	SourceIds     []string               `protobuf:"bytes,6,rep,name=source_ids,json=sourceIds,proto3" json:"source_ids,omitempty"`
+	Scope         string                 `protobuf:"bytes,7,opt,name=scope,proto3" json:"scope,omitempty"`
+	TeamId        string                 `protobuf:"bytes,8,opt,name=team_id,json=teamId,proto3" json:"team_id,omitempty"`
+	OwnerAgentId  string                 `protobuf:"bytes,9,opt,name=owner_agent_id,json=ownerAgentId,proto3" json:"owner_agent_id,omitempty"`
+	ValidAt       *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=valid_at,json=validAt,proto3" json:"valid_at,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExportEdge) Reset() {
+	*x = ExportEdge{}
+	mi := &file_engram_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExportEdge) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExportEdge) ProtoMessage() {}
+
+func (x *ExportEdge) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExportEdge.ProtoReflect.Descriptor instead.
+func (*ExportEdge) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ExportEdge) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ExportEdge) GetFromEntityId() string {
+	if x != nil {
+		return x.FromEntityId
+	}
+	return ""
+}
+
+func (x *ExportEdge) GetToEntityId() string {
+	if x != nil {
+		return x.ToEntityId
+	}
+	return ""
+}
+
+func (x *ExportEdge) GetPredicate() string {
+	if x != nil {
+		return x.Predicate
+	}
+	return ""
+}
+
+func (x *ExportEdge) GetStatement() string {
+	if x != nil {
+		return x.Statement
+	}
+	return ""
+}
+
+func (x *ExportEdge) GetSourceIds() []string {
+	if x != nil {
+		return x.SourceIds
+	}
+	return nil
+}
+
+func (x *ExportEdge) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *ExportEdge) GetTeamId() string {
+	if x != nil {
+		return x.TeamId
+	}
+	return ""
+}
+
+func (x *ExportEdge) GetOwnerAgentId() string {
+	if x != nil {
+		return x.OwnerAgentId
+	}
+	return ""
+}
+
+func (x *ExportEdge) GetValidAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ValidAt
+	}
+	return nil
+}
+
+func (x *ExportEdge) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+// ExportResponse is one bounded page: entities first, then edges (a page may
+// carry both when the entity tier exhausts mid-call). An empty next_cursor
+// means the export is complete.
+type ExportResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entities      []*ExportEntity        `protobuf:"bytes,1,rep,name=entities,proto3" json:"entities,omitempty"`
+	Edges         []*ExportEdge          `protobuf:"bytes,2,rep,name=edges,proto3" json:"edges,omitempty"`
+	NextCursor    string                 `protobuf:"bytes,3,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExportResponse) Reset() {
+	*x = ExportResponse{}
+	mi := &file_engram_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExportResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExportResponse) ProtoMessage() {}
+
+func (x *ExportResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExportResponse.ProtoReflect.Descriptor instead.
+func (*ExportResponse) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ExportResponse) GetEntities() []*ExportEntity {
+	if x != nil {
+		return x.Entities
+	}
+	return nil
+}
+
+func (x *ExportResponse) GetEdges() []*ExportEdge {
+	if x != nil {
+		return x.Edges
+	}
+	return nil
+}
+
+func (x *ExportResponse) GetNextCursor() string {
+	if x != nil {
+		return x.NextCursor
+	}
+	return ""
+}
+
 // StatusRequest is empty; the caller is identified by the bearer token.
 type StatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -733,7 +1094,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_engram_proto_msgTypes[9]
+	mi := &file_engram_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -745,7 +1106,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[9]
+	mi := &file_engram_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -758,7 +1119,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{9}
+	return file_engram_proto_rawDescGZIP(), []int{13}
 }
 
 // StatusResponse reports liveness, the resolved identity, and tier counts.
@@ -781,7 +1142,7 @@ type StatusResponse struct {
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_engram_proto_msgTypes[10]
+	mi := &file_engram_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -793,7 +1154,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[10]
+	mi := &file_engram_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -806,7 +1167,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{10}
+	return file_engram_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *StatusResponse) GetHealthy() bool {
@@ -928,7 +1289,45 @@ const file_engram_proto_rawDesc = "" +
 	"\n" +
 	"provenance\x18\x01 \x01(\v2\x15.engram.v1.ProvenanceR\n" +
 	"provenance\x122\n" +
-	"\bversions\x18\x02 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"\x0f\n" +
+	"\bversions\x18\x02 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"'\n" +
+	"\rExportRequest\x12\x16\n" +
+	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\xd7\x02\n" +
+	"\fExportEntity\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
+	"\aaliases\x18\x03 \x03(\tR\aaliases\x12#\n" +
+	"\rmention_count\x18\x04 \x01(\x03R\fmentionCount\x12\x1d\n" +
+	"\n" +
+	"source_ids\x18\x05 \x03(\tR\tsourceIds\x12\x14\n" +
+	"\x05scope\x18\x06 \x01(\tR\x05scope\x12\x17\n" +
+	"\ateam_id\x18\a \x01(\tR\x06teamId\x12$\n" +
+	"\x0eowner_agent_id\x18\b \x01(\tR\fownerAgentId\x125\n" +
+	"\bvalid_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\avalidAt\x129\n" +
+	"\n" +
+	"created_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x86\x03\n" +
+	"\n" +
+	"ExportEdge\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12$\n" +
+	"\x0efrom_entity_id\x18\x02 \x01(\tR\ffromEntityId\x12 \n" +
+	"\fto_entity_id\x18\x03 \x01(\tR\n" +
+	"toEntityId\x12\x1c\n" +
+	"\tpredicate\x18\x04 \x01(\tR\tpredicate\x12\x1c\n" +
+	"\tstatement\x18\x05 \x01(\tR\tstatement\x12\x1d\n" +
+	"\n" +
+	"source_ids\x18\x06 \x03(\tR\tsourceIds\x12\x14\n" +
+	"\x05scope\x18\a \x01(\tR\x05scope\x12\x17\n" +
+	"\ateam_id\x18\b \x01(\tR\x06teamId\x12$\n" +
+	"\x0eowner_agent_id\x18\t \x01(\tR\fownerAgentId\x125\n" +
+	"\bvalid_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\avalidAt\x129\n" +
+	"\n" +
+	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x93\x01\n" +
+	"\x0eExportResponse\x123\n" +
+	"\bentities\x18\x01 \x03(\v2\x17.engram.v1.ExportEntityR\bentities\x12+\n" +
+	"\x05edges\x18\x02 \x03(\v2\x15.engram.v1.ExportEdgeR\x05edges\x12\x1f\n" +
+	"\vnext_cursor\x18\x03 \x01(\tR\n" +
+	"nextCursor\"\x0f\n" +
 	"\rStatusRequest\"\xf8\x01\n" +
 	"\x0eStatusResponse\x12\x18\n" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x1b\n" +
@@ -937,12 +1336,13 @@ const file_engram_proto_rawDesc = "" +
 	"\bagent_id\x18\x04 \x01(\tR\aagentId\x12%\n" +
 	"\x0eepisodic_count\x18\x05 \x01(\x03R\repisodicCount\x12%\n" +
 	"\x0esemantic_count\x18\x06 \x01(\x03R\rsemanticCount\x12-\n" +
-	"\x12opensearch_version\x18\a \x01(\tR\x11opensearchVersion2\x81\x02\n" +
+	"\x12opensearch_version\x18\a \x01(\tR\x11opensearchVersion2\xc0\x02\n" +
 	"\x06Engram\x12=\n" +
 	"\x06Ingest\x12\x18.engram.v1.IngestRequest\x1a\x19.engram.v1.IngestResponse\x12=\n" +
 	"\x06Search\x12\x18.engram.v1.SearchRequest\x1a\x19.engram.v1.SearchResponse\x12=\n" +
 	"\x06Status\x12\x18.engram.v1.StatusRequest\x1a\x19.engram.v1.StatusResponse\x12:\n" +
-	"\x05Audit\x12\x17.engram.v1.AuditRequest\x1a\x18.engram.v1.AuditResponseB+Z)github.com/ryanthedev/engram/api/engrampbb\x06proto3"
+	"\x05Audit\x12\x17.engram.v1.AuditRequest\x1a\x18.engram.v1.AuditResponse\x12=\n" +
+	"\x06Export\x12\x18.engram.v1.ExportRequest\x1a\x19.engram.v1.ExportResponseB+Z)github.com/ryanthedev/engram/api/engrampbb\x06proto3"
 
 var (
 	file_engram_proto_rawDescOnce sync.Once
@@ -956,7 +1356,7 @@ func file_engram_proto_rawDescGZIP() []byte {
 	return file_engram_proto_rawDescData
 }
 
-var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_engram_proto_goTypes = []any{
 	(*IngestRequest)(nil),         // 0: engram.v1.IngestRequest
 	(*IngestResponse)(nil),        // 1: engram.v1.IngestResponse
@@ -967,33 +1367,45 @@ var file_engram_proto_goTypes = []any{
 	(*Provenance)(nil),            // 6: engram.v1.Provenance
 	(*FactVersion)(nil),           // 7: engram.v1.FactVersion
 	(*AuditResponse)(nil),         // 8: engram.v1.AuditResponse
-	(*StatusRequest)(nil),         // 9: engram.v1.StatusRequest
-	(*StatusResponse)(nil),        // 10: engram.v1.StatusResponse
-	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(*ExportRequest)(nil),         // 9: engram.v1.ExportRequest
+	(*ExportEntity)(nil),          // 10: engram.v1.ExportEntity
+	(*ExportEdge)(nil),            // 11: engram.v1.ExportEdge
+	(*ExportResponse)(nil),        // 12: engram.v1.ExportResponse
+	(*StatusRequest)(nil),         // 13: engram.v1.StatusRequest
+	(*StatusResponse)(nil),        // 14: engram.v1.StatusResponse
+	(*timestamppb.Timestamp)(nil), // 15: google.protobuf.Timestamp
 }
 var file_engram_proto_depIdxs = []int32{
-	11, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
+	15, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
 	3,  // 1: engram.v1.SearchResponse.hits:type_name -> engram.v1.Hit
-	11, // 2: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
-	11, // 3: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
-	11, // 4: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
-	11, // 5: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
-	11, // 6: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
+	15, // 2: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
+	15, // 3: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
+	15, // 4: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
+	15, // 5: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
+	15, // 6: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
 	6,  // 7: engram.v1.AuditResponse.provenance:type_name -> engram.v1.Provenance
 	7,  // 8: engram.v1.AuditResponse.versions:type_name -> engram.v1.FactVersion
-	0,  // 9: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
-	2,  // 10: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
-	9,  // 11: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
-	5,  // 12: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
-	1,  // 13: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
-	4,  // 14: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
-	10, // 15: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
-	8,  // 16: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
-	13, // [13:17] is the sub-list for method output_type
-	9,  // [9:13] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	15, // 9: engram.v1.ExportEntity.valid_at:type_name -> google.protobuf.Timestamp
+	15, // 10: engram.v1.ExportEntity.created_at:type_name -> google.protobuf.Timestamp
+	15, // 11: engram.v1.ExportEdge.valid_at:type_name -> google.protobuf.Timestamp
+	15, // 12: engram.v1.ExportEdge.created_at:type_name -> google.protobuf.Timestamp
+	10, // 13: engram.v1.ExportResponse.entities:type_name -> engram.v1.ExportEntity
+	11, // 14: engram.v1.ExportResponse.edges:type_name -> engram.v1.ExportEdge
+	0,  // 15: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
+	2,  // 16: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
+	13, // 17: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
+	5,  // 18: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
+	9,  // 19: engram.v1.Engram.Export:input_type -> engram.v1.ExportRequest
+	1,  // 20: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
+	4,  // 21: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
+	14, // 22: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
+	8,  // 23: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
+	12, // 24: engram.v1.Engram.Export:output_type -> engram.v1.ExportResponse
+	20, // [20:25] is the sub-list for method output_type
+	15, // [15:20] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_engram_proto_init() }
@@ -1007,7 +1419,7 @@ func file_engram_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engram_proto_rawDesc), len(file_engram_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

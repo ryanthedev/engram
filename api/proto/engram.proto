@@ -48,6 +48,15 @@ service Engram {
   // fact; an unauthorized or unknown id returns NOT_FOUND (no existence
   // oracle). Scope enforcement applies here exactly as it does to search.
   rpc Audit(AuditRequest) returns (AuditResponse);
+
+  // Export returns one bounded page of the caller's tenant-scoped, live,
+  // ACL-filtered graph (entities then edges) plus an opaque continuation
+  // cursor — the backing RPC for `engram export <dir>`. The tenant is pinned
+  // from the verified identity, never from the request; the cursor carries
+  // NO tenancy and cannot reposition outside the caller's tenant. An empty
+  // next_cursor means the graph is exhausted. Unary by design: it runs under
+  // the same auth/telemetry interceptor chain as every other call.
+  rpc Export(ExportRequest) returns (ExportResponse);
 }
 
 // IngestRequest is one episodic event.
@@ -148,6 +157,60 @@ message FactVersion {
 message AuditResponse {
   Provenance provenance = 1;
   repeated FactVersion versions = 2;
+}
+
+// ExportRequest resumes a paged graph export. cursor is the opaque
+// continuation token from the previous ExportResponse; empty starts from the
+// beginning. Clients never construct or inspect a non-empty cursor.
+message ExportRequest {
+  string cursor = 1;
+}
+
+// ExportEntity is one live, deduplicated graph entity in an export page —
+// the structured record the CLI renders into an Obsidian note. Internal
+// fields (embedding, name_key) are deliberately not exported; tenant_id is
+// omitted because every record is the caller's own tenant by construction.
+message ExportEntity {
+  string id = 1;
+  // Canonical display name (first-seen surface form).
+  string name = 2;
+  // Every other merged surface form (dedup accounting).
+  repeated string aliases = 3;
+  int64 mention_count = 4;
+  // Episodic event ids that contributed mentions (provenance).
+  repeated string source_ids = 5;
+  // Provenance / ACL fields (D6/D16).
+  string scope = 6;
+  string team_id = 7;
+  string owner_agent_id = 8;
+  google.protobuf.Timestamp valid_at = 9;
+  google.protobuf.Timestamp created_at = 10;
+}
+
+// ExportEdge is one live, predicate-typed relation in an export page. The
+// endpoints are resolved entity ids (ExportEntity.id values).
+message ExportEdge {
+  string id = 1;
+  string from_entity_id = 2;
+  string to_entity_id = 3;
+  string predicate = 4;
+  // Natural-language rendering of the relation (from the source fact).
+  string statement = 5;
+  repeated string source_ids = 6;
+  string scope = 7;
+  string team_id = 8;
+  string owner_agent_id = 9;
+  google.protobuf.Timestamp valid_at = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+// ExportResponse is one bounded page: entities first, then edges (a page may
+// carry both when the entity tier exhausts mid-call). An empty next_cursor
+// means the export is complete.
+message ExportResponse {
+  repeated ExportEntity entities = 1;
+  repeated ExportEdge edges = 2;
+  string next_cursor = 3;
 }
 
 // StatusRequest is empty; the caller is identified by the bearer token.

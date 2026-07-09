@@ -271,6 +271,10 @@ func main() {
 	svc.Probe = st
 	svc.Auditor = st
 	svc.ACL = aclFilter
+	// The Export RPC pages over the same graph store the worker stage and
+	// expander use — no shadow read path; tenant/ACL are enforced in the
+	// handler on top of the store's own tenant-scoped scan.
+	svc.Exporter = graphStore
 	engrampb.RegisterEngramServer(grpcServer, svc)
 
 	go func() {
