@@ -58,8 +58,12 @@ type Server struct {
 	Probe StatusProbe
 	// Auditor backs the Audit RPC; nil disables auditing (UNIMPLEMENTED).
 	Auditor Auditor
-	// ACL authorizes audit reads (Phase 4); nil skips the scope check.
+	// ACL authorizes audit and export reads (Phase 4); nil skips the scope
+	// check.
 	ACL ReadAuthorizer
+	// Exporter backs the Export RPC (the Phase 1 graph scan); nil disables
+	// exporting (UNIMPLEMENTED). See export.go.
+	Exporter Exporter
 }
 
 // New returns a Server wired to s (write path) and r (read path).

@@ -122,6 +122,15 @@ func (c *Client) Audit(ctx context.Context, id string) (AuditResult, error) {
 	return out, nil
 }
 
+// Export fetches one bounded page of the caller's tenant-scoped graph
+// (entities then edges) for the vault exporter. cursor is the opaque token
+// from the previous page's next_cursor; empty starts from the beginning, and
+// an empty returned next_cursor means the export is complete. Tenant and ACL
+// scoping are enforced server-side from the bearer token's identity.
+func (c *Client) Export(ctx context.Context, cursor string) (*engrampb.ExportResponse, error) {
+	return c.api.Export(ctx, &engrampb.ExportRequest{Cursor: cursor})
+}
+
 // Search runs one hybrid query and returns fused hits.
 func (c *Client) Search(ctx context.Context, query string, k int) ([]mcp.Hit, error) {
 	resp, err := c.api.Search(ctx, &engrampb.SearchRequest{Query: query, K: int32(k), ValidOnly: true})

@@ -81,6 +81,22 @@ type Cursor struct {
 	after string
 }
 
+// MarshalText round-trips the cursor across a process boundary (the export
+// RPC's wire cursor) without exposing its internals as API: callers treat
+// the bytes as opaque and only feed them back to UnmarshalText. The zero
+// Cursor marshals to empty text.
+func (c Cursor) MarshalText() ([]byte, error) { return []byte(c.after), nil }
+
+// UnmarshalText restores a cursor previously produced by MarshalText. Any
+// byte string is accepted by design: a stale or fabricated value merely
+// repositions the scan within whatever tenant the CALLER passes to
+// Scan{Entities,Edges} — the cursor carries no tenancy, so it can never
+// widen a scan's scope, only move along the id order inside it.
+func (c *Cursor) UnmarshalText(b []byte) error {
+	c.after = string(b)
+	return nil
+}
+
 // Store is the deep module callers use: it hides the candidate-lookup +
 // dedup-decide + upsert-or-merge choreography behind two intent methods
 // (UpsertMention, UpsertEdge) plus the read paths GraphExpander and the

@@ -43,6 +43,7 @@ const (
 	Engram_Search_FullMethodName = "/engram.v1.Engram/Search"
 	Engram_Status_FullMethodName = "/engram.v1.Engram/Status"
 	Engram_Audit_FullMethodName  = "/engram.v1.Engram/Audit"
+	Engram_Export_FullMethodName = "/engram.v1.Engram/Export"
 )
 
 // EngramClient is the client API for Engram service.
@@ -69,6 +70,14 @@ type EngramClient interface {
 	// fact; an unauthorized or unknown id returns NOT_FOUND (no existence
 	// oracle). Scope enforcement applies here exactly as it does to search.
 	Audit(ctx context.Context, in *AuditRequest, opts ...grpc.CallOption) (*AuditResponse, error)
+	// Export returns one bounded page of the caller's tenant-scoped, live,
+	// ACL-filtered graph (entities then edges) plus an opaque continuation
+	// cursor — the backing RPC for `engram export <dir>`. The tenant is pinned
+	// from the verified identity, never from the request; the cursor carries
+	// NO tenancy and cannot reposition outside the caller's tenant. An empty
+	// next_cursor means the graph is exhausted. Unary by design: it runs under
+	// the same auth/telemetry interceptor chain as every other call.
+	Export(ctx context.Context, in *ExportRequest, opts ...grpc.CallOption) (*ExportResponse, error)
 }
 
 type engramClient struct {
@@ -119,6 +128,16 @@ func (c *engramClient) Audit(ctx context.Context, in *AuditRequest, opts ...grpc
 	return out, nil
 }
 
+func (c *engramClient) Export(ctx context.Context, in *ExportRequest, opts ...grpc.CallOption) (*ExportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExportResponse)
+	err := c.cc.Invoke(ctx, Engram_Export_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngramServer is the server API for Engram service.
 // All implementations must embed UnimplementedEngramServer
 // for forward compatibility.
@@ -143,6 +162,14 @@ type EngramServer interface {
 	// fact; an unauthorized or unknown id returns NOT_FOUND (no existence
 	// oracle). Scope enforcement applies here exactly as it does to search.
 	Audit(context.Context, *AuditRequest) (*AuditResponse, error)
+	// Export returns one bounded page of the caller's tenant-scoped, live,
+	// ACL-filtered graph (entities then edges) plus an opaque continuation
+	// cursor — the backing RPC for `engram export <dir>`. The tenant is pinned
+	// from the verified identity, never from the request; the cursor carries
+	// NO tenancy and cannot reposition outside the caller's tenant. An empty
+	// next_cursor means the graph is exhausted. Unary by design: it runs under
+	// the same auth/telemetry interceptor chain as every other call.
+	Export(context.Context, *ExportRequest) (*ExportResponse, error)
 	mustEmbedUnimplementedEngramServer()
 }
 
@@ -164,6 +191,9 @@ func (UnimplementedEngramServer) Status(context.Context, *StatusRequest) (*Statu
 }
 func (UnimplementedEngramServer) Audit(context.Context, *AuditRequest) (*AuditResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Audit not implemented")
+}
+func (UnimplementedEngramServer) Export(context.Context, *ExportRequest) (*ExportResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Export not implemented")
 }
 func (UnimplementedEngramServer) mustEmbedUnimplementedEngramServer() {}
 func (UnimplementedEngramServer) testEmbeddedByValue()                {}
@@ -258,6 +288,24 @@ func _Engram_Audit_Handler(srv interface{}, ctx context.Context, dec func(interf
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Engram_Export_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).Export(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_Export_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).Export(ctx, req.(*ExportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Engram_ServiceDesc is the grpc.ServiceDesc for Engram service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -280,6 +328,10 @@ var Engram_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Audit",
 			Handler:    _Engram_Audit_Handler,
+		},
+		{
+			MethodName: "Export",
+			Handler:    _Engram_Export_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

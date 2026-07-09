@@ -270,5 +270,12 @@ to real files and danglers are droppable deterministically.
 - [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
 - [x] REVIEW: Verification passed (all 4 DW items with execution evidence; 4 edge cases covered)
 - [x] Committed
-Commit: _pending_
+Commit: 2f83d51
 Summary: Added cursor-paginated `ScanEntities`/`ScanEdges` to `graph.Backend`/`Store`/`MemBackend` + OpenSearch backend (`search_after` + `sort:[{id:asc}]`), live- and tenant-filtered; opaque `Cursor` (zero=start, zero-next=exhausted). This is the full-index read foundation Phase 2's export RPC pages over. 18 new tests; MemBackend/OpenSearch pagination parity enforced.
+
+### Phase 2: Export RPC + server wiring (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: 3-sample security review — first round PASS/FAIL/FAIL on a test-coverage-only gap (code confirmed correct by all 3); coverage closed to 100% (test-only fix, no production change); re-review 3/3 PASS
+- [x] Committed
+Commit: _pending_
+Summary: Added unary `Export(ExportRequest) returns (ExportResponse)` RPC — tenant pinned from verified identity (cursor carries no tenancy), per-record ACL fail-closed, `Unimplemented` on nil seam, opaque rejection of garbage cursors. Wire cursor (base64url JSON) chains the Phase 1 graph cursor entities-then-edges. Added `Exporter` seam on `Server`, `engramclient.Export(ctx, cursor)`, and `Cursor` text (un)marshal. Runs under the existing unary auth chain — no new interceptor. `Export` handler at 100% coverage; 487 tests green.
