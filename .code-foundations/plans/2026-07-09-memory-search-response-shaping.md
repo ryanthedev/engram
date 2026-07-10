@@ -218,3 +218,9 @@ Summary: `internal/mcp/budget.go` packs `memory_search` results to a byte budget
 - [x] Committed
 Commit: 2132ed0
 Summary: `internal/mcp/spill.go` writes the full slim result set to a `0600` scratch file (`ENGRAM_MCP_SPILL_DIR`, default OS temp) via atomic CreateTemp+Chmod+Write+Close+Rename when `omitted>0`, setting `overflow_path` on the result. Marshal precedes any FS call; every error branch removes the temp file (no partial rename); spill failure degrades gracefully (no `overflow_path`, warning logged, search never fails). Completes the response-shaping feature: slim hits → byte-budgeted page + facets → full set on disk.
+
+### Post-verification fix: overflow_path budget accounting (Gate: Standard)
+- [x] Found by end-to-end manual verification (fable agent): DW-2.1 violated — the packer measured hits+facets+hint but not `overflow_path`, which is attached after the fit-check; at `ENGRAM_MCP_SEARCH_BUDGET_BYTES=2048` the emitted response was 2157–2180B > 2048.
+- [x] FIX: `maxSpillPath()` (spill.go) computes an upper bound on the `overflow_path` field from the live `spillDir()` + `os.CreateTemp`'s max 10-digit suffix; `searchResultFits` reserves that headroom when a remainder exists. One-hit floor (DW-2.4) preserved. Regression tests drive the real JSON-RPC path and measure actual emitted bytes.
+- [x] REVIEW: single-sample sonnet PASS (5/5 requirements, upper-bound cross-checked against Go stdlib). Committed.
+Commit: (fix) fix(mcp): count overflow_path in the search byte budget
