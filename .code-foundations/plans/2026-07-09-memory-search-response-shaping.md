@@ -203,3 +203,10 @@
 - [x] Committed
 Commit: bb6e419
 Summary: Retrieval now returns slim, embedding-free hits — `projectFields` (table-driven, per-source allowlist) applied at the end of `MultiRetriever.Search` after authorization, `_source` excludes embeddings in `buildQuery`, query size clamped to MaxK=100, every hit carries a populated score. `retrieval.Hit.Fields` now holds only the per-tier natural fields (episodic text/kind/occurred_at/event_id/source_ids; semantic statement/s-p-o/valid_at/source_ids; graph statement/s-p-o/hop); ACL results unchanged. This is the slim seam Phase 2 packs to a byte budget.
+
+### Phase 2: Budget-pack + facets + refine hint at MCP (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: Verification passed (single-sample sonnet)
+- [x] Committed
+Commit: 7b557b1
+Summary: `internal/mcp/budget.go` packs `memory_search` results to a byte budget (`ENGRAM_MCP_SEARCH_BUDGET_BYTES`, default 16384) via shrink-from-full (drop lowest-ranked, remeasure real serialized envelope). `callSearch` defaults k=50. Over-budget responses carry `omitted`, `omitted_facets` (subject/predicate/kind over the omitted set, stable-ordered), and a refine `hint`. The omitted remainder is an order-preserving suffix `hits[N:]` of the packed prefix — so Phase 3 can spill the FULL slim set. No proto change.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 )
 
 // toolSchema is one MCP tool advertised by tools/list. InputSchema is a JSON
@@ -134,7 +135,20 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	if err != nil {
 		return toolError(fmt.Sprintf("search failed: %v", err)), nil
 	}
-	return toolResult(packSearchResult(hits, searchByteBudget())), nil
+	result := packSearchResult(hits, searchByteBudget())
+	if result.Omitted > 0 {
+		// hits (unsliced) is exactly the full slim result set: packed and
+		// remainder are an order-preserving split of it (budget.go), so no
+		// reconstruction is needed. A spill failure must never fail the
+		// search (DW-3.4) — log and return the capped page without
+		// overflow_path rather than propagating the error.
+		if path, spillErr := spillFullResult(hits); spillErr != nil {
+			slog.Warn("memory_search: spilling full result set to disk failed; returning capped response without overflow_path", "error", spillErr)
+		} else {
+			result.OverflowPath = path
+		}
+	}
+	return toolResult(result), nil
 }
 
 func (s *Server) callStatus(ctx context.Context) (any, *rpcError) {

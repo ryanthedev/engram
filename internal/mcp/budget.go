@@ -30,12 +30,16 @@ var facetFields = []string{"subject", "predicate", "kind"}
 
 // searchResult is the memory_search tool-result envelope: a budget-packed
 // page of hits plus what got left out. Omitted/OmittedFacets/Hint are
-// present only when hits were actually omitted (DW-2.2).
+// present only when hits were actually omitted (DW-2.2). OverflowPath is set
+// by the caller (see spill.go) only after the full slim result set has been
+// durably spilled to disk (DW-3.1) — it is also the shape spilled to that
+// file, where OverflowPath itself is always zero-value/omitted.
 type searchResult struct {
 	Hits          []Hit             `json:"hits"`
 	Omitted       int               `json:"omitted,omitempty"`
 	OmittedFacets map[string]string `json:"omitted_facets,omitempty"`
 	Hint          string            `json:"hint,omitempty"`
+	OverflowPath  string            `json:"overflow_path,omitempty"`
 }
 
 // searchByteBudget returns the configured memory_search response byte
