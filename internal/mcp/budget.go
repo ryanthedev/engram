@@ -60,18 +60,25 @@ func searchByteBudget() int {
 }
 
 // packSearchResult packs hits into a searchResult whose full serialized size
-// stays within budgetBytes, always keeping at least one hit when hits is
-// non-empty (DW-2.4) even if that hit alone exceeds the budget. Never
-// panics — a zero-hit input produces an empty, non-nil page.
+// — INCLUDING the overflow_path field the caller (tools.go) attaches after a
+// spill — stays within budgetBytes, always keeping at least one hit when
+// hits is non-empty (DW-2.4) even if that hit plus the reserved
+// overflow_path headroom still exceeds the budget: the one-hit floor is
+// unconditional, budget is best-effort below it. Never panics — a zero-hit
+// input produces an empty, non-nil page.
 //
 // It starts by trying to keep every hit (the common, cheap case: one
-// marshal, no omission). If the full result overflows the budget, it moves
-// the lowest-ranked packed hit into the remainder, recomputes the *real*
-// envelope (facets + hint) over that remainder, and remeasures the *actual*
-// serialized bytes of the whole candidate result — repeating until it fits
-// or only one hit is left, which is force-kept unconditionally. Measuring
-// the true serialized candidate each time (rather than a size estimate)
-// is deliberate: an estimate can drift from what's actually emitted.
+// marshal, no omission, no overflow_path ever attached). If the full result
+// overflows the budget, it moves the lowest-ranked packed hit into the
+// remainder, recomputes the *real* envelope (facets + hint) over that
+// remainder, and remeasures the *actual* serialized bytes of the whole
+// candidate result — repeating until it fits or only one hit is left, which
+// is force-kept unconditionally. From the first shrink onward, remainder is
+// non-empty, meaning a spill (and therefore an overflow_path field) will be
+// attempted, so each fit check also reserves headroom for that field (DW-2.1;
+// see searchResultFits). Measuring the true serialized candidate each time
+// (rather than a size estimate) is deliberate: an estimate can drift from
+// what's actually emitted.
 func packSearchResult(hits []Hit, budgetBytes int) searchResult {
 	packed := make([]Hit, len(hits))
 	copy(packed, hits)
@@ -82,11 +89,23 @@ func packSearchResult(hits []Hit, budgetBytes int) searchResult {
 }
 
 // searchResultFits reports whether the full serialized searchResult built
-// from packed+remainder is at or under budgetBytes. A marshal failure (never
-// expected for these types) is treated as "does not fit" — the safe default
-// that keeps the packer shrinking rather than emitting something unverified.
+// from packed+remainder is at or under budgetBytes. When remainder is
+// non-empty, hits are being omitted and the caller will attempt a spill, so
+// the real response will carry an overflow_path field that does not exist
+// yet at packing time (the spill file's name isn't chosen until later). To
+// keep the budget bound honest for that field too, the candidate reserves
+// headroom by setting OverflowPath to maxSpillPath() — an upper bound on the
+// real spill path's length — before marshaling, so a fit here guarantees the
+// real (equal-or-shorter) overflow_path still fits (DW-2.1). A marshal
+// failure (never expected for these types) is treated as "does not fit" —
+// the safe default that keeps the packer shrinking rather than emitting
+// something unverified.
 func searchResultFits(packed, remainder []Hit, budgetBytes int) bool {
-	b, err := json.Marshal(buildSearchResult(packed, remainder))
+	candidate := buildSearchResult(packed, remainder)
+	if len(remainder) > 0 {
+		candidate.OverflowPath = maxSpillPath() // reserve real-field headroom, not an estimate
+	}
+	b, err := json.Marshal(candidate)
 	return err == nil && len(b) <= budgetBytes
 }
 

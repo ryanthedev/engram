@@ -3,8 +3,10 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -36,6 +38,31 @@ func spillDir() string {
 		return abs
 	}
 	return dir // filepath.Abs rarely fails; let CreateTemp surface any real problem
+}
+
+// maxRandomSuffixLen is the longest os.CreateTemp's generated random suffix
+// can ever be: it formats a uint32 as decimal (see the os package's
+// nextRandom), and math.MaxUint32 is the longest such value has to be
+// represented in decimal. Derived rather than hand-typed so it can't drift
+// from the actual fact it encodes.
+var maxRandomSuffixLen = len(strconv.FormatUint(math.MaxUint32, 10))
+
+// maxSpillPath returns the longest absolute path spillFullResult could ever
+// return for the CURRENT spillDir(): the fixed prefix/suffix from
+// spillTempPattern (with the ".tmp" staging suffix stripped, matching the
+// final rename spillFullResult performs) and the random component widened
+// to its worst case (maxRandomSuffixLen digits — the real one is that many
+// digits or fewer). Building this from the real spillDir() — rather than a
+// hardcoded guess — keeps the bound correct even when ENGRAM_MCP_SPILL_DIR
+// points somewhere with an unusually long path.
+//
+// Budget-packing (budget.go) uses this to reserve headroom for the real
+// overflow_path field before it exists: the field spillFullResult's actual
+// return value will occupy is guaranteed to be no longer than this one.
+func maxSpillPath() string {
+	finalPattern := strings.TrimSuffix(spillTempPattern, spillTempSuffix)
+	worstCaseName := strings.Replace(finalPattern, "*", strings.Repeat("9", maxRandomSuffixLen), 1)
+	return filepath.Join(spillDir(), worstCaseName)
 }
 
 // spillFullResult atomically writes the full slim result set (every hit,

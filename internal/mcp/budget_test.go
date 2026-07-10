@@ -178,6 +178,98 @@ func TestDW_2_4_SingleOverBudgetHitStillEmitted(t *testing.T) {
 	})
 }
 
+// TestDW_2_1_OverflowPathHeadroomKeepsFinalResponseInBudget is the
+// regression for the defect where overflow_path escaped budget accounting:
+// packSearchResult/searchResultFits used to measure only hits+envelope, so
+// whenever the packing slack was smaller than the serialized overflow_path
+// field (spill dir + the fixed temp-filename pattern), the FINAL response —
+// after tools.go attached the real overflow_path — exceeded the budget
+// despite packSearchResult reporting it fit. Both budgets below force
+// omission (and therefore a spill + overflow_path); each asserts the exact
+// bytes a client receives (measured via searchViaWire, matching
+// TestDW_2_1_DefaultSearchFitsBudget's method) stay within budget.
+func TestDW_2_1_OverflowPathHeadroomKeepsFinalResponseInBudget(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(spillDirEnv, dir)
+	hits := manyHits(30)
+
+	t.Run("small budget (documented reproduction case)", func(t *testing.T) {
+		budget := 2048
+		t.Setenv(searchBudgetBytesEnv, fmt.Sprintf("%d", budget))
+
+		text, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
+
+		omitted, _ := decoded["omitted"].(float64)
+		if omitted <= 0 {
+			t.Fatalf("omitted = %v, want > 0 (test setup should force overflow): %s", decoded["omitted"], text)
+		}
+		if _, ok := decoded["overflow_path"]; !ok {
+			t.Fatalf("overflow_path absent despite omission: %s", text)
+		}
+		if got := len(text); got > budget {
+			t.Errorf("final serialized response (incl. overflow_path) = %d bytes, want <= %d budget: %s", got, budget, text)
+		}
+	})
+
+	t.Run("budget near a single packed hit's size", func(t *testing.T) {
+		// The tightest budget at which the fix's headroom reservation still
+		// guarantees a fit: one hit's own envelope plus the worst-case
+		// overflow_path field length (maxSpillPath, an upper bound the real,
+		// equal-or-shorter path can never exceed), plus a small margin. This
+		// is the boundary where, pre-fix, the packer could keep enough hits
+		// to look like it fit without overflow_path, only for the real
+		// overflow_path to push the emitted response over budget.
+		oneHitCandidate := buildSearchResult(hits[:1], hits[1:])
+		oneHitCandidate.OverflowPath = maxSpillPath()
+		worstCaseOneHit, err := json.Marshal(oneHitCandidate)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		budget := len(worstCaseOneHit) + 20
+		t.Setenv(searchBudgetBytesEnv, fmt.Sprintf("%d", budget))
+
+		text, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
+
+		omitted, _ := decoded["omitted"].(float64)
+		if omitted <= 0 {
+			t.Fatalf("omitted = %v, want > 0 (test setup should force overflow): %s", decoded["omitted"], text)
+		}
+		if _, ok := decoded["overflow_path"]; !ok {
+			t.Fatalf("overflow_path absent despite omission: %s", text)
+		}
+		if got := len(text); got > budget {
+			t.Errorf("final serialized response (incl. overflow_path) = %d bytes, want <= %d budget: %s", got, budget, text)
+		}
+	})
+}
+
+// TestDW_2_4_SingleHitFloorHoldsWithOverflowHeadroom: DW-2.4's one-hit floor
+// stays unconditional even once overflow_path headroom is reserved — a
+// budget that fits one oversized hit ALONE but not that hit plus the
+// reserved headroom must still emit exactly the one hit (never zero),
+// because the floor is unconditional and budget is best-effort below it.
+func TestDW_2_4_SingleHitFloorHoldsWithOverflowHeadroom(t *testing.T) {
+	huge := semanticHit("h1", "s", "p", "o", 5000)
+	small := semanticHit("h2", "s2", "p2", "o2", 5)
+
+	aloneNoHeadroom, err := json.Marshal(buildSearchResult([]Hit{huge}, nil))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Fits the huge hit by itself with no headroom reserved, but not once
+	// headroom for overflow_path is added — the exact squeeze DW-2.4 must
+	// survive.
+	budget := len(aloneNoHeadroom) + 10
+
+	result := packSearchResult([]Hit{huge, small}, budget)
+	if len(result.Hits) != 1 || result.Hits[0].ID != "h1" {
+		t.Fatalf("Hits = %+v, want exactly [h1] (one-hit floor unconditional)", result.Hits)
+	}
+	if result.Omitted != 1 {
+		t.Errorf("Omitted = %d, want 1", result.Omitted)
+	}
+}
+
 // TestDW_2_5_TopFacetsStableOnTies: facet counts are computed over the
 // omitted set, and ties are broken deterministically by first-encountered
 // order — not by Go's randomized map iteration.
