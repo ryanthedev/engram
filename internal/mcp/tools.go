@@ -126,11 +126,15 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	if args.Query == "" {
 		return toolError("memory_search requires a non-empty query"), nil
 	}
-	hits, err := s.backend.Search(ctx, args.Query, args.K)
+	k := args.K
+	if k <= 0 {
+		k = defaultRequestK // caller didn't ask for a specific count: request generously, pack tightly
+	}
+	hits, err := s.backend.Search(ctx, args.Query, k)
 	if err != nil {
 		return toolError(fmt.Sprintf("search failed: %v", err)), nil
 	}
-	return toolResult(map[string]any{"hits": hits}), nil
+	return toolResult(packSearchResult(hits, searchByteBudget())), nil
 }
 
 func (s *Server) callStatus(ctx context.Context) (any, *rpcError) {

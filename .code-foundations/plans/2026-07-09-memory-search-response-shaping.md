@@ -196,4 +196,10 @@
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Shape hits at the retrieval boundary (Gate: Full)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: Verification passed — 3-sample fable majority (3/3 PASS)
+- [x] Committed
+Commit: bb6e419
+Summary: Retrieval now returns slim, embedding-free hits — `projectFields` (table-driven, per-source allowlist) applied at the end of `MultiRetriever.Search` after authorization, `_source` excludes embeddings in `buildQuery`, query size clamped to MaxK=100, every hit carries a populated score. `retrieval.Hit.Fields` now holds only the per-tier natural fields (episodic text/kind/occurred_at/event_id/source_ids; semantic statement/s-p-o/valid_at/source_ids; graph statement/s-p-o/hop); ACL results unchanged. This is the slim seam Phase 2 packs to a byte budget.
