@@ -226,6 +226,12 @@ func TestDW_4_5_FilteredKNNRecallUnderACL(t *testing.T) {
 		{acl.ScopeTeam, auth.Identity{TenantID: "t1", UserID: "u_team", AgentID: "a_team"}},
 		{acl.ScopeOrg, auth.Identity{TenantID: "t1", UserID: "u_org", AgentID: "a_org"}},
 	}
+	// Post-Search hits are projected (ACL provenance stripped), so leak checks
+	// go through the seeded id->scope map rather than the returned fields.
+	scopeByID := make(map[string]string, len(docs))
+	for _, d := range docs {
+		scopeByID[d.id] = d.scope
+	}
 	for _, tier := range tiers {
 		truth := bruteForceScope(docs, tier.scope, queryVec, k)
 		selectivity := float64(len(scopeDocs(docs, tier.scope))) / float64(n)
@@ -236,8 +242,8 @@ func TestDW_4_5_FilteredKNNRecallUnderACL(t *testing.T) {
 		got := map[string]bool{}
 		for _, h := range hits {
 			got[h.ID] = true
-			if sc, _ := h.Fields["scope"].(string); sc != tier.scope {
-				t.Errorf("scope leak: %s hit has scope %q, want %s", tier.scope, sc, tier.scope)
+			if sc := scopeByID[h.ID]; sc != tier.scope {
+				t.Errorf("scope leak: %s hit %s was seeded with scope %q, want %s", tier.scope, h.ID, sc, tier.scope)
 			}
 		}
 		found := 0

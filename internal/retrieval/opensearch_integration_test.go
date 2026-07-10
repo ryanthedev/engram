@@ -241,11 +241,17 @@ func TestDW_1_4_FilteredKNNRecallAtSelectivities(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Search(%s): %v", tenant, err)
 		}
+		// Post-Search hits are projected (tenant_id stripped), so the leak
+		// check goes through the seeded id->tenant mapping.
+		tenantByID := make(map[string]string, len(docs))
+		for _, d := range docs {
+			tenantByID[d.id] = d.tenant
+		}
 		got := map[string]bool{}
 		for _, h := range hits {
 			got[h.ID] = true
-			if tid, _ := h.Fields["tenant_id"].(string); tid != tenant {
-				t.Errorf("filter leak: hit %s has tenant_id=%v, want %s", h.ID, h.Fields["tenant_id"], tenant)
+			if tid := tenantByID[h.ID]; tid != tenant {
+				t.Errorf("filter leak: hit %s was seeded with tenant_id=%q, want %s", h.ID, tid, tenant)
 			}
 		}
 		found := 0
