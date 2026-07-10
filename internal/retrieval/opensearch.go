@@ -38,6 +38,33 @@ const (
 // DefaultK is the fused result count used when Query.K is unset (<=0).
 const DefaultK = 10
 
+// MaxK caps the fused result count (and each per-tier query size). K arrives
+// from the MCP caller across a process boundary — external input — so it is
+// clamped, never trusted: a runaway K would drag full result pages through
+// every tier for a response the caller cannot consume anyway.
+const MaxK = 100
+
+// fallbackScore marks a hit whose backend supplied no score (e.g. a response
+// missing _score). It is assigned AFTER the merged sort and truncation, so it
+// can never reorder results — it only upholds the Search contract that every
+// returned hit carries a non-zero Score. Deliberately tiny: an unscored hit
+// should rank below any genuinely scored one if anything downstream re-sorts.
+const fallbackScore = 1e-9
+
+// clampK normalizes an externally supplied result count into [1, MaxK]:
+// unset/non-positive becomes DefaultK, anything over MaxK is capped, and
+// in-range values pass through unchanged.
+func clampK(k int) int {
+	switch {
+	case k <= 0:
+		return DefaultK
+	case k > MaxK:
+		return MaxK
+	default:
+		return k
+	}
+}
+
 // DefaultEmbedTimeout bounds the query-time embedding call: D15's co-located
 // budget is <=50ms inside the overall read SLA.
 const DefaultEmbedTimeout = 50 * time.Millisecond
@@ -166,14 +193,15 @@ func (m *MultiRetriever) RegisterPostHook(h PostHook) {
 // from registered tier sources or post-hooks. It is fail-closed: an ACL
 // compile error returns zero results and logs a denial — the query never runs
 // unfiltered. Built-in tiers run concurrently; if every tier errors Search
-// errors, otherwise partial failures are logged.
+// errors, otherwise partial failures are logged. Returned hits are shaped:
+// K is clamped to [1, MaxK], each hit's Fields are projected to its source's
+// display allowlist (no embeddings, no ACL provenance), and every hit carries
+// a non-zero Score.
 func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, error) {
 	if q.Text == "" {
 		return nil, nil
 	}
-	if q.K <= 0 {
-		q.K = DefaultK
-	}
+	q.K = clampK(q.K)
 
 	var enf acl.Enforcer
 	var aclClause map[string]any
@@ -256,7 +284,56 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 	if m.acl != nil && len(m.postHooks) > 0 {
 		merged = filterAuthorized(merged, enf)
 	}
+
+	// Shape the response LAST, after every authorization pass and post-hook:
+	// filterAuthorized/recordFromHit read tenant_id/team_id/scope/owner_agent_id
+	// from Hit.Fields fail-closed (stripping them earlier would deny everything),
+	// and the graph post-hook reads tenant_id/subject/object from seed hits.
+	// Only now is it safe to reduce each hit to its display allowlist and
+	// guarantee a populated score (post-sort, so ranking is never affected).
+	for i := range merged {
+		merged[i].Fields = projectFields(merged[i].Source, merged[i].Fields)
+		if merged[i].Score == 0 {
+			merged[i].Score = fallbackScore
+		}
+	}
 	return merged, nil
+}
+
+// allowedFields maps each hit source to the display fields Search returns for
+// it — everything else (embeddings, ACL provenance, internal bookkeeping) is
+// dropped at the retrieval boundary so it never crosses the gRPC wire.
+var allowedFields = map[string][]string{
+	"episodic": {"text", "kind", "occurred_at", "event_id", "source_ids"},
+	"semantic": {"statement", "subject", "predicate", "object", "valid_at", "source_ids"},
+	"graph":    {"statement", "subject", "predicate", "object", "hop"},
+}
+
+// defaultAllowed is the safe-default projection for sources without an entry
+// in allowedFields (registered tier sources, e.g. "experience"): keep the
+// recognizable content fields if present, drop everything else.
+var defaultAllowed = []string{"text", "statement", "subject", "predicate", "object"}
+
+// projectFields reduces a hit's stored document to source's display allowlist,
+// returning a NEW map (the input — possibly shared with a tier source or
+// post-hook — is never mutated). Absent and nil-valued fields are omitted, not
+// invented; a nil input stays nil. Cross-tier score normalization is a
+// documented non-goal (v1 leaves fusion vs hop scores as-is).
+func projectFields(source string, fields map[string]any) map[string]any {
+	if fields == nil {
+		return nil
+	}
+	allowed, ok := allowedFields[source]
+	if !ok {
+		allowed = defaultAllowed
+	}
+	out := make(map[string]any, len(allowed))
+	for _, k := range allowed {
+		if v, present := fields[k]; present && v != nil {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // filterAuthorized drops hits the Enforcer does not authorize (fail-closed:
@@ -319,10 +396,7 @@ func (t *tierRetriever) search(ctx context.Context, q Query, f Filter, aclClause
 	if q.Text == "" {
 		return nil, nil
 	}
-	k := q.K
-	if k <= 0 {
-		k = DefaultK
-	}
+	k := clampK(q.K)
 
 	vec, degraded := t.embed(ctx, q.Text)
 	mode := t.mode
@@ -448,6 +522,10 @@ func buildQuery(mode SearchMode, textField, vectorField, text string, vec []floa
 		query = map[string]any{"size": k, "query": map[string]any{"hybrid": map[string]any{"queries": []any{bm25, knn}}}}
 		usePipeline = true
 	}
+	// Never fetch embedding vectors back: they are query-time inputs, not
+	// results, and dominate response size (~95% of a raw hit). Excluding a
+	// field an index doesn't have is a no-op, so both names apply to both tiers.
+	query["_source"] = map[string]any{"excludes": []string{"text_embedding", "fact_embedding"}}
 	body, _ = json.Marshal(query)
 	return body, usePipeline
 }
