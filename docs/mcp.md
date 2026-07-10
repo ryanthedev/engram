@@ -21,6 +21,15 @@ make e2e-up            # OpenSearch 3.1 + embedding server + stub LLM + engramd
 # engramd gRPC is exposed on localhost:7071, OpenSearch on localhost:9201
 ```
 
+> ⚠️ **Destructive teardown — never run `make e2e` or `make e2e-down` against a
+> stack holding memories you care about.** Both run `docker compose … down -v`,
+> which **deletes the OpenSearch volume** and every memory in it. This is the
+> same compose stack (`engram-e2e-os`, :9201) you'd use to hold a live personal
+> store — tearing it down wipes that store irrecoverably. `make e2e` also
+> invokes `e2e-down` automatically on exit. To stop the stack **without** losing
+> data, run `docker compose -f deploy/local/docker-compose.yml down` (no `-v`),
+> or just leave it running. Reserve the `-v` teardown for a throwaway stack.
+
 For a production deployment, point at the real engramd address instead.
 
 ## 2. Mint a token
