@@ -1,9 +1,10 @@
 # Plan: memory_search Response Shaping & Budget-Aware Paging
 
 **Created:** 2026-07-09
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-09 14:05
-**Current Phase:** 1
+**Completed:** 2026-07-09 14:52
+**Duration:** ~47 min
 **Complexity:** medium
 
 ---
@@ -210,3 +211,10 @@ Summary: Retrieval now returns slim, embedding-free hits — `projectFields` (ta
 - [x] Committed
 Commit: 7b557b1
 Summary: `internal/mcp/budget.go` packs `memory_search` results to a byte budget (`ENGRAM_MCP_SEARCH_BUDGET_BYTES`, default 16384) via shrink-from-full (drop lowest-ranked, remeasure real serialized envelope). `callSearch` defaults k=50. Over-budget responses carry `omitted`, `omitted_facets` (subject/predicate/kind over the omitted set, stable-ordered), and a refine `hint`. The omitted remainder is an order-preserving suffix `hits[N:]` of the packed prefix — so Phase 3 can spill the FULL slim set. No proto change.
+
+### Phase 3: Spill-to-disk overflow at MCP (Gate: Full)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: Verification passed — 3-sample fable majority (3/3 PASS)
+- [x] Committed
+Commit: 2132ed0
+Summary: `internal/mcp/spill.go` writes the full slim result set to a `0600` scratch file (`ENGRAM_MCP_SPILL_DIR`, default OS temp) via atomic CreateTemp+Chmod+Write+Close+Rename when `omitted>0`, setting `overflow_path` on the result. Marshal precedes any FS call; every error branch removes the temp file (no partial rename); spill failure degrades gracefully (no `overflow_path`, warning logged, search never fails). Completes the response-shaping feature: slim hits → byte-budgeted page + facets → full set on disk.
