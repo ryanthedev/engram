@@ -27,6 +27,10 @@ func (b *fixedHitsBackend) Search(_ context.Context, _ string, k int) ([]Hit, er
 
 func (b *fixedHitsBackend) Status(context.Context) (Status, error) { return Status{}, nil }
 
+func (b *fixedHitsBackend) Read(context.Context, string, string) (ReadResult, error) {
+	return ReadResult{}, errNotFound
+}
+
 // semanticHit builds a Hit whose Fields is a realistic semantic-tier
 // fields_json blob (per Phase 1's allowlist), padded to at least size bytes
 // so tests can force budget overflow deterministically.
@@ -380,6 +384,10 @@ func (b *recordingKBackend) Search(_ context.Context, _ string, k int) ([]Hit, e
 	return nil, nil
 }
 func (b *recordingKBackend) Status(context.Context) (Status, error) { return Status{}, nil }
+
+func (b *recordingKBackend) Read(context.Context, string, string) (ReadResult, error) {
+	return ReadResult{}, errNotFound
+}
 
 func searchViaWireIgnoringHits(t *testing.T, backend Backend, args map[string]any) (string, map[string]any) {
 	t.Helper()

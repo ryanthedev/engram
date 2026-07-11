@@ -724,6 +724,248 @@ func (x *AuditResponse) GetVersions() []*FactVersion {
 	return nil
 }
 
+// ReadRequest names one record by the (id, source) pair a search Hit exposes.
+type ReadRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Doc id exactly as surfaced by a search Hit. Empty -> INVALID_ARGUMENT.
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Source tier the id lives in: "episodic" | "semantic". Selects the ONE
+	// index consulted (never both). Empty or unknown -> INVALID_ARGUMENT;
+	// "graph" -> UNIMPLEMENTED (a graph hit already carries its statement).
+	Source        string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadRequest) Reset() {
+	*x = ReadRequest{}
+	mi := &file_engram_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadRequest) ProtoMessage() {}
+
+func (x *ReadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadRequest.ProtoReflect.Descriptor instead.
+func (*ReadRequest) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ReadRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ReadRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+// EpisodicRecord is one full episodic event as Read returns it: the record's
+// content projection ONLY. ACL/provenance fields (tenant_id, team_id, scope,
+// owner_agent_id) are authorized against server-side and then deliberately
+// projected away (fetch -> authorize -> project); embeddings and outbox
+// worker state never leave the store.
+type EpisodicRecord struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Doc id (the address the caller passed).
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Client-supplied idempotency identity (D13).
+	EventId string `protobuf:"bytes,2,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// Event classification (e.g. "tool_result", "conversation", "task").
+	Kind string `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
+	// Full, untruncated raw event text — the payload memory_read exists for.
+	Text          string                 `protobuf:"bytes,4,opt,name=text,proto3" json:"text,omitempty"`
+	SourceIds     []string               `protobuf:"bytes,5,rep,name=source_ids,json=sourceIds,proto3" json:"source_ids,omitempty"`
+	OccurredAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EpisodicRecord) Reset() {
+	*x = EpisodicRecord{}
+	mi := &file_engram_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EpisodicRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EpisodicRecord) ProtoMessage() {}
+
+func (x *EpisodicRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EpisodicRecord.ProtoReflect.Descriptor instead.
+func (*EpisodicRecord) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *EpisodicRecord) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *EpisodicRecord) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *EpisodicRecord) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *EpisodicRecord) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *EpisodicRecord) GetSourceIds() []string {
+	if x != nil {
+		return x.SourceIds
+	}
+	return nil
+}
+
+func (x *EpisodicRecord) GetOccurredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.OccurredAt
+	}
+	return nil
+}
+
+func (x *EpisodicRecord) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+// ReadResponse carries exactly one record: the branch matching the requested
+// source is populated, the other stays unset.
+type ReadResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Echoes the request's source ("episodic" | "semantic").
+	Source string `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	// Set when source=episodic.
+	Episodic *EpisodicRecord `protobuf:"bytes,2,opt,name=episodic,proto3" json:"episodic,omitempty"`
+	// Set when source=semantic: the TARGET version itself (a superseded id
+	// returns that immutable version with its possibly-closed validity
+	// interval), plus its provenance and full bi-temporal history — the Audit
+	// contract, reused.
+	Fact          *FactVersion   `protobuf:"bytes,3,opt,name=fact,proto3" json:"fact,omitempty"`
+	Provenance    *Provenance    `protobuf:"bytes,4,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	Versions      []*FactVersion `protobuf:"bytes,5,rep,name=versions,proto3" json:"versions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadResponse) Reset() {
+	*x = ReadResponse{}
+	mi := &file_engram_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadResponse) ProtoMessage() {}
+
+func (x *ReadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadResponse.ProtoReflect.Descriptor instead.
+func (*ReadResponse) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ReadResponse) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *ReadResponse) GetEpisodic() *EpisodicRecord {
+	if x != nil {
+		return x.Episodic
+	}
+	return nil
+}
+
+func (x *ReadResponse) GetFact() *FactVersion {
+	if x != nil {
+		return x.Fact
+	}
+	return nil
+}
+
+func (x *ReadResponse) GetProvenance() *Provenance {
+	if x != nil {
+		return x.Provenance
+	}
+	return nil
+}
+
+func (x *ReadResponse) GetVersions() []*FactVersion {
+	if x != nil {
+		return x.Versions
+	}
+	return nil
+}
+
 // ExportRequest resumes a paged graph export. cursor is the opaque
 // continuation token from the previous ExportResponse; empty starts from the
 // beginning. Clients never construct or inspect a non-empty cursor.
@@ -736,7 +978,7 @@ type ExportRequest struct {
 
 func (x *ExportRequest) Reset() {
 	*x = ExportRequest{}
-	mi := &file_engram_proto_msgTypes[9]
+	mi := &file_engram_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -748,7 +990,7 @@ func (x *ExportRequest) String() string {
 func (*ExportRequest) ProtoMessage() {}
 
 func (x *ExportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[9]
+	mi := &file_engram_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -761,7 +1003,7 @@ func (x *ExportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportRequest.ProtoReflect.Descriptor instead.
 func (*ExportRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{9}
+	return file_engram_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ExportRequest) GetCursor() string {
@@ -797,7 +1039,7 @@ type ExportEntity struct {
 
 func (x *ExportEntity) Reset() {
 	*x = ExportEntity{}
-	mi := &file_engram_proto_msgTypes[10]
+	mi := &file_engram_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -809,7 +1051,7 @@ func (x *ExportEntity) String() string {
 func (*ExportEntity) ProtoMessage() {}
 
 func (x *ExportEntity) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[10]
+	mi := &file_engram_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -822,7 +1064,7 @@ func (x *ExportEntity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportEntity.ProtoReflect.Descriptor instead.
 func (*ExportEntity) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{10}
+	return file_engram_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ExportEntity) GetId() string {
@@ -917,7 +1159,7 @@ type ExportEdge struct {
 
 func (x *ExportEdge) Reset() {
 	*x = ExportEdge{}
-	mi := &file_engram_proto_msgTypes[11]
+	mi := &file_engram_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -929,7 +1171,7 @@ func (x *ExportEdge) String() string {
 func (*ExportEdge) ProtoMessage() {}
 
 func (x *ExportEdge) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[11]
+	mi := &file_engram_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -942,7 +1184,7 @@ func (x *ExportEdge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportEdge.ProtoReflect.Descriptor instead.
 func (*ExportEdge) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{11}
+	return file_engram_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ExportEdge) GetId() string {
@@ -1036,7 +1278,7 @@ type ExportResponse struct {
 
 func (x *ExportResponse) Reset() {
 	*x = ExportResponse{}
-	mi := &file_engram_proto_msgTypes[12]
+	mi := &file_engram_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1048,7 +1290,7 @@ func (x *ExportResponse) String() string {
 func (*ExportResponse) ProtoMessage() {}
 
 func (x *ExportResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[12]
+	mi := &file_engram_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1061,7 +1303,7 @@ func (x *ExportResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportResponse.ProtoReflect.Descriptor instead.
 func (*ExportResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{12}
+	return file_engram_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ExportResponse) GetEntities() []*ExportEntity {
@@ -1094,7 +1336,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_engram_proto_msgTypes[13]
+	mi := &file_engram_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1106,7 +1348,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[13]
+	mi := &file_engram_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1119,7 +1361,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{13}
+	return file_engram_proto_rawDescGZIP(), []int{16}
 }
 
 // StatusResponse reports liveness, the resolved identity, and tier counts.
@@ -1142,7 +1384,7 @@ type StatusResponse struct {
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_engram_proto_msgTypes[14]
+	mi := &file_engram_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1154,7 +1396,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[14]
+	mi := &file_engram_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1167,7 +1409,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{14}
+	return file_engram_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *StatusResponse) GetHealthy() bool {
@@ -1289,7 +1531,29 @@ const file_engram_proto_rawDesc = "" +
 	"\n" +
 	"provenance\x18\x01 \x01(\v2\x15.engram.v1.ProvenanceR\n" +
 	"provenance\x122\n" +
-	"\bversions\x18\x02 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"'\n" +
+	"\bversions\x18\x02 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"5\n" +
+	"\vReadRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\"\xfa\x01\n" +
+	"\x0eEpisodicRecord\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
+	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12\x12\n" +
+	"\x04kind\x18\x03 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04text\x18\x04 \x01(\tR\x04text\x12\x1d\n" +
+	"\n" +
+	"source_ids\x18\x05 \x03(\tR\tsourceIds\x12;\n" +
+	"\voccurred_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"occurredAt\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xf4\x01\n" +
+	"\fReadResponse\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\tR\x06source\x125\n" +
+	"\bepisodic\x18\x02 \x01(\v2\x19.engram.v1.EpisodicRecordR\bepisodic\x12*\n" +
+	"\x04fact\x18\x03 \x01(\v2\x16.engram.v1.FactVersionR\x04fact\x125\n" +
+	"\n" +
+	"provenance\x18\x04 \x01(\v2\x15.engram.v1.ProvenanceR\n" +
+	"provenance\x122\n" +
+	"\bversions\x18\x05 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"'\n" +
 	"\rExportRequest\x12\x16\n" +
 	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\xd7\x02\n" +
 	"\fExportEntity\x12\x0e\n" +
@@ -1336,12 +1600,13 @@ const file_engram_proto_rawDesc = "" +
 	"\bagent_id\x18\x04 \x01(\tR\aagentId\x12%\n" +
 	"\x0eepisodic_count\x18\x05 \x01(\x03R\repisodicCount\x12%\n" +
 	"\x0esemantic_count\x18\x06 \x01(\x03R\rsemanticCount\x12-\n" +
-	"\x12opensearch_version\x18\a \x01(\tR\x11opensearchVersion2\xc0\x02\n" +
+	"\x12opensearch_version\x18\a \x01(\tR\x11opensearchVersion2\xf9\x02\n" +
 	"\x06Engram\x12=\n" +
 	"\x06Ingest\x12\x18.engram.v1.IngestRequest\x1a\x19.engram.v1.IngestResponse\x12=\n" +
 	"\x06Search\x12\x18.engram.v1.SearchRequest\x1a\x19.engram.v1.SearchResponse\x12=\n" +
 	"\x06Status\x12\x18.engram.v1.StatusRequest\x1a\x19.engram.v1.StatusResponse\x12:\n" +
-	"\x05Audit\x12\x17.engram.v1.AuditRequest\x1a\x18.engram.v1.AuditResponse\x12=\n" +
+	"\x05Audit\x12\x17.engram.v1.AuditRequest\x1a\x18.engram.v1.AuditResponse\x127\n" +
+	"\x04Read\x12\x16.engram.v1.ReadRequest\x1a\x17.engram.v1.ReadResponse\x12=\n" +
 	"\x06Export\x12\x18.engram.v1.ExportRequest\x1a\x19.engram.v1.ExportResponseB+Z)github.com/ryanthedev/engram/api/engrampbb\x06proto3"
 
 var (
@@ -1356,7 +1621,7 @@ func file_engram_proto_rawDescGZIP() []byte {
 	return file_engram_proto_rawDescData
 }
 
-var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_engram_proto_goTypes = []any{
 	(*IngestRequest)(nil),         // 0: engram.v1.IngestRequest
 	(*IngestResponse)(nil),        // 1: engram.v1.IngestResponse
@@ -1367,45 +1632,56 @@ var file_engram_proto_goTypes = []any{
 	(*Provenance)(nil),            // 6: engram.v1.Provenance
 	(*FactVersion)(nil),           // 7: engram.v1.FactVersion
 	(*AuditResponse)(nil),         // 8: engram.v1.AuditResponse
-	(*ExportRequest)(nil),         // 9: engram.v1.ExportRequest
-	(*ExportEntity)(nil),          // 10: engram.v1.ExportEntity
-	(*ExportEdge)(nil),            // 11: engram.v1.ExportEdge
-	(*ExportResponse)(nil),        // 12: engram.v1.ExportResponse
-	(*StatusRequest)(nil),         // 13: engram.v1.StatusRequest
-	(*StatusResponse)(nil),        // 14: engram.v1.StatusResponse
-	(*timestamppb.Timestamp)(nil), // 15: google.protobuf.Timestamp
+	(*ReadRequest)(nil),           // 9: engram.v1.ReadRequest
+	(*EpisodicRecord)(nil),        // 10: engram.v1.EpisodicRecord
+	(*ReadResponse)(nil),          // 11: engram.v1.ReadResponse
+	(*ExportRequest)(nil),         // 12: engram.v1.ExportRequest
+	(*ExportEntity)(nil),          // 13: engram.v1.ExportEntity
+	(*ExportEdge)(nil),            // 14: engram.v1.ExportEdge
+	(*ExportResponse)(nil),        // 15: engram.v1.ExportResponse
+	(*StatusRequest)(nil),         // 16: engram.v1.StatusRequest
+	(*StatusResponse)(nil),        // 17: engram.v1.StatusResponse
+	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
 }
 var file_engram_proto_depIdxs = []int32{
-	15, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
+	18, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
 	3,  // 1: engram.v1.SearchResponse.hits:type_name -> engram.v1.Hit
-	15, // 2: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
-	15, // 3: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
-	15, // 4: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
-	15, // 5: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
-	15, // 6: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
+	18, // 2: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
+	18, // 3: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
+	18, // 4: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
+	18, // 5: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
+	18, // 6: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
 	6,  // 7: engram.v1.AuditResponse.provenance:type_name -> engram.v1.Provenance
 	7,  // 8: engram.v1.AuditResponse.versions:type_name -> engram.v1.FactVersion
-	15, // 9: engram.v1.ExportEntity.valid_at:type_name -> google.protobuf.Timestamp
-	15, // 10: engram.v1.ExportEntity.created_at:type_name -> google.protobuf.Timestamp
-	15, // 11: engram.v1.ExportEdge.valid_at:type_name -> google.protobuf.Timestamp
-	15, // 12: engram.v1.ExportEdge.created_at:type_name -> google.protobuf.Timestamp
-	10, // 13: engram.v1.ExportResponse.entities:type_name -> engram.v1.ExportEntity
-	11, // 14: engram.v1.ExportResponse.edges:type_name -> engram.v1.ExportEdge
-	0,  // 15: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
-	2,  // 16: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
-	13, // 17: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
-	5,  // 18: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
-	9,  // 19: engram.v1.Engram.Export:input_type -> engram.v1.ExportRequest
-	1,  // 20: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
-	4,  // 21: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
-	14, // 22: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
-	8,  // 23: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
-	12, // 24: engram.v1.Engram.Export:output_type -> engram.v1.ExportResponse
-	20, // [20:25] is the sub-list for method output_type
-	15, // [15:20] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	18, // 9: engram.v1.EpisodicRecord.occurred_at:type_name -> google.protobuf.Timestamp
+	18, // 10: engram.v1.EpisodicRecord.created_at:type_name -> google.protobuf.Timestamp
+	10, // 11: engram.v1.ReadResponse.episodic:type_name -> engram.v1.EpisodicRecord
+	7,  // 12: engram.v1.ReadResponse.fact:type_name -> engram.v1.FactVersion
+	6,  // 13: engram.v1.ReadResponse.provenance:type_name -> engram.v1.Provenance
+	7,  // 14: engram.v1.ReadResponse.versions:type_name -> engram.v1.FactVersion
+	18, // 15: engram.v1.ExportEntity.valid_at:type_name -> google.protobuf.Timestamp
+	18, // 16: engram.v1.ExportEntity.created_at:type_name -> google.protobuf.Timestamp
+	18, // 17: engram.v1.ExportEdge.valid_at:type_name -> google.protobuf.Timestamp
+	18, // 18: engram.v1.ExportEdge.created_at:type_name -> google.protobuf.Timestamp
+	13, // 19: engram.v1.ExportResponse.entities:type_name -> engram.v1.ExportEntity
+	14, // 20: engram.v1.ExportResponse.edges:type_name -> engram.v1.ExportEdge
+	0,  // 21: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
+	2,  // 22: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
+	16, // 23: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
+	5,  // 24: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
+	9,  // 25: engram.v1.Engram.Read:input_type -> engram.v1.ReadRequest
+	12, // 26: engram.v1.Engram.Export:input_type -> engram.v1.ExportRequest
+	1,  // 27: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
+	4,  // 28: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
+	17, // 29: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
+	8,  // 30: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
+	11, // 31: engram.v1.Engram.Read:output_type -> engram.v1.ReadResponse
+	15, // 32: engram.v1.Engram.Export:output_type -> engram.v1.ExportResponse
+	27, // [27:33] is the sub-list for method output_type
+	21, // [21:27] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_engram_proto_init() }
@@ -1419,7 +1695,7 @@ func file_engram_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engram_proto_rawDesc), len(file_engram_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

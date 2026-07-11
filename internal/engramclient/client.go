@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ryanthedev/engram/api/engrampb"
 	"github.com/ryanthedev/engram/internal/authgrpc"
@@ -129,6 +130,95 @@ func (c *Client) Audit(ctx context.Context, id string) (AuditResult, error) {
 // scoping are enforced server-side from the bearer token's identity.
 func (c *Client) Export(ctx context.Context, cursor string) (*engrampb.ExportResponse, error) {
 	return c.api.Export(ctx, &engrampb.ExportRequest{Cursor: cursor})
+}
+
+// Read fetches one record's full content by the (id, source) pair a search
+// hit exposed — the memory_read drill. Authorization is enforced server-side
+// (fail-closed): a miss, mismatch, or denial comes back as gRPC NOT_FOUND.
+func (c *Client) Read(ctx context.Context, id, source string) (mcp.ReadResult, error) {
+	resp, err := c.api.Read(ctx, &engrampb.ReadRequest{Id: id, Source: source})
+	if err != nil {
+		return mcp.ReadResult{}, err
+	}
+	return readResultFromProto(id, resp), nil
+}
+
+// readResultFromProto adapts a ReadResponse into the MCP ReadResult shape:
+// structured fields as a real object (never re-stringified JSON), timestamps
+// as RFC 3339, zero-valued fields omitted rather than invented.
+func readResultFromProto(id string, resp *engrampb.ReadResponse) mcp.ReadResult {
+	out := mcp.ReadResult{ID: id, Source: resp.GetSource()}
+	if ep := resp.GetEpisodic(); ep != nil {
+		out.Fields = prune(map[string]any{
+			"text":        ep.GetText(),
+			"kind":        ep.GetKind(),
+			"event_id":    ep.GetEventId(),
+			"source_ids":  ep.GetSourceIds(),
+			"occurred_at": timeString(ep.GetOccurredAt()),
+			"created_at":  timeString(ep.GetCreatedAt()),
+		})
+	}
+	if f := resp.GetFact(); f != nil {
+		out.Fields = factFields(f)
+	}
+	if p := resp.GetProvenance(); p != nil {
+		out.Provenance = prune(map[string]any{
+			"tenant_id":         p.GetTenantId(),
+			"team_id":           p.GetTeamId(),
+			"scope":             p.GetScope(),
+			"owner_agent_id":    p.GetOwnerAgentId(),
+			"source_ids":        p.GetSourceIds(),
+			"extractor_version": p.GetExtractorVersion(),
+			"created_at":        timeString(p.GetCreatedAt()),
+		})
+	}
+	for _, v := range resp.GetVersions() {
+		out.Versions = append(out.Versions, factFields(v))
+	}
+	return out
+}
+
+// factFields renders one fact version as a structured field object.
+func factFields(f *engrampb.FactVersion) map[string]any {
+	return prune(map[string]any{
+		"id":         f.GetId(),
+		"statement":  f.GetStatement(),
+		"subject":    f.GetSubject(),
+		"predicate":  f.GetPredicate(),
+		"object":     f.GetObject(),
+		"supersedes": f.GetSupersedes(),
+		"valid_at":   timeString(f.GetValidAt()),
+		"invalid_at": timeString(f.GetInvalidAt()),
+		"created_at": timeString(f.GetCreatedAt()),
+		"expired_at": timeString(f.GetExpiredAt()),
+	})
+}
+
+// timeString renders a proto timestamp as RFC 3339, or "" when unset (an
+// open bi-temporal interval bound stays absent, never zero-dated).
+func timeString(ts *timestamppb.Timestamp) string {
+	if ts == nil {
+		return ""
+	}
+	return ts.AsTime().UTC().Format(time.RFC3339Nano)
+}
+
+// prune drops zero-valued entries ("" strings, empty slices) so the JSON a
+// caller reads carries only fields the record actually has.
+func prune(m map[string]any) map[string]any {
+	for k, v := range m {
+		switch t := v.(type) {
+		case string:
+			if t == "" {
+				delete(m, k)
+			}
+		case []string:
+			if len(t) == 0 {
+				delete(m, k)
+			}
+		}
+	}
+	return m
 }
 
 // Search runs one hybrid query and returns fused hits.

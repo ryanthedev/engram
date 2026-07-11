@@ -134,4 +134,10 @@
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Breadth results + compact-line rendering (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation complete (new `internal/mcp/render.go` + 15 tests)
+- [x] REVIEW: Verification passed (all 7 DW with execution evidence; 69/69 mcp tests, full suite + vet + lint clean)
+- [x] Committed
+Commit: ac9fb65
+Summary: `memory_search` now renders compact tab-separated lines (`id\tsource\tscore\tgist\tkey=value…`) in the MCP layer — episodic `text` is a rune-safe single-line lead snippet; every hit exposes `id`+`source` (the Phase-2 drill contract); the gRPC `Hit` still carries full untruncated `text`.

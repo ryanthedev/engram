@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -31,6 +32,21 @@ func (b *fakeBackend) Search(_ context.Context, query string, k int) ([]Hit, err
 	}
 	return hits, nil
 }
+
+// Read mirrors the server's fail-closed contract: only an exact (id, source)
+// match on the episodic tier resolves; everything else — unknown id, or a
+// valid id asked for under the wrong source — is the same opaque not-found.
+func (b *fakeBackend) Read(_ context.Context, id, source string) (ReadResult, error) {
+	for eventID, text := range b.ingested {
+		if "ep-"+eventID == id && source == "episodic" {
+			return ReadResult{ID: id, Source: source, Fields: map[string]any{"text": text, "event_id": eventID}}, nil
+		}
+	}
+	return ReadResult{}, errNotFound
+}
+
+// errNotFound stands in for the server's opaque gRPC NOT_FOUND denial.
+var errNotFound = errors.New("rpc error: code = NotFound desc = record not found")
 
 func (b *fakeBackend) Status(context.Context) (Status, error) {
 	return Status{Healthy: true, TenantID: "t1", UserID: "alice", EpisodicCount: int64(len(b.ingested))}, nil
@@ -115,7 +131,7 @@ func TestDW_3_5_ConformanceInitialize(t *testing.T) {
 	c.notify("notifications/initialized")
 }
 
-// TestDW_3_5_ConformanceListTools: tools/list advertises exactly the three
+// TestDW_3_5_ConformanceListTools: tools/list advertises exactly the four
 // Engram tools with input schemas.
 func TestDW_3_5_ConformanceListTools(t *testing.T) {
 	c := startServer(t, newFakeBackend())
@@ -131,13 +147,13 @@ func TestDW_3_5_ConformanceListTools(t *testing.T) {
 			t.Errorf("tool %v missing inputSchema", tm["name"])
 		}
 	}
-	for _, want := range []string{ToolIngest, ToolSearch, ToolStatus} {
+	for _, want := range []string{ToolIngest, ToolSearch, ToolRead, ToolStatus} {
 		if !names[want] {
 			t.Errorf("tools/list missing %s", want)
 		}
 	}
-	if len(names) != 3 {
-		t.Errorf("advertised %d tools, want 3", len(names))
+	if len(names) != 4 {
+		t.Errorf("advertised %d tools, want 4", len(names))
 	}
 }
 

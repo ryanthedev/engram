@@ -49,6 +49,19 @@ service Engram {
   // oracle). Scope enforcement applies here exactly as it does to search.
   rpc Audit(AuditRequest) returns (AuditResponse);
 
+  // Read returns ONE record's full content by (id, source) — the deliberate
+  // drill-down behind the MCP memory_read tool. A full read spends the
+  // caller's context, so it is a separate explicit call, never inlined into
+  // Search. source selects the index dispatched to: "episodic" returns the
+  // full raw event text, "semantic" returns the target fact version plus its
+  // provenance and bi-temporal history (the Audit contract). Graph statements
+  // are already whole in search hits, so "graph" is UNIMPLEMENTED. Read is a
+  // by-id trust boundary: it runs the same fail-closed authorization as
+  // Search/Audit — an unknown id, a cross-tenant record, an id/source
+  // mismatch, or a record the caller may not read all return NOT_FOUND (no
+  // existence oracle), and the handler never probes the other index.
+  rpc Read(ReadRequest) returns (ReadResponse);
+
   // Export returns one bounded page of the caller's tenant-scoped, live,
   // ACL-filtered graph (entities then edges) plus an opaque continuation
   // cursor — the backing RPC for `engram export <dir>`. The tenant is pinned
@@ -157,6 +170,51 @@ message FactVersion {
 message AuditResponse {
   Provenance provenance = 1;
   repeated FactVersion versions = 2;
+}
+
+// ReadRequest names one record by the (id, source) pair a search Hit exposes.
+message ReadRequest {
+  // Doc id exactly as surfaced by a search Hit. Empty -> INVALID_ARGUMENT.
+  string id = 1;
+  // Source tier the id lives in: "episodic" | "semantic". Selects the ONE
+  // index consulted (never both). Empty or unknown -> INVALID_ARGUMENT;
+  // "graph" -> UNIMPLEMENTED (a graph hit already carries its statement).
+  string source = 2;
+}
+
+// EpisodicRecord is one full episodic event as Read returns it: the record's
+// content projection ONLY. ACL/provenance fields (tenant_id, team_id, scope,
+// owner_agent_id) are authorized against server-side and then deliberately
+// projected away (fetch -> authorize -> project); embeddings and outbox
+// worker state never leave the store.
+message EpisodicRecord {
+  // Doc id (the address the caller passed).
+  string id = 1;
+  // Client-supplied idempotency identity (D13).
+  string event_id = 2;
+  // Event classification (e.g. "tool_result", "conversation", "task").
+  string kind = 3;
+  // Full, untruncated raw event text — the payload memory_read exists for.
+  string text = 4;
+  repeated string source_ids = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// ReadResponse carries exactly one record: the branch matching the requested
+// source is populated, the other stays unset.
+message ReadResponse {
+  // Echoes the request's source ("episodic" | "semantic").
+  string source = 1;
+  // Set when source=episodic.
+  EpisodicRecord episodic = 2;
+  // Set when source=semantic: the TARGET version itself (a superseded id
+  // returns that immutable version with its possibly-closed validity
+  // interval), plus its provenance and full bi-temporal history — the Audit
+  // contract, reused.
+  FactVersion fact = 3;
+  Provenance provenance = 4;
+  repeated FactVersion versions = 5;
 }
 
 // ExportRequest resumes a paged graph export. cursor is the opaque

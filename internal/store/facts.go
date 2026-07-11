@@ -42,6 +42,31 @@ func (s *OpenSearchStore) GetFact(ctx context.Context, id string) (vf VersionedF
 	}
 }
 
+// GetEpisodic fetches one episodic record by doc _id via realtime GET —
+// mirrors GetFact on the episodic index. It returns the FULL stored record
+// including its ACL/provenance fields: the server's Read handler authorizes
+// against those fields BEFORE projecting them away (fetch -> authorize ->
+// project), exactly as AuditFact's caller does. ok=false means no such doc
+// (a semantic id asked for here lands in this branch — the getter never
+// probes another index).
+func (s *OpenSearchStore) GetEpisodic(ctx context.Context, id string) (rec memory.Episodic, ok bool, err error) {
+	status, decoded, err := doJSON(ctx, s.client, http.MethodGet, s.baseURL+"/"+s.episodicIndex+"/_doc/"+id, nil)
+	if err != nil {
+		return memory.Episodic{}, false, fmt.Errorf("store: getting episodic %s: %w", id, err)
+	}
+	switch status {
+	case http.StatusOK:
+		if err := decodeSource(decoded, &rec); err != nil {
+			return memory.Episodic{}, false, fmt.Errorf("store: decoding episodic %s: %w", id, err)
+		}
+		return rec, true, nil
+	case http.StatusNotFound:
+		return memory.Episodic{}, false, nil
+	default:
+		return memory.Episodic{}, false, fmt.Errorf("store: getting episodic %s: unexpected status %d: %v", id, status, decoded)
+	}
+}
+
 // Candidates returns up to k live semantic facts relevant to f for
 // reconciliation: exact content-key matches rank first, then same
 // subject+predicate assertions, then statement text matches — all

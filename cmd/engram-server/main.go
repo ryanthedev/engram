@@ -271,6 +271,9 @@ func main() {
 	svc.Probe = st
 	svc.Auditor = st
 	svc.ACL = aclFilter
+	// The Read RPC's episodic branch drills into the same store search reads
+	// from; its semantic branch reuses the Auditor above.
+	svc.Episodic = st
 	// The Export RPC pages over the same graph store the worker stage and
 	// expander use — no shadow read path; tenant/ACL are enforced in the
 	// handler on top of the store's own tenant-scoped scan.

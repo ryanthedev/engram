@@ -64,6 +64,9 @@ type Server struct {
 	// Exporter backs the Export RPC (the Phase 1 graph scan); nil disables
 	// exporting (UNIMPLEMENTED). See export.go.
 	Exporter Exporter
+	// Episodic backs the Read RPC's episodic branch; nil disables episodic
+	// reads (UNIMPLEMENTED). See read.go.
+	Episodic EpisodicReader
 }
 
 // New returns a Server wired to s (write path) and r (read path).

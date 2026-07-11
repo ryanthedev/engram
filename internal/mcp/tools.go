@@ -20,7 +20,14 @@ const (
 	ToolIngest = "memory_ingest"
 	ToolSearch = "memory_search"
 	ToolStatus = "memory_status"
+	ToolRead   = "memory_read"
 )
+
+// readSources are the source values memory_read accepts — validated at this
+// entry (agent-supplied arguments are external input) before the id ever
+// reaches the backend. "graph" is recognized but short-circuited: a graph
+// hit's statement already IS the whole memory.
+var readSources = map[string]bool{"episodic": true, "semantic": true, "graph": true}
 
 // toolSchemas is the advertised tool set. Kept as a function so each call
 // gets a fresh map (no shared-mutable-state hazard).
@@ -52,6 +59,18 @@ func toolSchemas() []toolSchema {
 					"k":     map[string]any{"type": "integer", "description": "Max hits to return (default server-chosen)."},
 				},
 				"required": []any{"query"},
+			},
+		},
+		{
+			Name:        ToolRead,
+			Description: "Read ONE memory record's full content by the id and source a memory_search result line exposes. Episodic returns the full untruncated text; semantic returns the fact plus its provenance and version history. Spends your context on the whole record — drill deliberately.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id":     strProp("Record id exactly as shown in a memory_search result (required)."),
+					"source": strProp(`Source tier of the id: "episodic" or "semantic" (required; "graph" has no drill-down).`),
+				},
+				"required": []any{"id", "source"},
 			},
 		},
 		{
@@ -90,6 +109,8 @@ func (s *Server) handleToolsCall(ctx context.Context, raw json.RawMessage) (any,
 		return s.callIngest(ctx, p.Arguments)
 	case ToolSearch:
 		return s.callSearch(ctx, p.Arguments)
+	case ToolRead:
+		return s.callRead(ctx, p.Arguments)
 	case ToolStatus:
 		return s.callStatus(ctx)
 	default:
@@ -155,6 +176,35 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	// "rendered form fits budget" without re-measuring here.
 	rendered := renderSearchResult(result)
 	return toolResultWithText(rendered, compactLines(rendered)), nil
+}
+
+// callRead is the memory_read tool: the deliberate full-record drill for an
+// (id, source) pair surfaced by memory_search. Arguments are validated here
+// at the tool barricade (they arrive from the agent — external input); the
+// server re-validates and authorizes fail-closed on its side of the gRPC
+// boundary, so a miss, mismatch, or denial surfaces as one opaque not-found.
+func (s *Server) callRead(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		ID     string `json:"id"`
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "invalid memory_read arguments"}
+	}
+	if args.ID == "" || args.Source == "" {
+		return toolError("memory_read requires non-empty id and source"), nil
+	}
+	if !readSources[args.Source] {
+		return toolError(`memory_read source must be "episodic" or "semantic" (as shown in the memory_search result line)`), nil
+	}
+	if args.Source == "graph" {
+		return toolError("graph records have no drill-down: the memory_search result already carries the full statement"), nil
+	}
+	result, err := s.backend.Read(ctx, args.ID, args.Source)
+	if err != nil {
+		return toolError(fmt.Sprintf("read failed: %v", err)), nil
+	}
+	return toolResult(result), nil
 }
 
 func (s *Server) callStatus(ctx context.Context) (any, *rpcError) {
