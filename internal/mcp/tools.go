@@ -148,7 +148,13 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 			result.OverflowPath = path
 		}
 	}
-	return toolResult(result), nil
+	// Render AFTER packing/spilling: the byte budget above is enforced on the
+	// raw (fields_json-escaped) form, which is provably larger than its
+	// rendered compact-line/un-nested-fields form (no double-encoding, plus
+	// episodic text is now truncated) — so "packed form fits budget" implies
+	// "rendered form fits budget" without re-measuring here.
+	rendered := renderSearchResult(result)
+	return toolResultWithText(rendered, compactLines(rendered)), nil
 }
 
 func (s *Server) callStatus(ctx context.Context) (any, *rpcError) {
@@ -165,6 +171,20 @@ func toolResult(payload any) map[string]any {
 	text, _ := json.Marshal(payload)
 	return map[string]any{
 		"content":           []any{map[string]any{"type": "text", "text": string(text)}},
+		"structuredContent": payload,
+		"isError":           false,
+	}
+}
+
+// toolResultWithText wraps a structured payload as an MCP tool result whose
+// content text block is the caller-supplied rendering (memory_search's
+// compact-line format) rather than a straight marshal of payload — while
+// structuredContent still carries the full structured payload for clients
+// that consume it. toolResult stays the JSON-marshal-both-ways default;
+// this is the divergent case.
+func toolResultWithText(payload any, text string) map[string]any {
+	return map[string]any{
+		"content":           []any{map[string]any{"type": "text", "text": text}},
 		"structuredContent": payload,
 		"isError":           false,
 	}

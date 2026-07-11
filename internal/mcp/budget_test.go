@@ -43,8 +43,12 @@ func semanticHit(id, subject, predicate, object string, pad int) Hit {
 }
 
 // searchViaWire drives memory_search end to end through the JSON-RPC wire
-// (refClient) and returns the raw structured payload text (exactly what
-// toolResult marshaled as the tool's content block) plus the decoded result.
+// (refClient) and returns the raw compact-line text (exactly what
+// toolResultWithText rendered as the tool's content block) plus the
+// structured result. Since Phase 1 (DW-1.1), the text block is no longer
+// JSON — decoded comes from structuredContent instead, which the JSON-RPC
+// layer already parsed into a map (no re-unmarshal needed) and carries the
+// same field names (hits/omitted/omitted_facets/hint/overflow_path).
 func searchViaWire(t *testing.T, backend Backend, args map[string]any) (text string, decoded map[string]any) {
 	t.Helper()
 	c := startServer(t, backend)
@@ -60,8 +64,9 @@ func searchViaWire(t *testing.T, backend Backend, args map[string]any) (text str
 	}
 	block, _ := content[0].(map[string]any)
 	text, _ = block["text"].(string)
-	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
-		t.Fatalf("decoding memory_search result text: %v (%s)", err, text)
+	decoded, _ = res["structuredContent"].(map[string]any)
+	if decoded == nil {
+		t.Fatalf("memory_search returned no structuredContent: %v", res)
 	}
 	return text, decoded
 }
