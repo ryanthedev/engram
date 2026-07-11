@@ -3,7 +3,7 @@
 **Created:** 2026-07-10
 **Status:** in-progress
 **Started:** 2026-07-10 21:16
-**Current Phase:** 1
+**Current Phase:** 2
 **Complexity:** complex
 ---
 ## Context
@@ -274,4 +274,10 @@ Engram is memory-only; arXiv's live API is fragile under paper-grabber's discove
 
 ---
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Proto contract & Backend seam (Gate: Full)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: Verification passed (sonnet, single sample)
+- [x] Committed
+Commit: 84fa0f5
+Summary: Froze the knowledge wire+backend contract — 6 RPCs + 13 messages in engram.proto with generic Predicate/SortKey and a Value oneof(scalar|range), Provenance.roles claim, and mcp.Backend +6 knowledge methods stubbed across engramclient + test doubles. Repo builds/tests/lints clean; proto regen deterministic and drift-free post-commit. Downstream phases now implement against frozen `engrampb` types + `mcp.Backend`/seam types (KnowledgeDoc, Predicate, SortKey, FieldSpec, CollectionSpec, CollectionInfo) in internal/mcp/mcp.go.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -138,7 +139,9 @@ func TestDW_3_3_ValidTokenInjectsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valid call err = %v", err)
 	}
-	if !ok || seen != id {
+	// DeepEqual: Identity carries a Roles slice since Phase 2 of the
+	// knowledge platform, so == no longer compiles.
+	if !ok || !reflect.DeepEqual(seen, id) {
 		t.Fatalf("handler identity = %+v (ok=%v), want %+v", seen, ok, id)
 	}
 }
