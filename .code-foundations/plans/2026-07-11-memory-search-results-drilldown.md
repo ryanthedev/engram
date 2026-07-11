@@ -1,9 +1,10 @@
 # Plan: memory_search breadth-first results + memory_read drill-down
 
 **Created:** 2026-07-11
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-11 14:30
-**Current Phase:** 1
+**Completed:** 2026-07-11 15:20
+**Duration:** ~50 min (3 phases)
 **Complexity:** medium
 
 ---
@@ -148,3 +149,10 @@ Summary: `memory_search` now renders compact tab-separated lines (`id\tsource\ts
 - [x] Committed
 Commit: ca571d1
 Summary: `memory_read(id, source)` drills to a single record's full body — new gRPC `Read` RPC, fail-closed episodic getter (`GetEpisodic`, fetch→authorize→project), Audit-reusing semantic branch, graph UNIMPLEMENTED; wired through `engramclient`→`Backend.Read`→`memory_read` MCP tool; output is structured un-nested JSON.
+
+### Phase 3: hint → overflow_path escape hatch (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation complete (`refineHint` gains `overflowPathSet` gating in `budget.go`; spill-failure downgrade in `tools.go`; 8 tests)
+- [x] REVIEW: Verification passed (all 3 DW with evidence incl. a real filesystem-permission spill-failure dirty test; suite + vet + lint clean)
+- [x] Committed
+Commit: 009c2d4
+Summary: the `memory_search` `hint` now names engram's own `overflow_path` (full set on disk) and `memory_read(id, source)` (single-hit drill) when a set overflows the budget — never dangling a path the spill didn't write; spill/packing behavior unchanged.
