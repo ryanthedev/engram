@@ -3,6 +3,7 @@ package harvester
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"sync"
@@ -27,22 +28,21 @@ type Source interface {
 	Harvest(ctx context.Context, sink Sink) error
 }
 
-// Sink is the interface used by sources to ingest documents.
+// Sink is the interface used by sources to ingest documents. Deletion is NOT a
+// Sink operation: engram's knowledge API exposes only the mark-and-sweep
+// KnowledgeDelete (harvest_id != current), no per-doc-id delete, so orphaned
+// docs are removed by a FullHarvest source's post-run sweep — see Deps and the
+// Runner, not here.
 type Sink interface {
 	Add(doc mcp.KnowledgeDoc) error
-	Delete(id string) error
 	Flush(ctx context.Context) error
 }
 
-// StateStore is the seam for persisting harvesting checkpoints.
-type StateStore interface {
-	LastSHA(repo string) (string, bool)
-	SetLastSHA(repo, sha string) error
-}
-
-// Deps encapsulates harvester dependencies.
+// Deps carries runtime dependencies injected into each source at construction.
+// It is the stable extensibility seam in the factory signature; v1 carries a
+// logger (sources log skips, deleted-record notices, and politeness backoffs).
 type Deps struct {
-	State StateStore
+	Logger *slog.Logger
 }
 
 var (

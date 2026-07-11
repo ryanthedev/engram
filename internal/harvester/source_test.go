@@ -3,6 +3,7 @@ package harvester_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -13,7 +14,6 @@ import (
 // Assert fake types satisfy interfaces at compile-time.
 var _ harvester.Source = (*fakeSource)(nil)
 var _ harvester.Sink = (*fakeSink)(nil)
-var _ harvester.StateStore = (*fakeStateStore)(nil)
 
 type fakeSource struct {
 	typ  string
@@ -26,7 +26,6 @@ func (f *fakeSource) Harvest(ctx context.Context, sink harvester.Sink) error { r
 
 type fakeSink struct {
 	added   []mcp.KnowledgeDoc
-	deleted []string
 	flushed bool
 }
 
@@ -35,30 +34,8 @@ func (f *fakeSink) Add(doc mcp.KnowledgeDoc) error {
 	return nil
 }
 
-func (f *fakeSink) Delete(id string) error {
-	f.deleted = append(f.deleted, id)
-	return nil
-}
-
 func (f *fakeSink) Flush(ctx context.Context) error {
 	f.flushed = true
-	return nil
-}
-
-type fakeStateStore struct {
-	shas map[string]string
-}
-
-func (f *fakeStateStore) LastSHA(repo string) (string, bool) {
-	sha, ok := f.shas[repo]
-	return sha, ok
-}
-
-func (f *fakeStateStore) SetLastSHA(repo, sha string) error {
-	if f.shas == nil {
-		f.shas = make(map[string]string)
-	}
-	f.shas[repo] = sha
 	return nil
 }
 
@@ -69,7 +46,7 @@ func TestDW_1_3_SourceBuild(t *testing.T) {
 	})
 
 	deps := harvester.Deps{
-		State: &fakeStateStore{},
+		Logger: slog.Default(),
 	}
 
 	cfg := harvester.SourceConfig{
