@@ -3,7 +3,7 @@
 **Created:** 2026-07-10
 **Status:** in-progress
 **Started:** 2026-07-10 21:16
-**Current Phase:** 3
+**Current Phase:** 4
 **Complexity:** complex
 ---
 ## Context
@@ -120,7 +120,7 @@ Engram is memory-only; arXiv's live API is fragile under paper-grabber's discove
 **Goal:** A batch document-write path (upsert-by-id, no embedding) plus a delete-by-query sweep — the intentional, documented deviation from engram's append-only writes.
 
 **Scope:**
-- IN: a `doNDJSON` sibling to `doJSON` (opensearch.go:220) for `application/x-ndjson`; `BulkIndex(ctx, index string, docs []knowledge.Document, harvestID string) (indexed int, err error)` — `_bulk` with `index` action (upsert-by-id), stamping `harvest_id`, `source_version`, and server-set `harvested_at` on every row, NO embedding call; `DeleteByQuery(ctx, index, collection, source, currentHarvestID string) (deleted int, err error)` via `POST /<index>/_delete_by_query` (matches `collection` AND `source` AND `harvest_id != currentHarvestID`).
+- IN: a `doNDJSON` sibling to `doJSON` (opensearch.go:220) for `application/x-ndjson`; `BulkIndex(ctx, index, textField string, docs []knowledge.Document, harvestID string) (indexed int, err error)` — `_bulk` with `index` action (upsert-by-id), writing `Document.Text` under the collection's configured `textField` (NOT a hardcoded `"text"` — collections set `TextField`, e.g. arXiv=`abstract`), stamping `harvest_id`, `source_version`, and server-set `harvested_at` on every row, NO embedding call. `textField` is validated (reserved-field/regex) before use, per the Phase-3 path-safety lesson; `DeleteByQuery(ctx, index, collection, source, currentHarvestID string) (deleted int, err error)` via `POST /<index>/_delete_by_query` (matches `collection` AND `source` AND `harvest_id != currentHarvestID`).
 - OUT: authorization (Phase 6 barricade), harvest orchestration (Plan 2).
 
 **Constraints:** No `op_type=create`, no `if_seq_no` guard — this path is deliberately upsert/overwrite. Map non-2xx via the existing status switch; wrap errors `"store: verb-ing noun: %w"`. `harvested_at` is server-assigned, never client-trusted.
@@ -128,7 +128,7 @@ Engram is memory-only; arXiv's live API is fragile under paper-grabber's discove
 **Produces:** `store.KnowledgeStore{BulkIndex, DeleteByQuery}` (the two signatures above). Consumes `knowledge.Document` from Phase 3 (not defined here).
 **Rollback:** writes are upserts to `knowledge-*` indices only; a bad batch is corrected by re-ingest or sweep. No memory index touched.
 **Done when:**
-- [ ] DW-4.1: `BulkIndex` upserts N docs by `_id`, stamps `harvest_id`/`source_version`/`harvested_at`, issues zero embedding calls (integration test asserts doc count + fields + no embed-server hit).
+- [ ] DW-4.1: `BulkIndex` upserts N docs by `_id`, writes `Document.Text` under the caller-supplied `textField`, stamps `harvest_id`/`source_version`/`harvested_at`, issues zero embedding calls (integration test asserts doc count + fields + no embed-server hit; and a collection with a NON-default `TextField` like `abstract` round-trips — the doc is searchable under that field).
 - [ ] DW-4.2: re-`BulkIndex` of the same id overwrites in place (no duplicate row).
 - [ ] DW-4.3: `DeleteByQuery` removes rows matching `collection` AND `source` AND `harvest_id != <currentHarvestID>` (the mark-and-sweep predicate — rows not touched by the latest run), leaving current-run rows.
 - [ ] DW-4.4: a `_bulk` response containing per-item errors surfaces them (does not report full success).
@@ -288,3 +288,10 @@ Summary: Froze the knowledge wire+backend contract — 6 RPCs + 13 messages in e
 - [x] Committed
 Commit: 7a714ee
 Summary: Added `Roles []string` to auth.Identity + TokenRecord (mint/read-time normalized, cloned), populated ONLY from the verified token — client-supplied roles proven ignored. New `internal/knowledgeauth` package: fail-closed `AuthorizeRead(id, public, requiredRoles)` / `AuthorizeWrite(id, requiredRole)` returning unwrapped `ErrForbidden` (auth-before-public ordering; unknown/empty roles deny not error). auth-tokens.json gains a `roles` keyword field. Enforcement call-sites land in Phase 6. Follow-ups: no CLI `--roles` mint flag yet; existing strict token indices need re-provisioning (omitempty keeps old tokens writable).
+
+### Phase 3: Collection registry (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete (assumption confirmed live — `_aliases` swap atomic: 60 swaps / 866 concurrent reads / 0 failures)
+- [x] REVIEW: FAIL→PASS (1 attempt) — review caught a path-traversal in `Provision`; fixed with `validateCollectionName` + a `getMetaDoc` choke-point barricade; re-review reproduced the attack as now-blocked (0 HTTP) and re-audited all 8 URL-building sites
+- [x] Committed
+Commit: 2cc4d12
+Summary: `internal/knowledge` owns domain types (CollectionSpec, AccessPolicy, FieldSpec, Document) + the `CollectionRegistry` interface; `internal/store/registry.go` implements it on OpenSearch — meta-doc CRUD, live index/mapping provisioning, `-vN` reindex + atomic alias swap, generation-guarded whole-set cache, idempotent YAML seed. Engram never restarts for a collection change. All caller-supplied names validated before entering a REST path (security). P4 consumes `knowledge.Document` + the registry for collection→index resolution; P5 consumes `knowledge.CollectionSpec` for field validation; P6 translates mcp DTOs ↔ domain types.

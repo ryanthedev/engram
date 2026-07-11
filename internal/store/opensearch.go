@@ -244,3 +244,30 @@ func doJSON(ctx context.Context, client *http.Client, method, url string, body [
 	}
 	return resp.StatusCode, decoded, nil
 }
+
+// doNDJSON is doJSON's sibling for the OpenSearch `_bulk` endpoint, the one
+// request in this package whose body is newline-delimited JSON rather than a
+// single document. body is caller-assembled NDJSON (each action/source line
+// already `\n`-terminated); the response itself is ordinary JSON, decoded the
+// same way doJSON does.
+func doNDJSON(ctx context.Context, client *http.Client, method, url string, body []byte) (int, map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	var decoded map[string]any
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &decoded)
+	}
+	return resp.StatusCode, decoded, nil
+}
