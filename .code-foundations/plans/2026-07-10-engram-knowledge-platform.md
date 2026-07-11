@@ -1,9 +1,10 @@
 # Plan: Engram Knowledge Platform (Plan 1 of 2)
 
 **Created:** 2026-07-10
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-10 21:16
-**Current Phase:** 6
+**Completed:** 2026-07-10 22:52
+**Duration:** ~1h36m
 **Complexity:** complex
 ---
 ## Context
@@ -288,6 +289,13 @@ Summary: Froze the knowledge wire+backend contract — 6 RPCs + 13 messages in e
 - [x] Committed
 Commit: 7a714ee
 Summary: Added `Roles []string` to auth.Identity + TokenRecord (mint/read-time normalized, cloned), populated ONLY from the verified token — client-supplied roles proven ignored. New `internal/knowledgeauth` package: fail-closed `AuthorizeRead(id, public, requiredRoles)` / `AuthorizeWrite(id, requiredRole)` returning unwrapped `ErrForbidden` (auth-before-public ordering; unknown/empty roles deny not error). auth-tokens.json gains a `roles` keyword field. Enforcement call-sites land in Phase 6. Follow-ups: no CLI `--roles` mint flag yet; existing strict token indices need re-provisioning (omitempty keeps old tokens writable).
+
+### Phase 6: MCP tools + server wiring (Gate: Full, Security-sensitive)
+- [x] BUILD: complete (assumption held — budget/spill reuse needed only facet parametrization). engramclient stubs → real gRPC; main.go wired; end-to-end live integration test added (covers the Phase-5 retriever live gap).
+- [x] REVIEW: 2/2 fable samples PASS (run sequentially — shared cluster); majority decided so the redundant 3rd was consciously skipped. Both independently confirmed self-elevation is structurally impossible (no caller-role request field, interceptor-only identity, fail-closed, provenance overwritten). Non-blocking notes: gated-read existence oracle (plan-pinned usability trade); empty-docs reaches BulkIndex unchecked; malformed create-name → Internal not InvalidArgument (registry errors untyped, P3 scope).
+- [x] Committed
+Commit: 22291ed
+Summary: `internal/server/knowledge.go` (6 gRPC handlers, barricade validation, sentinel→code map, harvester/admin role constants) + `internal/mcp/tools.go` (6 tool schemas/handlers, packAndSpill) + budget.go facet parametrization + engramclient real gRPC + main.go construction. RBAC enforced at the barricade; memory path pinned unchanged (DW-6.5). Knowledge platform is end-to-end over gRPC + MCP.
 
 ### Phase 5: KnowledgeRetriever (Gate: Full)
 - [x] BUILD: complete (assumption held — buildQuery sort is additive, memory byte-identical via golden-byte test)
