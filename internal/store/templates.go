@@ -40,6 +40,16 @@ const (
 	// enforcement reads it fresh, so deleting an edge revokes on the next call.
 	ACLEdgesTemplateName = "engram-acl-edges"
 	ACLEdgesIndex        = "engram-acl-edges-000001"
+	// KnowledgeCollectionsTemplateName / KnowledgeCollectionsIndex name the
+	// knowledge-platform collection registry meta-index (Phase 3): one doc
+	// per collection, keyed by collection name — the durable source of truth
+	// behind store.CollectionRegistry, so collections are created/updated at
+	// runtime with no restart. Data indices are knowledge-<name>-vN behind a
+	// knowledge-<name> alias; the "-" the name grammar forbids keeps them off
+	// this template's knowledge-collections-* pattern (and the reserved name
+	// "collections" closes the one hole).
+	KnowledgeCollectionsTemplateName = "knowledge-collections"
+	KnowledgeCollectionsIndex        = "knowledge-collections-000001"
 	// RRFPipelineName is the hybrid-search fusion pipeline (D1).
 	RRFPipelineName = "engram-rrf"
 )
@@ -73,6 +83,13 @@ var AuthTokenTemplateJSON []byte
 //
 //go:embed templates/acl-edges.json
 var ACLEdgesTemplateJSON []byte
+
+// KnowledgeCollectionsTemplateJSON is the collection-registry meta-index
+// template (Phase 3): strict-mapped spec rows (name/text_field/index/version/
+// public/roles/fields[]/updated_at).
+//
+//go:embed templates/knowledge-collections.json
+var KnowledgeCollectionsTemplateJSON []byte
 
 // RRFPipelineJSON is the RRF search pipeline (score-ranker-processor,
 // rank_constant=60 — D1/D14).

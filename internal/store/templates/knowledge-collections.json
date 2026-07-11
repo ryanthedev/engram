@@ -1,0 +1,30 @@
+{
+  "index_patterns": ["knowledge-collections-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "name": { "type": "keyword" },
+        "text_field": { "type": "keyword" },
+        "index": { "type": "keyword" },
+        "version": { "type": "integer" },
+        "public": { "type": "boolean" },
+        "roles": { "type": "keyword" },
+        "fields": {
+          "properties": {
+            "name": { "type": "keyword" },
+            "type": { "type": "keyword" },
+            "filterable": { "type": "boolean" },
+            "sortable": { "type": "boolean" }
+          }
+        },
+        "updated_at": { "type": "date" }
+      }
+    }
+  }
+}

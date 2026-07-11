@@ -65,6 +65,7 @@ func Apply(ctx context.Context, client *http.Client, baseURL string) (ApplyResul
 		{LedgerTemplateName, http.MethodPut, "/_index_template/" + LedgerTemplateName, LedgerTemplateJSON, true},
 		{AuthTokenTemplateName, http.MethodPut, "/_index_template/" + AuthTokenTemplateName, AuthTokenTemplateJSON, true},
 		{ACLEdgesTemplateName, http.MethodPut, "/_index_template/" + ACLEdgesTemplateName, ACLEdgesTemplateJSON, true},
+		{KnowledgeCollectionsTemplateName, http.MethodPut, "/_index_template/" + KnowledgeCollectionsTemplateName, KnowledgeCollectionsTemplateJSON, true},
 		{RRFPipelineName, http.MethodPut, "/_search/pipeline/" + RRFPipelineName, RRFPipelineJSON, true},
 	}
 	for _, s := range steps {
@@ -74,8 +75,8 @@ func Apply(ctx context.Context, client *http.Client, baseURL string) (ApplyResul
 		res.Actions[s.name] = "applied"
 	}
 
-	for _, idx := range []string{EpisodicIndex, SemanticIndex, LedgerIndex, AuthTokenIndex, ACLEdgesIndex} {
-		action, err := ensureIndex(ctx, client, base, idx)
+	for _, idx := range []string{EpisodicIndex, SemanticIndex, LedgerIndex, AuthTokenIndex, ACLEdgesIndex, KnowledgeCollectionsIndex} {
+		action, err := ensureIndex(ctx, client, base, idx, nil)
 		if err != nil {
 			return res, err
 		}
@@ -86,11 +87,13 @@ func Apply(ctx context.Context, client *http.Client, baseURL string) (ApplyResul
 
 // ensureIndex idempotently creates index if absent, inheriting whatever
 // engram-<tier>* template already matches its name (Apply PUTs the templates
-// first). It returns "unchanged" when the index already exists — including
-// when a concurrent creator won the exists-check/create race — and "created"
-// when this call made it. It is the shared body behind both Apply's default
-// indices and EnsureIndices' configured ones.
-func ensureIndex(ctx context.Context, client *http.Client, base, index string) (action string, err error) {
+// first). A nil body creates a bare index; a non-nil body is the create-time
+// definition (mappings/aliases — the collection registry's data indices). It
+// returns "unchanged" when the index already exists — including when a
+// concurrent creator won the exists-check/create race — and "created" when
+// this call made it. It is the shared body behind Apply's default indices,
+// EnsureIndices' configured ones, and CollectionRegistry provisioning.
+func ensureIndex(ctx context.Context, client *http.Client, base, index string, body []byte) (action string, err error) {
 	exists, err := indexExists(ctx, client, base, index)
 	if err != nil {
 		return "", fmt.Errorf("store: checking index %s: %w", index, err)
@@ -98,7 +101,7 @@ func ensureIndex(ctx context.Context, client *http.Client, base, index string) (
 	if exists {
 		return "unchanged", nil
 	}
-	switch err := do(ctx, client, http.MethodPut, base+"/"+index, nil); {
+	switch err := do(ctx, client, http.MethodPut, base+"/"+index, body); {
 	case err == nil:
 		return "created", nil
 	case strings.Contains(err.Error(), "resource_already_exists_exception"):
@@ -139,7 +142,7 @@ func (s *OpenSearchStore) EnsureIndices(ctx context.Context) (map[string]string,
 		if !strings.HasPrefix(c.name, c.prefix) {
 			return actions, fmt.Errorf("store: configured index %q does not match template pattern %q* — it would inherit the wrong mapping; rename it to start with %q", c.name, c.prefix, c.prefix)
 		}
-		action, err := ensureIndex(ctx, s.client, base, c.name)
+		action, err := ensureIndex(ctx, s.client, base, c.name, nil)
 		if err != nil {
 			return actions, err
 		}

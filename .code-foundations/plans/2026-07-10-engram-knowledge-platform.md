@@ -3,7 +3,7 @@
 **Created:** 2026-07-10
 **Status:** in-progress
 **Started:** 2026-07-10 21:16
-**Current Phase:** 2
+**Current Phase:** 3
 **Complexity:** complex
 ---
 ## Context
@@ -281,3 +281,10 @@ Engram is memory-only; arXiv's live API is fragile under paper-grabber's discove
 - [x] Committed
 Commit: 84fa0f5
 Summary: Froze the knowledge wire+backend contract — 6 RPCs + 13 messages in engram.proto with generic Predicate/SortKey and a Value oneof(scalar|range), Provenance.roles claim, and mcp.Backend +6 knowledge methods stubbed across engramclient + test doubles. Repo builds/tests/lints clean; proto regen deterministic and drift-free post-commit. Downstream phases now implement against frozen `engrampb` types + `mcp.Backend`/seam types (KnowledgeDoc, Predicate, SortKey, FieldSpec, CollectionSpec, CollectionInfo) in internal/mcp/mcp.go.
+
+### Phase 2: Role identity + authorization core (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + implementation complete (assumption verified — TokenRecord is the claim set; roles slot into Issue/Verify)
+- [x] REVIEW: 3-sample fable majority PASS (3/3), fail-closed behavior verified from scratch
+- [x] Committed
+Commit: 7a714ee
+Summary: Added `Roles []string` to auth.Identity + TokenRecord (mint/read-time normalized, cloned), populated ONLY from the verified token — client-supplied roles proven ignored. New `internal/knowledgeauth` package: fail-closed `AuthorizeRead(id, public, requiredRoles)` / `AuthorizeWrite(id, requiredRole)` returning unwrapped `ErrForbidden` (auth-before-public ordering; unknown/empty roles deny not error). auth-tokens.json gains a `roles` keyword field. Enforcement call-sites land in Phase 6. Follow-ups: no CLI `--roles` mint flag yet; existing strict token indices need re-provisioning (omitempty keeps old tokens writable).
