@@ -3,7 +3,7 @@
 **Created:** 2026-07-10
 **Status:** in-progress
 **Started:** 2026-07-10 21:16
-**Current Phase:** 5
+**Current Phase:** 6
 **Complexity:** complex
 ---
 ## Context
@@ -288,6 +288,13 @@ Summary: Froze the knowledge wire+backend contract — 6 RPCs + 13 messages in e
 - [x] Committed
 Commit: 7a714ee
 Summary: Added `Roles []string` to auth.Identity + TokenRecord (mint/read-time normalized, cloned), populated ONLY from the verified token — client-supplied roles proven ignored. New `internal/knowledgeauth` package: fail-closed `AuthorizeRead(id, public, requiredRoles)` / `AuthorizeWrite(id, requiredRole)` returning unwrapped `ErrForbidden` (auth-before-public ordering; unknown/empty roles deny not error). auth-tokens.json gains a `roles` keyword field. Enforcement call-sites land in Phase 6. Follow-ups: no CLI `--roles` mint flag yet; existing strict token indices need re-provisioning (omitempty keeps old tokens writable).
+
+### Phase 5: KnowledgeRetriever (Gate: Full)
+- [x] BUILD: complete (assumption held — buildQuery sort is additive, memory byte-identical via golden-byte test)
+- [x] REVIEW: Verification passed (sonnet, exit codes confirmed via real go binary). Non-blocking: retriever tests are httptest-fake-backed; live-cluster coverage of knowledge_search deferred to Phase 6 end-to-end. Note: OpenSearch returns _score:0 when explicit sort applied.
+- [x] Committed
+Commit: 87e14da
+Summary: `internal/retrieval/knowledge.go` — `KnowledgeRetriever.Search(ctx, spec, query, filters, sort, k)` (BM25-only, generic registry-validated term/range/prefix filters + sort, zero embed calls, not on MultiRetriever) + `Collections` (count + staleness). `buildQuery` gained an additive `sort` param (memory path byte-identical when nil). Unknown filter/sort fields error naming valid fields. P6 consumes `KnowledgeRetriever` + `Predicate`/`SortKey`/`CollectionMeta`.
 
 ### Phase 4: KnowledgeStore (Gate: Full)
 - [x] BUILD: Discovery + design + implementation complete (narrow KnowledgeStore seam — memory Store untouched; assumption held)

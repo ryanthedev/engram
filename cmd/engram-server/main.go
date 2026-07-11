@@ -271,6 +271,15 @@ func main() {
 	svc.Probe = st
 	svc.Auditor = st
 	svc.ACL = aclFilter
+	// Knowledge platform (Phase 6): runtime collection registry, bulk
+	// document writer, and BM25-only retriever — all over the same cluster,
+	// never touching the memory tiers. Apply already PUT the
+	// knowledge-collections meta template above. KnowledgeAuth's zero value
+	// enforces the per-collection role policy at the handlers.
+	knowledgeRegistry := store.NewCollectionRegistry(httpClient, *osURL)
+	svc.Registry = knowledgeRegistry
+	svc.KnowledgeWriter = store.NewKnowledgeStore(httpClient, *osURL)
+	svc.KnowledgeReader = retrieval.NewKnowledgeRetriever(httpClient, *osURL, knowledgeRegistry)
 	// The Export RPC pages over the same graph store the worker stage and
 	// expander use — no shadow read path; tenant/ACL are enforced in the
 	// handler on top of the store's own tenant-scoped scan.
