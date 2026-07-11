@@ -111,7 +111,14 @@ func searchResultFits(packed, remainder []Hit, budgetBytes int) bool {
 
 // buildSearchResult assembles the envelope from a packed page and its
 // remainder: omitted/omitted_facets/hint are populated only when hits were
-// actually left out (DW-2.2).
+// actually left out (DW-2.2). Hint is built optimistically assuming
+// overflow_path WILL end up set (overflowPathSet=true): at this point
+// (pack time) the caller's spill hasn't run yet, so "will it succeed" is
+// unknown; assuming success matches the worst-case (longer) text already
+// reserved for in searchResultFits' budget headroom. If the real spill
+// later fails, the caller (tools.go) downgrades the hint via a second
+// refineHint call with overflowPathSet=false so it never dangles a path
+// that was never written (DW-3.2).
 func buildSearchResult(packed, remainder []Hit) searchResult {
 	result := searchResult{Hits: packed}
 	if len(remainder) == 0 {
@@ -119,7 +126,7 @@ func buildSearchResult(packed, remainder []Hit) searchResult {
 	}
 	result.Omitted = len(remainder)
 	result.OmittedFacets = topFacets(remainder)
-	result.Hint = refineHint(result.Omitted, result.OmittedFacets)
+	result.Hint = refineHint(result.Omitted, result.OmittedFacets, true)
 	return result
 }
 
@@ -166,10 +173,23 @@ func topFacets(hits []Hit) map[string]string {
 	return out
 }
 
-// refineHint builds a short, deterministic hint describing what got omitted
-// and the top facet values the caller can narrow by — the chosen
-// cap-plus-refine-hint paging model (no next-page cursor).
-func refineHint(omitted int, facets map[string]string) string {
+// refineHint builds a short, deterministic hint describing what got omitted,
+// the top facet values the caller can narrow by, and where to get the rest —
+// the chosen cap-plus-refine-hint paging model (no next-page cursor). It
+// names engram's own sanctioned escape hatches explicitly: overflow_path for
+// the full omitted set (DW-3.1) and memory_read(id, source) to drill a
+// single hit's full body (DW-3.3). This wording is a direct response to the
+// motivating incident — an agent that, lacking this pointer, invented its
+// own path to a full result set (a jq probe over Claude Code's private
+// tool-results cache) instead of reading engram's own spill.
+//
+// overflowPathSet must reflect the REAL, final state of the response's
+// overflow_path field, never merely "omission happened": omission alone
+// only means a spill will be attempted, not that it will succeed. Passing
+// true when overflow_path will end up unset (or vice versa) makes the hint
+// lie (DW-3.2) — see buildSearchResult and tools.go's callSearch for the two
+// call sites and why each passes the value it does.
+func refineHint(omitted int, facets map[string]string, overflowPathSet bool) string {
 	hint := fmt.Sprintf("%d more hit(s) omitted to stay within the response size budget; narrow your query", omitted)
 	parts := make([]string, 0, len(facetFields))
 	for _, field := range facetFields { // fixed order: deterministic hint text
@@ -177,8 +197,11 @@ func refineHint(omitted int, facets map[string]string) string {
 			parts = append(parts, fmt.Sprintf("%s=%q", field, v))
 		}
 	}
-	if len(parts) == 0 {
-		return hint + "."
+	if len(parts) > 0 {
+		hint = fmt.Sprintf("%s (top omitted %s)", hint, strings.Join(parts, ", "))
 	}
-	return fmt.Sprintf("%s (top omitted %s).", hint, strings.Join(parts, ", "))
+	if overflowPathSet {
+		hint += "; read the full omitted set from overflow_path"
+	}
+	return hint + ", or drill one hit's full body with memory_read(id, source)."
 }

@@ -141,3 +141,10 @@
 - [x] Committed
 Commit: ac9fb65
 Summary: `memory_search` now renders compact tab-separated lines (`id\tsource\tscore\tgist\tkey=value…`) in the MCP layer — episodic `text` is a rune-safe single-line lead snippet; every hit exposes `id`+`source` (the Phase-2 drill contract); the gRPC `Hit` still carries full untruncated `text`.
+
+### Phase 2: memory_read(id, source) drill-down (Gate: Full, security-sensitive)
+- [x] BUILD: Discovery + design + implementation complete (proto `Read` RPC + regen, `GetEpisodic`, `internal/server/read.go`, `Backend.Read`, `memory_read` tool; 10 new test funcs)
+- [x] REVIEW: 3-sample fable majority PASS (3/3) — fetch→authorize→project proven via spy enforcer; every denial byte-identical opaque NOT_FOUND; no cross-index probing; proto regen idempotent (proto-check exit 0 post-commit)
+- [x] Committed
+Commit: ca571d1
+Summary: `memory_read(id, source)` drills to a single record's full body — new gRPC `Read` RPC, fail-closed episodic getter (`GetEpisodic`, fetch→authorize→project), Audit-reusing semantic branch, graph UNIMPLEMENTED; wired through `engramclient`→`Backend.Read`→`memory_read` MCP tool; output is structured un-nested JSON.

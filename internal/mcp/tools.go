@@ -165,6 +165,11 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 		// overflow_path rather than propagating the error.
 		if path, spillErr := spillFullResult(hits); spillErr != nil {
 			slog.Warn("memory_search: spilling full result set to disk failed; returning capped response without overflow_path", "error", spillErr)
+			// buildSearchResult (budget.go) built Hint optimistically,
+			// assuming this spill would succeed; now that it hasn't,
+			// rebuild the hint so it doesn't dangle a path that was never
+			// written (DW-3.2).
+			result.Hint = refineHint(result.Omitted, result.OmittedFacets, false)
 		} else {
 			result.OverflowPath = path
 		}
