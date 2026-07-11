@@ -3,7 +3,7 @@
 **Created:** 2026-07-10
 **Status:** in-progress
 **Started:** 2026-07-10 21:16
-**Current Phase:** 4
+**Current Phase:** 5
 **Complexity:** complex
 ---
 ## Context
@@ -288,6 +288,13 @@ Summary: Froze the knowledge wire+backend contract — 6 RPCs + 13 messages in e
 - [x] Committed
 Commit: 7a714ee
 Summary: Added `Roles []string` to auth.Identity + TokenRecord (mint/read-time normalized, cloned), populated ONLY from the verified token — client-supplied roles proven ignored. New `internal/knowledgeauth` package: fail-closed `AuthorizeRead(id, public, requiredRoles)` / `AuthorizeWrite(id, requiredRole)` returning unwrapped `ErrForbidden` (auth-before-public ordering; unknown/empty roles deny not error). auth-tokens.json gains a `roles` keyword field. Enforcement call-sites land in Phase 6. Follow-ups: no CLI `--roles` mint flag yet; existing strict token indices need re-provisioning (omitempty keeps old tokens writable).
+
+### Phase 4: KnowledgeStore (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete (narrow KnowledgeStore seam — memory Store untouched; assumption held)
+- [x] REVIEW: Verification passed (sonnet). Mid-build orchestrator fix: BulkIndex gained a `textField` param (hardcoded `"text"` would have made arXiv un-ingestable); non-default-TextField round-trip regression test added. Non-blocking notes: DeleteByQuery discards a partial-failure count; a malformed-_bulk-shape branch OpenSearch never emits.
+- [x] Committed
+Commit: a95ea4e
+Summary: `internal/store/knowledge.go` — `KnowledgeStore.BulkIndex(ctx, index, textField, docs, harvestID)` (NDJSON `_bulk` upsert-by-id, writes text under the configured field, stamps provenance, no embedding) + `DeleteByQuery(ctx, index, collection, source, currentHarvestID)` (mark-and-sweep). `doNDJSON` added to opensearch.go. index+textField validated pre-path. Intentional upsert deviation from append-only. P6 calls BulkIndex with `spec.TextField` and DeleteByQuery for sweeps.
 
 ### Phase 3: Collection registry (Gate: Full)
 - [x] BUILD: Discovery + design + implementation complete (assumption confirmed live — `_aliases` swap atomic: 60 swaps / 866 concurrent reads / 0 failures)
