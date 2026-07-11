@@ -11,6 +11,7 @@ import (
 
 // fakeBackend is an in-memory Backend for conformance tests.
 type fakeBackend struct {
+	knowledgeStubs
 	ingested map[string]string // event_id -> text
 	failNext bool
 }
@@ -35,6 +36,34 @@ func (b *fakeBackend) Search(_ context.Context, query string, k int) ([]Hit, err
 func (b *fakeBackend) Status(context.Context) (Status, error) {
 	return Status{Healthy: true, TenantID: "t1", UserID: "alice", EpisodicCount: int64(len(b.ingested))}, nil
 }
+
+// knowledgeStubs satisfies Backend's six knowledge methods (Phase 1) with
+// benign zero values; every memory-focused fake embeds it. Tool handlers
+// that exercise these land in Phase 6.
+type knowledgeStubs struct{}
+
+func (knowledgeStubs) KnowledgeIngest(context.Context, string, string, string, []KnowledgeDoc) (int, error) {
+	return 0, nil
+}
+
+func (knowledgeStubs) KnowledgeSearch(context.Context, string, string, []Predicate, []SortKey, int) ([]Hit, error) {
+	return nil, nil
+}
+
+func (knowledgeStubs) KnowledgeCollections(context.Context) ([]CollectionInfo, error) {
+	return nil, nil
+}
+
+func (knowledgeStubs) KnowledgeDelete(context.Context, string, string, string) (int, error) {
+	return 0, nil
+}
+
+func (knowledgeStubs) CreateCollection(context.Context, CollectionSpec) error { return nil }
+
+func (knowledgeStubs) UpdateCollection(context.Context, CollectionSpec) error { return nil }
+
+// Compile-time proof the fake tracks the full Backend seam (DW-1.2).
+var _ Backend = (*fakeBackend)(nil)
 
 // refClient is a minimal in-process MCP reference client driving the server
 // over an io.Pipe pair — it exercises the exact wire framing a real client
@@ -115,8 +144,10 @@ func TestDW_3_5_ConformanceInitialize(t *testing.T) {
 	c.notify("notifications/initialized")
 }
 
-// TestDW_3_5_ConformanceListTools: tools/list advertises exactly the three
-// Engram tools with input schemas.
+// TestDW_3_5_ConformanceListTools: tools/list advertises exactly the nine
+// Engram tools (three memory + six knowledge, Phase 6) with input schemas.
+// The three memory tools remaining advertised verbatim is part of the
+// memory-path regression contract (DW-6.5).
 func TestDW_3_5_ConformanceListTools(t *testing.T) {
 	c := startServer(t, newFakeBackend())
 	c.call("initialize", nil)
@@ -131,13 +162,18 @@ func TestDW_3_5_ConformanceListTools(t *testing.T) {
 			t.Errorf("tool %v missing inputSchema", tm["name"])
 		}
 	}
-	for _, want := range []string{ToolIngest, ToolSearch, ToolStatus} {
-		if !names[want] {
-			t.Errorf("tools/list missing %s", want)
+	want := []string{
+		ToolIngest, ToolSearch, ToolStatus,
+		ToolKnowledgeIngest, ToolKnowledgeSearch, ToolKnowledgeCollections,
+		ToolKnowledgeDelete, ToolCreateCollection, ToolUpdateCollection,
+	}
+	for _, w := range want {
+		if !names[w] {
+			t.Errorf("tools/list missing %s", w)
 		}
 	}
-	if len(names) != 3 {
-		t.Errorf("advertised %d tools, want 3", len(names))
+	if len(names) != len(want) {
+		t.Errorf("advertised %d tools, want %d", len(names), len(want))
 	}
 }
 

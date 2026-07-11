@@ -12,7 +12,10 @@ import (
 // regardless of query, sliced to k. It lets budget/facet tests control exact
 // hit content (real per-tier fields_json) that fakeBackend's substring
 // filter can't produce.
-type fixedHitsBackend struct{ hits []Hit }
+type fixedHitsBackend struct {
+	knowledgeStubs
+	hits []Hit
+}
 
 func (b *fixedHitsBackend) Ingest(context.Context, string, string, string) (string, error) {
 	return "", nil
@@ -157,7 +160,7 @@ func TestDW_2_4_SingleOverBudgetHitStillEmitted(t *testing.T) {
 	huge := semanticHit("h1", "s", "p", "o", 5000)
 
 	t.Run("only one hit, alone over budget", func(t *testing.T) {
-		result := packSearchResult([]Hit{huge}, 1)
+		result := packSearchResult([]Hit{huge}, 1, memoryFacetFields)
 		if len(result.Hits) != 1 {
 			t.Fatalf("Hits = %d, want 1 (never empty when hits exist)", len(result.Hits))
 		}
@@ -168,7 +171,7 @@ func TestDW_2_4_SingleOverBudgetHitStillEmitted(t *testing.T) {
 
 	t.Run("huge first hit forces the rest into omitted", func(t *testing.T) {
 		small := semanticHit("h2", "s2", "p2", "o2", 5)
-		result := packSearchResult([]Hit{huge, small}, 10)
+		result := packSearchResult([]Hit{huge, small}, 10, memoryFacetFields)
 		if len(result.Hits) != 1 || result.Hits[0].ID != "h1" {
 			t.Fatalf("Hits = %+v, want exactly [h1]", result.Hits)
 		}
@@ -219,7 +222,7 @@ func TestDW_2_1_OverflowPathHeadroomKeepsFinalResponseInBudget(t *testing.T) {
 		// is the boundary where, pre-fix, the packer could keep enough hits
 		// to look like it fit without overflow_path, only for the real
 		// overflow_path to push the emitted response over budget.
-		oneHitCandidate := buildSearchResult(hits[:1], hits[1:])
+		oneHitCandidate := buildSearchResult(hits[:1], hits[1:], memoryFacetFields)
 		oneHitCandidate.OverflowPath = maxSpillPath()
 		worstCaseOneHit, err := json.Marshal(oneHitCandidate)
 		if err != nil {
@@ -252,7 +255,7 @@ func TestDW_2_4_SingleHitFloorHoldsWithOverflowHeadroom(t *testing.T) {
 	huge := semanticHit("h1", "s", "p", "o", 5000)
 	small := semanticHit("h2", "s2", "p2", "o2", 5)
 
-	aloneNoHeadroom, err := json.Marshal(buildSearchResult([]Hit{huge}, nil))
+	aloneNoHeadroom, err := json.Marshal(buildSearchResult([]Hit{huge}, nil, memoryFacetFields))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -261,7 +264,7 @@ func TestDW_2_4_SingleHitFloorHoldsWithOverflowHeadroom(t *testing.T) {
 	// survive.
 	budget := len(aloneNoHeadroom) + 10
 
-	result := packSearchResult([]Hit{huge, small}, budget)
+	result := packSearchResult([]Hit{huge, small}, budget, memoryFacetFields)
 	if len(result.Hits) != 1 || result.Hits[0].ID != "h1" {
 		t.Fatalf("Hits = %+v, want exactly [h1] (one-hit floor unconditional)", result.Hits)
 	}
@@ -284,11 +287,11 @@ func TestDW_2_5_TopFacetsStableOnTies(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ { // repeat: catch accidental dependence on map iteration order
-		if got := topFacets(aFirst)["subject"]; got != "alice" {
-			t.Fatalf("run %d: topFacets(aFirst)[subject] = %q, want %q (first-encountered tie-break)", i, got, "alice")
+		if got := topFacets(aFirst, memoryFacetFields)["subject"]; got != "alice" {
+			t.Fatalf("run %d: topFacets(aFirst, memoryFacetFields)[subject] = %q, want %q (first-encountered tie-break)", i, got, "alice")
 		}
-		if got := topFacets(bFirst)["subject"]; got != "bob" {
-			t.Fatalf("run %d: topFacets(bFirst)[subject] = %q, want %q (first-encountered tie-break)", i, got, "bob")
+		if got := topFacets(bFirst, memoryFacetFields)["subject"]; got != "bob" {
+			t.Fatalf("run %d: topFacets(bFirst, memoryFacetFields)[subject] = %q, want %q (first-encountered tie-break)", i, got, "bob")
 		}
 	}
 }
@@ -303,7 +306,7 @@ func TestTopFacetsSkipsMalformedOrMissingFields(t *testing.T) {
 		{ID: "no-fields", Fields: ""},
 		semanticHit("good", "alice", "knows", "bob", 1),
 	}
-	facets := topFacets(hits) // must not panic
+	facets := topFacets(hits, memoryFacetFields) // must not panic
 	if facets["subject"] != "alice" {
 		t.Errorf("subject facet = %q, want %q (only the well-formed hit counts)", facets["subject"], "alice")
 	}
@@ -313,7 +316,7 @@ func TestTopFacetsSkipsMalformedOrMissingFields(t *testing.T) {
 // non-nil page — not a panic, not a null hits array (DW-2.1's zero-hit edge
 // case; the packing loop must test at the beginning).
 func TestPackSearchResultZeroHits(t *testing.T) {
-	result := packSearchResult(nil, searchBudgetBytesDefault)
+	result := packSearchResult(nil, searchBudgetBytesDefault, memoryFacetFields)
 	if result.Hits == nil {
 		t.Error("Hits is nil, want a non-nil empty slice (marshals to [] not null)")
 	}
@@ -341,9 +344,9 @@ func TestPackSearchResultZeroHits(t *testing.T) {
 // same facets produce byte-identical hints.
 func TestRefineHintDeterministicFieldOrder(t *testing.T) {
 	facets := map[string]string{"kind": "note", "subject": "alice", "predicate": "knows"}
-	first := refineHint(3, facets)
+	first := refineHint(3, facets, memoryFacetFields)
 	for i := 0; i < 5; i++ {
-		if got := refineHint(3, facets); got != first {
+		if got := refineHint(3, facets, memoryFacetFields); got != first {
 			t.Fatalf("refineHint not deterministic: %q vs %q", got, first)
 		}
 	}
@@ -365,7 +368,10 @@ func TestCallSearchDefaultKUsesDefaultRequestK(t *testing.T) {
 }
 
 // recordingKBackend records the k passed to Search and returns no hits.
-type recordingKBackend struct{ onSearch func(k int) }
+type recordingKBackend struct {
+	knowledgeStubs
+	onSearch func(k int)
+}
 
 func (b *recordingKBackend) Ingest(context.Context, string, string, string) (string, error) {
 	return "", nil

@@ -1,7 +1,10 @@
 # Plan: Engram Knowledge Platform (Plan 1 of 2)
 
 **Created:** 2026-07-10
-**Status:** ready
+**Status:** complete
+**Started:** 2026-07-10 21:16
+**Completed:** 2026-07-10 22:52
+**Duration:** ~1h36m
 **Complexity:** complex
 ---
 ## Context
@@ -118,7 +121,7 @@ Engram is memory-only; arXiv's live API is fragile under paper-grabber's discove
 **Goal:** A batch document-write path (upsert-by-id, no embedding) plus a delete-by-query sweep — the intentional, documented deviation from engram's append-only writes.
 
 **Scope:**
-- IN: a `doNDJSON` sibling to `doJSON` (opensearch.go:220) for `application/x-ndjson`; `BulkIndex(ctx, index string, docs []knowledge.Document, harvestID string) (indexed int, err error)` — `_bulk` with `index` action (upsert-by-id), stamping `harvest_id`, `source_version`, and server-set `harvested_at` on every row, NO embedding call; `DeleteByQuery(ctx, index, collection, source, currentHarvestID string) (deleted int, err error)` via `POST /<index>/_delete_by_query` (matches `collection` AND `source` AND `harvest_id != currentHarvestID`).
+- IN: a `doNDJSON` sibling to `doJSON` (opensearch.go:220) for `application/x-ndjson`; `BulkIndex(ctx, index, textField string, docs []knowledge.Document, harvestID string) (indexed int, err error)` — `_bulk` with `index` action (upsert-by-id), writing `Document.Text` under the collection's configured `textField` (NOT a hardcoded `"text"` — collections set `TextField`, e.g. arXiv=`abstract`), stamping `harvest_id`, `source_version`, and server-set `harvested_at` on every row, NO embedding call. `textField` is validated (reserved-field/regex) before use, per the Phase-3 path-safety lesson; `DeleteByQuery(ctx, index, collection, source, currentHarvestID string) (deleted int, err error)` via `POST /<index>/_delete_by_query` (matches `collection` AND `source` AND `harvest_id != currentHarvestID`).
 - OUT: authorization (Phase 6 barricade), harvest orchestration (Plan 2).
 
 **Constraints:** No `op_type=create`, no `if_seq_no` guard — this path is deliberately upsert/overwrite. Map non-2xx via the existing status switch; wrap errors `"store: verb-ing noun: %w"`. `harvested_at` is server-assigned, never client-trusted.
@@ -126,7 +129,7 @@ Engram is memory-only; arXiv's live API is fragile under paper-grabber's discove
 **Produces:** `store.KnowledgeStore{BulkIndex, DeleteByQuery}` (the two signatures above). Consumes `knowledge.Document` from Phase 3 (not defined here).
 **Rollback:** writes are upserts to `knowledge-*` indices only; a bad batch is corrected by re-ingest or sweep. No memory index touched.
 **Done when:**
-- [ ] DW-4.1: `BulkIndex` upserts N docs by `_id`, stamps `harvest_id`/`source_version`/`harvested_at`, issues zero embedding calls (integration test asserts doc count + fields + no embed-server hit).
+- [ ] DW-4.1: `BulkIndex` upserts N docs by `_id`, writes `Document.Text` under the caller-supplied `textField`, stamps `harvest_id`/`source_version`/`harvested_at`, issues zero embedding calls (integration test asserts doc count + fields + no embed-server hit; and a collection with a NON-default `TextField` like `abstract` round-trips — the doc is searchable under that field).
 - [ ] DW-4.2: re-`BulkIndex` of the same id overwrites in place (no duplicate row).
 - [ ] DW-4.3: `DeleteByQuery` removes rows matching `collection` AND `source` AND `harvest_id != <currentHarvestID>` (the mark-and-sweep predicate — rows not touched by the latest run), leaving current-run rows.
 - [ ] DW-4.4: a `_bulk` response containing per-item errors surfaces them (does not report full success).
@@ -272,4 +275,45 @@ Engram is memory-only; arXiv's live API is fragile under paper-grabber's discove
 
 ---
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Proto contract & Backend seam (Gate: Full)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: Verification passed (sonnet, single sample)
+- [x] Committed
+Commit: 84fa0f5
+Summary: Froze the knowledge wire+backend contract — 6 RPCs + 13 messages in engram.proto with generic Predicate/SortKey and a Value oneof(scalar|range), Provenance.roles claim, and mcp.Backend +6 knowledge methods stubbed across engramclient + test doubles. Repo builds/tests/lints clean; proto regen deterministic and drift-free post-commit. Downstream phases now implement against frozen `engrampb` types + `mcp.Backend`/seam types (KnowledgeDoc, Predicate, SortKey, FieldSpec, CollectionSpec, CollectionInfo) in internal/mcp/mcp.go.
+
+### Phase 2: Role identity + authorization core (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + implementation complete (assumption verified — TokenRecord is the claim set; roles slot into Issue/Verify)
+- [x] REVIEW: 3-sample fable majority PASS (3/3), fail-closed behavior verified from scratch
+- [x] Committed
+Commit: 7a714ee
+Summary: Added `Roles []string` to auth.Identity + TokenRecord (mint/read-time normalized, cloned), populated ONLY from the verified token — client-supplied roles proven ignored. New `internal/knowledgeauth` package: fail-closed `AuthorizeRead(id, public, requiredRoles)` / `AuthorizeWrite(id, requiredRole)` returning unwrapped `ErrForbidden` (auth-before-public ordering; unknown/empty roles deny not error). auth-tokens.json gains a `roles` keyword field. Enforcement call-sites land in Phase 6. Follow-ups: no CLI `--roles` mint flag yet; existing strict token indices need re-provisioning (omitempty keeps old tokens writable).
+
+### Phase 6: MCP tools + server wiring (Gate: Full, Security-sensitive)
+- [x] BUILD: complete (assumption held — budget/spill reuse needed only facet parametrization). engramclient stubs → real gRPC; main.go wired; end-to-end live integration test added (covers the Phase-5 retriever live gap).
+- [x] REVIEW: 2/2 fable samples PASS (run sequentially — shared cluster); majority decided so the redundant 3rd was consciously skipped. Both independently confirmed self-elevation is structurally impossible (no caller-role request field, interceptor-only identity, fail-closed, provenance overwritten). Non-blocking notes: gated-read existence oracle (plan-pinned usability trade); empty-docs reaches BulkIndex unchecked; malformed create-name → Internal not InvalidArgument (registry errors untyped, P3 scope).
+- [x] Committed
+Commit: 22291ed
+Summary: `internal/server/knowledge.go` (6 gRPC handlers, barricade validation, sentinel→code map, harvester/admin role constants) + `internal/mcp/tools.go` (6 tool schemas/handlers, packAndSpill) + budget.go facet parametrization + engramclient real gRPC + main.go construction. RBAC enforced at the barricade; memory path pinned unchanged (DW-6.5). Knowledge platform is end-to-end over gRPC + MCP.
+
+### Phase 5: KnowledgeRetriever (Gate: Full)
+- [x] BUILD: complete (assumption held — buildQuery sort is additive, memory byte-identical via golden-byte test)
+- [x] REVIEW: Verification passed (sonnet, exit codes confirmed via real go binary). Non-blocking: retriever tests are httptest-fake-backed; live-cluster coverage of knowledge_search deferred to Phase 6 end-to-end. Note: OpenSearch returns _score:0 when explicit sort applied.
+- [x] Committed
+Commit: 87e14da
+Summary: `internal/retrieval/knowledge.go` — `KnowledgeRetriever.Search(ctx, spec, query, filters, sort, k)` (BM25-only, generic registry-validated term/range/prefix filters + sort, zero embed calls, not on MultiRetriever) + `Collections` (count + staleness). `buildQuery` gained an additive `sort` param (memory path byte-identical when nil). Unknown filter/sort fields error naming valid fields. P6 consumes `KnowledgeRetriever` + `Predicate`/`SortKey`/`CollectionMeta`.
+
+### Phase 4: KnowledgeStore (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete (narrow KnowledgeStore seam — memory Store untouched; assumption held)
+- [x] REVIEW: Verification passed (sonnet). Mid-build orchestrator fix: BulkIndex gained a `textField` param (hardcoded `"text"` would have made arXiv un-ingestable); non-default-TextField round-trip regression test added. Non-blocking notes: DeleteByQuery discards a partial-failure count; a malformed-_bulk-shape branch OpenSearch never emits.
+- [x] Committed
+Commit: a95ea4e
+Summary: `internal/store/knowledge.go` — `KnowledgeStore.BulkIndex(ctx, index, textField, docs, harvestID)` (NDJSON `_bulk` upsert-by-id, writes text under the configured field, stamps provenance, no embedding) + `DeleteByQuery(ctx, index, collection, source, currentHarvestID)` (mark-and-sweep). `doNDJSON` added to opensearch.go. index+textField validated pre-path. Intentional upsert deviation from append-only. P6 calls BulkIndex with `spec.TextField` and DeleteByQuery for sweeps.
+
+### Phase 3: Collection registry (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete (assumption confirmed live — `_aliases` swap atomic: 60 swaps / 866 concurrent reads / 0 failures)
+- [x] REVIEW: FAIL→PASS (1 attempt) — review caught a path-traversal in `Provision`; fixed with `validateCollectionName` + a `getMetaDoc` choke-point barricade; re-review reproduced the attack as now-blocked (0 HTTP) and re-audited all 8 URL-building sites
+- [x] Committed
+Commit: 2cc4d12
+Summary: `internal/knowledge` owns domain types (CollectionSpec, AccessPolicy, FieldSpec, Document) + the `CollectionRegistry` interface; `internal/store/registry.go` implements it on OpenSearch — meta-doc CRUD, live index/mapping provisioning, `-vN` reindex + atomic alias swap, generation-guarded whole-set cache, idempotent YAML seed. Engram never restarts for a collection change. All caller-supplied names validated before entering a REST path (security). P4 consumes `knowledge.Document` + the registry for collection→index resolution; P5 consumes `knowledge.CollectionSpec` for field validation; P6 translates mcp DTOs ↔ domain types.

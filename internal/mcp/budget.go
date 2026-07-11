@@ -24,11 +24,16 @@ const (
 	searchBudgetBytesDefault = 16384
 )
 
-// facetFields are the per-hit fields eligible for top-facet computation over
-// omitted hits, in the fixed order used for both tie-breaking and hint text.
-var facetFields = []string{"subject", "predicate", "kind"}
+// memoryFacetFields are the per-hit fields eligible for top-facet computation
+// over omitted memory_search hits, in the fixed order used for both
+// tie-breaking and hint text. Knowledge collections declare their own field
+// vocabulary at runtime, so knowledge_search passes nil instead (no facets in
+// v1) — which is why the packer takes facet fields as a parameter rather than
+// reading this var directly.
+var memoryFacetFields = []string{"subject", "predicate", "kind"}
 
-// searchResult is the memory_search tool-result envelope: a budget-packed
+// searchResult is the memory_search and knowledge_search tool-result
+// envelope: a budget-packed
 // page of hits plus what got left out. Omitted/OmittedFacets/Hint are
 // present only when hits were actually omitted (DW-2.2). OverflowPath is set
 // by the caller (see spill.go) only after the full slim result set has been
@@ -79,13 +84,15 @@ func searchByteBudget() int {
 // see searchResultFits). Measuring the true serialized candidate each time
 // (rather than a size estimate) is deliberate: an estimate can drift from
 // what's actually emitted.
-func packSearchResult(hits []Hit, budgetBytes int) searchResult {
+// facetFields selects the per-hit fields eligible for omitted-hit facet
+// computation (memoryFacetFields for memory_search, nil for knowledge_search).
+func packSearchResult(hits []Hit, budgetBytes int, facetFields []string) searchResult {
 	packed := make([]Hit, len(hits))
 	copy(packed, hits)
-	for len(packed) > 1 && !searchResultFits(packed, hits[len(packed):], budgetBytes) {
+	for len(packed) > 1 && !searchResultFits(packed, hits[len(packed):], budgetBytes, facetFields) {
 		packed = packed[:len(packed)-1]
 	}
-	return buildSearchResult(packed, hits[len(packed):])
+	return buildSearchResult(packed, hits[len(packed):], facetFields)
 }
 
 // searchResultFits reports whether the full serialized searchResult built
@@ -100,8 +107,8 @@ func packSearchResult(hits []Hit, budgetBytes int) searchResult {
 // failure (never expected for these types) is treated as "does not fit" —
 // the safe default that keeps the packer shrinking rather than emitting
 // something unverified.
-func searchResultFits(packed, remainder []Hit, budgetBytes int) bool {
-	candidate := buildSearchResult(packed, remainder)
+func searchResultFits(packed, remainder []Hit, budgetBytes int, facetFields []string) bool {
+	candidate := buildSearchResult(packed, remainder, facetFields)
 	if len(remainder) > 0 {
 		candidate.OverflowPath = maxSpillPath() // reserve real-field headroom, not an estimate
 	}
@@ -112,14 +119,14 @@ func searchResultFits(packed, remainder []Hit, budgetBytes int) bool {
 // buildSearchResult assembles the envelope from a packed page and its
 // remainder: omitted/omitted_facets/hint are populated only when hits were
 // actually left out (DW-2.2).
-func buildSearchResult(packed, remainder []Hit) searchResult {
+func buildSearchResult(packed, remainder []Hit, facetFields []string) searchResult {
 	result := searchResult{Hits: packed}
 	if len(remainder) == 0 {
 		return result
 	}
 	result.Omitted = len(remainder)
-	result.OmittedFacets = topFacets(remainder)
-	result.Hint = refineHint(result.Omitted, result.OmittedFacets)
+	result.OmittedFacets = topFacets(remainder, facetFields)
+	result.Hint = refineHint(result.Omitted, result.OmittedFacets, facetFields)
 	return result
 }
 
@@ -127,7 +134,7 @@ func buildSearchResult(packed, remainder []Hit) searchResult {
 // among hits, skipping hits whose Fields is missing, malformed, or lacks the
 // field. Ties are broken by first-encountered order among hits, which are
 // already in the backend's stable rank order (DW-2.5).
-func topFacets(hits []Hit) map[string]string {
+func topFacets(hits []Hit, facetFields []string) map[string]string {
 	counts := make(map[string]map[string]int, len(facetFields))
 	firstSeen := make(map[string][]string, len(facetFields))
 	for _, h := range hits {
@@ -169,7 +176,7 @@ func topFacets(hits []Hit) map[string]string {
 // refineHint builds a short, deterministic hint describing what got omitted
 // and the top facet values the caller can narrow by — the chosen
 // cap-plus-refine-hint paging model (no next-page cursor).
-func refineHint(omitted int, facets map[string]string) string {
+func refineHint(omitted int, facets map[string]string, facetFields []string) string {
 	hint := fmt.Sprintf("%d more hit(s) omitted to stay within the response size budget; narrow your query", omitted)
 	parts := make([]string, 0, len(facetFields))
 	for _, field := range facetFields { // fixed order: deterministic hint text

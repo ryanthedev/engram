@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,9 @@ func TestDW_3_4_TokenStoreRoundTripHashedOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if got != id {
+	// DeepEqual: Identity carries a Roles slice since Phase 2 of the
+	// knowledge platform, so == no longer compiles.
+	if !reflect.DeepEqual(got, id) {
 		t.Fatalf("Verify identity = %+v, want %+v", got, id)
 	}
 

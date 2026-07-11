@@ -18,6 +18,8 @@ import (
 	"github.com/ryanthedev/engram/internal/acl"
 	"github.com/ryanthedev/engram/internal/auth"
 	"github.com/ryanthedev/engram/internal/authgrpc"
+	"github.com/ryanthedev/engram/internal/knowledge"
+	"github.com/ryanthedev/engram/internal/knowledgeauth"
 	"github.com/ryanthedev/engram/internal/memory"
 	"github.com/ryanthedev/engram/internal/retrieval"
 	"github.com/ryanthedev/engram/internal/store"
@@ -64,6 +66,14 @@ type Server struct {
 	// Exporter backs the Export RPC (the Phase 1 graph scan); nil disables
 	// exporting (UNIMPLEMENTED). See export.go.
 	Exporter Exporter
+
+	// Knowledge platform seams (Phase 6, knowledge.go). A nil Registry (or
+	// nil Writer/Reader for the operations needing them) disables the six
+	// knowledge RPCs (UNIMPLEMENTED). KnowledgeAuth's zero value is ready.
+	Registry        knowledge.CollectionRegistry
+	KnowledgeWriter KnowledgeWriter
+	KnowledgeReader KnowledgeReader
+	KnowledgeAuth   knowledgeauth.Authorizer
 }
 
 // New returns a Server wired to s (write path) and r (read path).

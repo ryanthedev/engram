@@ -412,7 +412,10 @@ func (t *tierRetriever) search(ctx context.Context, q Query, f Filter, aclClause
 	}
 
 	filters := t.filterClauses(f, aclClause)
-	body, usePipeline := buildQuery(mode, t.textField, t.vectorField, q.Text, vec, k, filters)
+	// Memory tiers never sort (relevance/RRF order only) — nil is the only
+	// value any memory caller ever passes, which is exactly the value
+	// buildQuery treats as "omit the sort key entirely" (DW-5.1).
+	body, usePipeline := buildQuery(mode, t.textField, t.vectorField, q.Text, vec, k, filters, nil)
 
 	url := t.baseURL + "/" + t.index + "/_search"
 	if usePipeline {
@@ -496,8 +499,24 @@ func (t *tierRetriever) filterClauses(f Filter, aclClause map[string]any) []any 
 // buildQuery constructs the OpenSearch request body for one tier's search.
 // usePipeline reports whether the caller must attach the RRF search_pipeline
 // query param (only hybrid mode with a usable vector fuses two clauses).
-func buildQuery(mode SearchMode, textField, vectorField, text string, vec []float32, k int, filters []any) (body []byte, usePipeline bool) {
-	bm25Query := map[string]any{"match": map[string]any{textField: text}}
+//
+// sort is additive (Phase 5, knowledge retriever): a nil/empty sort omits
+// the "sort" key entirely, so every existing memory caller — which always
+// passes nil — gets byte-identical output (DW-5.1, proven by
+// TestBuildQueryMemoryPathByteIdenticalWhenSortNil in knowledge_test.go).
+// A non-nil sort is appended after size/query so relevance order stays the
+// default when the caller doesn't ask for a field sort.
+//
+// text == "" (only reachable via the knowledge retriever's filter-only
+// search — both memory callers short-circuit before text can ever be empty
+// here) falls back to match_all so filters alone can still select documents,
+// rather than a "match" query on an empty string, which OpenSearch analyzes
+// to zero terms and use.
+func buildQuery(mode SearchMode, textField, vectorField, text string, vec []float32, k int, filters []any, sort []any) (body []byte, usePipeline bool) {
+	bm25Query := map[string]any{"match_all": map[string]any{}}
+	if text != "" {
+		bm25Query = map[string]any{"match": map[string]any{textField: text}}
+	}
 	var bm25 any = bm25Query
 	if len(filters) > 0 {
 		bm25 = map[string]any{"bool": map[string]any{"must": []any{bm25Query}, "filter": filters}}
@@ -526,6 +545,9 @@ func buildQuery(mode SearchMode, textField, vectorField, text string, vec []floa
 	// results, and dominate response size (~95% of a raw hit). Excluding a
 	// field an index doesn't have is a no-op, so both names apply to both tiers.
 	query["_source"] = map[string]any{"excludes": []string{"text_embedding", "fact_embedding"}}
+	if len(sort) > 0 {
+		query["sort"] = sort
+	}
 	body, _ = json.Marshal(query)
 	return body, usePipeline
 }

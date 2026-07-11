@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 // protocolVersion is the MCP revision this server speaks.
@@ -28,7 +29,9 @@ const (
 	serverVersion = "0.1.0"
 )
 
-// Hit is one search result surfaced through the memory_search tool.
+// Hit is one search result surfaced through the memory_search and
+// knowledge_search tools. Source is the hit's origin: a memory tier
+// ("episodic" | "semantic") or, for knowledge hits, the collection name.
 type Hit struct {
 	ID     string  `json:"id"`
 	Score  float64 `json:"score"`
@@ -47,6 +50,66 @@ type Status struct {
 	OpenSearchVersion string `json:"opensearch_version,omitempty"`
 }
 
+// KnowledgeDoc is one document in a knowledge_ingest batch. Fields carries
+// collection-specific values matching the collection's declared mappings;
+// the seam itself is schema-free.
+type KnowledgeDoc struct {
+	// ID is the upsert identity: re-ingesting an id overwrites in place.
+	ID    string `json:"id"`
+	Title string `json:"title,omitempty"`
+	// Text is the full-text body indexed under the collection's text field.
+	Text string `json:"text"`
+	// SourceVersion is a source-side change marker (opaque to the server).
+	SourceVersion string         `json:"source_version,omitempty"`
+	Fields        map[string]any `json:"fields,omitempty"`
+}
+
+// Predicate is one generic knowledge-search filter. Op is "term" | "range" |
+// "prefix". Value carries a scalar for term/prefix; for range it is a
+// map with "gte" and/or "lte" scalar bounds (either may be absent).
+type Predicate struct {
+	Field string `json:"field"`
+	Op    string `json:"op"`
+	Value any    `json:"value"`
+}
+
+// SortKey orders knowledge-search results by one sortable field. Order is
+// "asc" | "desc".
+type SortKey struct {
+	Field string `json:"field"`
+	Order string `json:"order"`
+}
+
+// FieldSpec declares one collection field: its index type (e.g. "keyword",
+// "date", "integer") and whether queries may filter or sort on it.
+type FieldSpec struct {
+	Type       string `json:"type"`
+	Filterable bool   `json:"filterable,omitempty"`
+	Sortable   bool   `json:"sortable,omitempty"`
+}
+
+// CollectionSpec describes one document collection: its name, the full-text
+// field BM25 targets, declared field mappings, and the read-access policy
+// (public, or restricted to the named roles). It carries no index or alias
+// name — physical storage stays registry-internal.
+type CollectionSpec struct {
+	Name      string               `json:"name"`
+	TextField string               `json:"text_field,omitempty"`
+	Mappings  map[string]FieldSpec `json:"mappings,omitempty"`
+	Public    bool                 `json:"public,omitempty"`
+	Roles     []string             `json:"roles,omitempty"`
+}
+
+// CollectionInfo is one knowledge_collections entry: the collection's spec
+// (so a caller can learn its filterable/sortable fields) plus size and
+// staleness. Nil timestamps mean the collection is empty or undated.
+type CollectionInfo struct {
+	CollectionSpec
+	Count             int64      `json:"count"`
+	NewestHarvestedAt *time.Time `json:"newest_harvested_at,omitempty"`
+	NewestDocDate     *time.Time `json:"newest_doc_date,omitempty"`
+}
+
 // Backend is the Engram capability the MCP tools map onto (consumer-defined
 // seam). The gRPC client adapter satisfies it; tests use a fake.
 type Backend interface {
@@ -56,6 +119,26 @@ type Backend interface {
 	Search(ctx context.Context, query string, k int) ([]Hit, error)
 	// Status reports server health, the caller's identity, and tier counts.
 	Status(ctx context.Context) (Status, error)
+
+	// KnowledgeIngest bulk-upserts one harvest batch (collection, source,
+	// harvestID) of documents and returns how many were indexed. Partial
+	// failures surface as err; retrying the whole batch is idempotent.
+	KnowledgeIngest(ctx context.Context, collection, source, harvestID string, docs []KnowledgeDoc) (indexed int, err error)
+	// KnowledgeSearch runs one BM25 query over a collection with generic
+	// field filters and sort; hits carry the collection name as Source.
+	KnowledgeSearch(ctx context.Context, collection, query string, filters []Predicate, sort []SortKey, k int) ([]Hit, error)
+	// KnowledgeCollections lists the collections the caller may read, with
+	// field mappings, document count, and staleness.
+	KnowledgeCollections(ctx context.Context) ([]CollectionInfo, error)
+	// KnowledgeDelete sweeps the collection: it deletes rows from source
+	// whose harvest id differs from currentHarvestID and reports the count.
+	KnowledgeDelete(ctx context.Context, collection, source, currentHarvestID string) (deleted int, err error)
+	// CreateCollection registers a new collection and provisions its backing
+	// index live; a duplicate name is a conflict.
+	CreateCollection(ctx context.Context, spec CollectionSpec) error
+	// UpdateCollection amends an existing collection's spec; mapping changes
+	// apply live.
+	UpdateCollection(ctx context.Context, spec CollectionSpec) error
 }
 
 // Server serves the MCP protocol for one client connection over a Backend.

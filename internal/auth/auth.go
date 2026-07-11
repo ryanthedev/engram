@@ -35,6 +35,13 @@ type Identity struct {
 	TenantID string
 	UserID   string
 	AgentID  string
+	// Roles is the authenticated role claim set (DW-2.1) used by the knowledge
+	// platform's per-collection RBAC. It is derived ONLY from the verified
+	// token record at Verify time — never from request fields; the transport
+	// barricade overwrites any caller-supplied Identity, so a client cannot
+	// smuggle roles into a request. Empty means "no roles" (memory-path
+	// tokens are unaffected: authorization there stays scope/ACL-based).
+	Roles []string
 }
 
 // Valid reports whether the identity carries the minimum binding a token may
@@ -107,15 +114,25 @@ type TokenRecord struct {
 	TenantID  string     `json:"tenant_id"`
 	UserID    string     `json:"user_id"`
 	AgentID   string     `json:"agent_id"`
+	// Roles is the persisted role claim set (DW-2.1). omitempty keeps
+	// role-less records byte-identical to pre-roles ones, so existing
+	// strict-mapped indices that predate the `roles` template field stay
+	// writable until they are re-provisioned.
+	Roles     []string   `json:"roles,omitempty"`
 	IssuedAt  time.Time  `json:"issued_at"`
 	ExpiresAt time.Time  `json:"expires_at"`
 	Revoked   bool       `json:"revoked"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 }
 
-// Identity returns the principal this record is bound to.
+// Identity returns the principal this record is bound to. Roles are
+// re-normalized here (the read half of the claim barricade): Issue sanitizes
+// them at mint time, but records written by any other means get the same
+// treatment before the identity crosses into authorization decisions —
+// defense-in-depth on a security-critical path. The slice is cloned by
+// normalization, so callers never alias the record's backing array.
 func (r TokenRecord) Identity() Identity {
-	return Identity{TenantID: r.TenantID, UserID: r.UserID, AgentID: r.AgentID}
+	return Identity{TenantID: r.TenantID, UserID: r.UserID, AgentID: r.AgentID, Roles: normalizeRoles(r.Roles)}
 }
 
 // TokenStore is the persistence seam (consumer-defined). OpenSearch backs it
@@ -221,6 +238,7 @@ func (t *TokenIssuer) Issue(ctx context.Context, id Identity, ttl time.Duration)
 		TenantID: id.TenantID,
 		UserID:   id.UserID,
 		AgentID:  id.AgentID,
+		Roles:    normalizeRoles(id.Roles), // claims are sanitized once, at mint time
 		IssuedAt: now,
 	}
 	if ttl > 0 {
@@ -280,4 +298,23 @@ func hashToken(raw string) (string, error) {
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// normalizeRoles returns a cleaned copy of roles: whitespace-trimmed,
+// empty entries dropped, duplicates removed, first-seen order preserved.
+// nil is returned for an effectively-empty set so role-less records
+// marshal with no roles key at all (see TokenRecord.Roles). The input
+// slice is never mutated.
+func normalizeRoles(roles []string) []string {
+	var out []string
+	seen := make(map[string]struct{}, len(roles))
+	for _, r := range roles {
+		r = strings.TrimSpace(r)
+		if _, dup := seen[r]; r == "" || dup {
+			continue
+		}
+		seen[r] = struct{}{}
+		out = append(out, r)
+	}
+	return out
 }

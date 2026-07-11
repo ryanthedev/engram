@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -192,11 +193,12 @@ func TestRegisteredSeamsReceiveIdentityAndAreACLFiltered(t *testing.T) {
 		t.Fatalf("Search: %v", err)
 	}
 
-	// Seams received the Identity.
-	if tier.got != caller {
+	// Seams received the Identity. (DeepEqual: Identity carries a Roles slice
+	// since Phase 2 of the knowledge platform, so == no longer compiles.)
+	if !reflect.DeepEqual(tier.got, caller) {
 		t.Errorf("tier got identity %v, want %v", tier.got, caller)
 	}
-	if hook.got != caller {
+	if !reflect.DeepEqual(hook.got, caller) {
 		t.Errorf("hook got identity %v, want %v", hook.got, caller)
 	}
 

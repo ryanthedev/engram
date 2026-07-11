@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -147,7 +148,9 @@ func TestDW_3_4_ConstantTimeVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify(valid): %v", err)
 	}
-	if got != testIdentity {
+	// Identity carries a Roles slice (Phase 2), so it is no longer comparable
+	// with == ; DeepEqual pins the whole principal including nil Roles.
+	if !reflect.DeepEqual(got, testIdentity) {
 		t.Fatalf("Verify identity = %+v, want %+v", got, testIdentity)
 	}
 

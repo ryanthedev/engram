@@ -39,11 +39,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Engram_Ingest_FullMethodName = "/engram.v1.Engram/Ingest"
-	Engram_Search_FullMethodName = "/engram.v1.Engram/Search"
-	Engram_Status_FullMethodName = "/engram.v1.Engram/Status"
-	Engram_Audit_FullMethodName  = "/engram.v1.Engram/Audit"
-	Engram_Export_FullMethodName = "/engram.v1.Engram/Export"
+	Engram_Ingest_FullMethodName               = "/engram.v1.Engram/Ingest"
+	Engram_Search_FullMethodName               = "/engram.v1.Engram/Search"
+	Engram_Status_FullMethodName               = "/engram.v1.Engram/Status"
+	Engram_Audit_FullMethodName                = "/engram.v1.Engram/Audit"
+	Engram_Export_FullMethodName               = "/engram.v1.Engram/Export"
+	Engram_KnowledgeIngest_FullMethodName      = "/engram.v1.Engram/KnowledgeIngest"
+	Engram_KnowledgeSearch_FullMethodName      = "/engram.v1.Engram/KnowledgeSearch"
+	Engram_KnowledgeCollections_FullMethodName = "/engram.v1.Engram/KnowledgeCollections"
+	Engram_KnowledgeDelete_FullMethodName      = "/engram.v1.Engram/KnowledgeDelete"
+	Engram_CreateCollection_FullMethodName     = "/engram.v1.Engram/CreateCollection"
+	Engram_UpdateCollection_FullMethodName     = "/engram.v1.Engram/UpdateCollection"
 )
 
 // EngramClient is the client API for Engram service.
@@ -78,6 +84,28 @@ type EngramClient interface {
 	// next_cursor means the graph is exhausted. Unary by design: it runs under
 	// the same auth/telemetry interceptor chain as every other call.
 	Export(ctx context.Context, in *ExportRequest, opts ...grpc.CallOption) (*ExportResponse, error)
+	// KnowledgeIngest bulk-upserts one harvest batch of documents into a
+	// collection. Rows are stamped server-side with harvest_id and harvested_at;
+	// replays of the same document ids overwrite in place, so a failed batch is
+	// safely retried whole.
+	KnowledgeIngest(ctx context.Context, in *KnowledgeIngestRequest, opts ...grpc.CallOption) (*KnowledgeIngestResponse, error)
+	// KnowledgeSearch runs one BM25 query over a collection's text field with
+	// generic field filters and sort. No kNN, no RRF, no memory-tier fusion.
+	KnowledgeSearch(ctx context.Context, in *KnowledgeSearchRequest, opts ...grpc.CallOption) (*KnowledgeSearchResponse, error)
+	// KnowledgeCollections lists the collections the caller may read, each with
+	// its field mappings (which fields are filterable/sortable), document count,
+	// and staleness (newest harvested_at / newest document date).
+	KnowledgeCollections(ctx context.Context, in *KnowledgeCollectionsRequest, opts ...grpc.CallOption) (*KnowledgeCollectionsResponse, error)
+	// KnowledgeDelete is the mark-and-sweep sweep: it hard-deletes every row in
+	// the collection from the named source whose harvest_id differs from
+	// current_harvest_id (rows the latest harvest run did not touch).
+	KnowledgeDelete(ctx context.Context, in *KnowledgeDeleteRequest, opts ...grpc.CallOption) (*KnowledgeDeleteResponse, error)
+	// CreateCollection registers a new collection and provisions its backing
+	// index live — no server restart. A duplicate name is ALREADY_EXISTS.
+	CreateCollection(ctx context.Context, in *CreateCollectionRequest, opts ...grpc.CallOption) (*CreateCollectionResponse, error)
+	// UpdateCollection amends an existing collection's spec (new fields, access
+	// policy); the registry applies mapping changes live.
+	UpdateCollection(ctx context.Context, in *UpdateCollectionRequest, opts ...grpc.CallOption) (*UpdateCollectionResponse, error)
 }
 
 type engramClient struct {
@@ -138,6 +166,66 @@ func (c *engramClient) Export(ctx context.Context, in *ExportRequest, opts ...gr
 	return out, nil
 }
 
+func (c *engramClient) KnowledgeIngest(ctx context.Context, in *KnowledgeIngestRequest, opts ...grpc.CallOption) (*KnowledgeIngestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KnowledgeIngestResponse)
+	err := c.cc.Invoke(ctx, Engram_KnowledgeIngest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramClient) KnowledgeSearch(ctx context.Context, in *KnowledgeSearchRequest, opts ...grpc.CallOption) (*KnowledgeSearchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KnowledgeSearchResponse)
+	err := c.cc.Invoke(ctx, Engram_KnowledgeSearch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramClient) KnowledgeCollections(ctx context.Context, in *KnowledgeCollectionsRequest, opts ...grpc.CallOption) (*KnowledgeCollectionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KnowledgeCollectionsResponse)
+	err := c.cc.Invoke(ctx, Engram_KnowledgeCollections_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramClient) KnowledgeDelete(ctx context.Context, in *KnowledgeDeleteRequest, opts ...grpc.CallOption) (*KnowledgeDeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KnowledgeDeleteResponse)
+	err := c.cc.Invoke(ctx, Engram_KnowledgeDelete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramClient) CreateCollection(ctx context.Context, in *CreateCollectionRequest, opts ...grpc.CallOption) (*CreateCollectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateCollectionResponse)
+	err := c.cc.Invoke(ctx, Engram_CreateCollection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramClient) UpdateCollection(ctx context.Context, in *UpdateCollectionRequest, opts ...grpc.CallOption) (*UpdateCollectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateCollectionResponse)
+	err := c.cc.Invoke(ctx, Engram_UpdateCollection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngramServer is the server API for Engram service.
 // All implementations must embed UnimplementedEngramServer
 // for forward compatibility.
@@ -170,6 +258,28 @@ type EngramServer interface {
 	// next_cursor means the graph is exhausted. Unary by design: it runs under
 	// the same auth/telemetry interceptor chain as every other call.
 	Export(context.Context, *ExportRequest) (*ExportResponse, error)
+	// KnowledgeIngest bulk-upserts one harvest batch of documents into a
+	// collection. Rows are stamped server-side with harvest_id and harvested_at;
+	// replays of the same document ids overwrite in place, so a failed batch is
+	// safely retried whole.
+	KnowledgeIngest(context.Context, *KnowledgeIngestRequest) (*KnowledgeIngestResponse, error)
+	// KnowledgeSearch runs one BM25 query over a collection's text field with
+	// generic field filters and sort. No kNN, no RRF, no memory-tier fusion.
+	KnowledgeSearch(context.Context, *KnowledgeSearchRequest) (*KnowledgeSearchResponse, error)
+	// KnowledgeCollections lists the collections the caller may read, each with
+	// its field mappings (which fields are filterable/sortable), document count,
+	// and staleness (newest harvested_at / newest document date).
+	KnowledgeCollections(context.Context, *KnowledgeCollectionsRequest) (*KnowledgeCollectionsResponse, error)
+	// KnowledgeDelete is the mark-and-sweep sweep: it hard-deletes every row in
+	// the collection from the named source whose harvest_id differs from
+	// current_harvest_id (rows the latest harvest run did not touch).
+	KnowledgeDelete(context.Context, *KnowledgeDeleteRequest) (*KnowledgeDeleteResponse, error)
+	// CreateCollection registers a new collection and provisions its backing
+	// index live — no server restart. A duplicate name is ALREADY_EXISTS.
+	CreateCollection(context.Context, *CreateCollectionRequest) (*CreateCollectionResponse, error)
+	// UpdateCollection amends an existing collection's spec (new fields, access
+	// policy); the registry applies mapping changes live.
+	UpdateCollection(context.Context, *UpdateCollectionRequest) (*UpdateCollectionResponse, error)
 	mustEmbedUnimplementedEngramServer()
 }
 
@@ -194,6 +304,24 @@ func (UnimplementedEngramServer) Audit(context.Context, *AuditRequest) (*AuditRe
 }
 func (UnimplementedEngramServer) Export(context.Context, *ExportRequest) (*ExportResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Export not implemented")
+}
+func (UnimplementedEngramServer) KnowledgeIngest(context.Context, *KnowledgeIngestRequest) (*KnowledgeIngestResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method KnowledgeIngest not implemented")
+}
+func (UnimplementedEngramServer) KnowledgeSearch(context.Context, *KnowledgeSearchRequest) (*KnowledgeSearchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method KnowledgeSearch not implemented")
+}
+func (UnimplementedEngramServer) KnowledgeCollections(context.Context, *KnowledgeCollectionsRequest) (*KnowledgeCollectionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method KnowledgeCollections not implemented")
+}
+func (UnimplementedEngramServer) KnowledgeDelete(context.Context, *KnowledgeDeleteRequest) (*KnowledgeDeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method KnowledgeDelete not implemented")
+}
+func (UnimplementedEngramServer) CreateCollection(context.Context, *CreateCollectionRequest) (*CreateCollectionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateCollection not implemented")
+}
+func (UnimplementedEngramServer) UpdateCollection(context.Context, *UpdateCollectionRequest) (*UpdateCollectionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateCollection not implemented")
 }
 func (UnimplementedEngramServer) mustEmbedUnimplementedEngramServer() {}
 func (UnimplementedEngramServer) testEmbeddedByValue()                {}
@@ -306,6 +434,114 @@ func _Engram_Export_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Engram_KnowledgeIngest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KnowledgeIngestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).KnowledgeIngest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_KnowledgeIngest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).KnowledgeIngest(ctx, req.(*KnowledgeIngestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Engram_KnowledgeSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KnowledgeSearchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).KnowledgeSearch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_KnowledgeSearch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).KnowledgeSearch(ctx, req.(*KnowledgeSearchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Engram_KnowledgeCollections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KnowledgeCollectionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).KnowledgeCollections(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_KnowledgeCollections_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).KnowledgeCollections(ctx, req.(*KnowledgeCollectionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Engram_KnowledgeDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KnowledgeDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).KnowledgeDelete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_KnowledgeDelete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).KnowledgeDelete(ctx, req.(*KnowledgeDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Engram_CreateCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateCollectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).CreateCollection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_CreateCollection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).CreateCollection(ctx, req.(*CreateCollectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Engram_UpdateCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateCollectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).UpdateCollection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_UpdateCollection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).UpdateCollection(ctx, req.(*UpdateCollectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Engram_ServiceDesc is the grpc.ServiceDesc for Engram service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -332,6 +568,30 @@ var Engram_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Export",
 			Handler:    _Engram_Export_Handler,
+		},
+		{
+			MethodName: "KnowledgeIngest",
+			Handler:    _Engram_KnowledgeIngest_Handler,
+		},
+		{
+			MethodName: "KnowledgeSearch",
+			Handler:    _Engram_KnowledgeSearch_Handler,
+		},
+		{
+			MethodName: "KnowledgeCollections",
+			Handler:    _Engram_KnowledgeCollections_Handler,
+		},
+		{
+			MethodName: "KnowledgeDelete",
+			Handler:    _Engram_KnowledgeDelete_Handler,
+		},
+		{
+			MethodName: "CreateCollection",
+			Handler:    _Engram_CreateCollection_Handler,
+		},
+		{
+			MethodName: "UpdateCollection",
+			Handler:    _Engram_UpdateCollection_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
