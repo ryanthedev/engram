@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,10 @@ func (b *fixedHitsBackend) Search(_ context.Context, _ string, k int) ([]Hit, er
 
 func (b *fixedHitsBackend) Status(context.Context) (Status, error) { return Status{}, nil }
 
+func (b *fixedHitsBackend) Read(context.Context, string, string) (ReadResult, error) {
+	return ReadResult{}, errNotFound
+}
+
 // semanticHit builds a Hit whose Fields is a realistic semantic-tier
 // fields_json blob (per Phase 1's allowlist), padded to at least size bytes
 // so tests can force budget overflow deterministically.
@@ -46,8 +51,12 @@ func semanticHit(id, subject, predicate, object string, pad int) Hit {
 }
 
 // searchViaWire drives memory_search end to end through the JSON-RPC wire
-// (refClient) and returns the raw structured payload text (exactly what
-// toolResult marshaled as the tool's content block) plus the decoded result.
+// (refClient) and returns the raw compact-line text (exactly what
+// toolResultWithText rendered as the tool's content block) plus the
+// structured result. Since Phase 1 (DW-1.1), the text block is no longer
+// JSON — decoded comes from structuredContent instead, which the JSON-RPC
+// layer already parsed into a map (no re-unmarshal needed) and carries the
+// same field names (hits/omitted/omitted_facets/hint/overflow_path).
 func searchViaWire(t *testing.T, backend Backend, args map[string]any) (text string, decoded map[string]any) {
 	t.Helper()
 	c := startServer(t, backend)
@@ -63,8 +72,9 @@ func searchViaWire(t *testing.T, backend Backend, args map[string]any) (text str
 	}
 	block, _ := content[0].(map[string]any)
 	text, _ = block["text"].(string)
-	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
-		t.Fatalf("decoding memory_search result text: %v (%s)", err, text)
+	decoded, _ = res["structuredContent"].(map[string]any)
+	if decoded == nil {
+		t.Fatalf("memory_search returned no structuredContent: %v", res)
 	}
 	return text, decoded
 }
@@ -344,14 +354,134 @@ func TestPackSearchResultZeroHits(t *testing.T) {
 // same facets produce byte-identical hints.
 func TestRefineHintDeterministicFieldOrder(t *testing.T) {
 	facets := map[string]string{"kind": "note", "subject": "alice", "predicate": "knows"}
-	first := refineHint(3, facets, memoryFacetFields)
+	first := refineHint(3, facets, memoryFacetFields, true)
 	for i := 0; i < 5; i++ {
-		if got := refineHint(3, facets, memoryFacetFields); got != first {
+		if got := refineHint(3, facets, memoryFacetFields, true); got != first {
 			t.Fatalf("refineHint not deterministic: %q vs %q", got, first)
 		}
 	}
 	if !strings.Contains(first, "subject=") || !strings.Contains(first, "predicate=") || !strings.Contains(first, "kind=") {
 		t.Errorf("hint missing a facet field: %q", first)
+	}
+}
+
+// TestRefineHintOverflowPathGating: refineHint mentions overflow_path only
+// when told it is actually set, and always names memory_read as the
+// single-hit drill regardless (DW-3.1/3.2/3.3 at the unit level).
+func TestRefineHintOverflowPathGating(t *testing.T) {
+	facets := map[string]string{"subject": "alice"}
+
+	withPath := refineHint(2, facets, memoryFacetFields, true)
+	if !strings.Contains(withPath, "overflow_path") {
+		t.Errorf("refineHint(overflowPathSet=true) = %q, want an overflow_path mention", withPath)
+	}
+
+	withoutPath := refineHint(2, facets, memoryFacetFields, false)
+	if strings.Contains(withoutPath, "overflow_path") {
+		t.Errorf("refineHint(overflowPathSet=false) = %q, want no overflow_path mention", withoutPath)
+	}
+
+	for _, hint := range []string{withPath, withoutPath} {
+		if !strings.Contains(hint, "memory_read") {
+			t.Errorf("hint = %q, want a memory_read mention regardless of overflow_path state", hint)
+		}
+	}
+}
+
+// TestRefineHintNoFacets: refineHint produces a well-formed hint (no
+// dangling "(top omitted )" parenthetical) when there are no facets to show
+// — an edge case the omitted-facets loop must handle cleanly.
+func TestRefineHintNoFacets(t *testing.T) {
+	hint := refineHint(1, nil, memoryFacetFields, false)
+	if strings.Contains(hint, "(top omitted") {
+		t.Errorf("hint = %q, want no facet parenthetical when facets are empty", hint)
+	}
+	if !strings.Contains(hint, "1 more hit(s) omitted") {
+		t.Errorf("hint = %q, want the omitted count", hint)
+	}
+}
+
+// TestDW_3_1_HintNamesOverflowPathWhenSet: when hits are omitted and the
+// spill succeeds, the hint names overflow_path as the full-set source.
+func TestDW_3_1_HintNamesOverflowPathWhenSet(t *testing.T) {
+	t.Setenv(spillDirEnv, t.TempDir())
+	t.Setenv(searchBudgetBytesEnv, "200")
+	hits := manyHits(5)
+
+	_, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
+
+	omitted, _ := decoded["omitted"].(float64)
+	if omitted <= 0 {
+		t.Fatalf("omitted = %v, want > 0 (test setup should force omission)", decoded["omitted"])
+	}
+	if _, ok := decoded["overflow_path"]; !ok {
+		t.Fatalf("overflow_path absent, want set (spill dir is writable): %v", decoded)
+	}
+	hint, _ := decoded["hint"].(string)
+	if !strings.Contains(hint, "overflow_path") {
+		t.Errorf("hint = %q, want it to name overflow_path as the full-set source", hint)
+	}
+}
+
+// TestDW_3_2_HintOmitsOverflowPathWhenNotSet: the hint never references
+// overflow_path when it is not actually present in the response — neither
+// when nothing was omitted, nor when omission happened but the spill write
+// itself failed (the existing graceful-degradation path).
+func TestDW_3_2_HintOmitsOverflowPathWhenNotSet(t *testing.T) {
+	t.Run("all fit: hint absent entirely", func(t *testing.T) {
+		hits := []Hit{semanticHit("h1", "s", "p", "o", 5)}
+		_, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
+		if _, ok := decoded["overflow_path"]; ok {
+			t.Fatalf("overflow_path present when all hits fit: %v", decoded)
+		}
+		if hint, ok := decoded["hint"]; ok {
+			t.Errorf("hint = %v, want absent (omitempty) when nothing was omitted", hint)
+		}
+	})
+
+	t.Run("spill write failed: hint present but no overflow_path mention", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o500); err != nil { // read+execute, no write
+			t.Fatalf("chmod: %v", err)
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0o700) }) // let t.TempDir's own cleanup remove it
+		t.Setenv(spillDirEnv, dir)
+		t.Setenv(searchBudgetBytesEnv, "200")
+
+		hits := manyHits(5)
+		_, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
+
+		omitted, _ := decoded["omitted"].(float64)
+		if omitted <= 0 {
+			t.Fatalf("omitted = %v, want > 0 (test setup should force omission)", decoded["omitted"])
+		}
+		if _, ok := decoded["overflow_path"]; ok {
+			t.Fatalf("overflow_path present despite an unwritable spill dir: %v", decoded)
+		}
+		hint, _ := decoded["hint"].(string)
+		if hint == "" {
+			t.Fatalf("hint empty, want a non-empty hint even without overflow_path")
+		}
+		if strings.Contains(hint, "overflow_path") {
+			t.Errorf("hint = %q, dangles a promise: overflow_path was never written", hint)
+		}
+	})
+}
+
+// TestDW_3_3_HintNamesMemoryReadDrill: whenever hits are omitted, the hint
+// names memory_read as the sanctioned single-hit drill, regardless of
+// whether overflow_path ended up set — steering the caller away from
+// inventing its own path (the motivating incident).
+func TestDW_3_3_HintNamesMemoryReadDrill(t *testing.T) {
+	t.Setenv(spillDirEnv, t.TempDir())
+	t.Setenv(searchBudgetBytesEnv, "200")
+	hits := manyHits(5)
+
+	_, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
+
+	hint, _ := decoded["hint"].(string)
+	if !strings.Contains(hint, "memory_read") {
+		t.Errorf("hint = %q, want it to name memory_read as the single-hit drill", hint)
 	}
 }
 
@@ -381,6 +511,10 @@ func (b *recordingKBackend) Search(_ context.Context, _ string, k int) ([]Hit, e
 	return nil, nil
 }
 func (b *recordingKBackend) Status(context.Context) (Status, error) { return Status{}, nil }
+
+func (b *recordingKBackend) Read(context.Context, string, string) (ReadResult, error) {
+	return ReadResult{}, errNotFound
+}
 
 func searchViaWireIgnoringHits(t *testing.T, backend Backend, args map[string]any) (string, map[string]any) {
 	t.Helper()

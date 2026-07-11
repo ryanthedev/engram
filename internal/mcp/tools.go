@@ -20,6 +20,7 @@ const (
 	ToolIngest = "memory_ingest"
 	ToolSearch = "memory_search"
 	ToolStatus = "memory_status"
+	ToolRead   = "memory_read"
 
 	ToolKnowledgeIngest      = "knowledge_ingest"
 	ToolKnowledgeSearch      = "knowledge_search"
@@ -28,6 +29,12 @@ const (
 	ToolCreateCollection     = "knowledge_create_collection"
 	ToolUpdateCollection     = "knowledge_update_collection"
 )
+
+// readSources are the source values memory_read accepts — validated at this
+// entry (agent-supplied arguments are external input) before the id ever
+// reaches the backend. "graph" is recognized but short-circuited: a graph
+// hit's statement already IS the whole memory.
+var readSources = map[string]bool{"episodic": true, "semantic": true, "graph": true}
 
 // toolSchemas is the advertised tool set. Kept as a function so each call
 // gets a fresh map (no shared-mutable-state hazard).
@@ -59,6 +66,18 @@ func toolSchemas() []toolSchema {
 					"k":     map[string]any{"type": "integer", "description": "Max hits to return (default server-chosen)."},
 				},
 				"required": []any{"query"},
+			},
+		},
+		{
+			Name:        ToolRead,
+			Description: "Read ONE memory record's full content by the id and source a memory_search result line exposes. Episodic returns the full untruncated text; semantic returns the fact plus its provenance and version history. Spends your context on the whole record — drill deliberately.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id":     strProp("Record id exactly as shown in a memory_search result (required)."),
+					"source": strProp(`Source tier of the id: "episodic" or "semantic" (required; "graph" has no drill-down).`),
+				},
+				"required": []any{"id", "source"},
 			},
 		},
 		{
@@ -202,6 +221,8 @@ func (s *Server) handleToolsCall(ctx context.Context, raw json.RawMessage) (any,
 		return s.callIngest(ctx, p.Arguments)
 	case ToolSearch:
 		return s.callSearch(ctx, p.Arguments)
+	case ToolRead:
+		return s.callRead(ctx, p.Arguments)
 	case ToolStatus:
 		return s.callStatus(ctx)
 	case ToolKnowledgeIngest:
@@ -259,7 +280,14 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	if err != nil {
 		return toolError(fmt.Sprintf("search failed: %v", err)), nil
 	}
-	return toolResult(packAndSpill(hits, memoryFacetFields, ToolSearch)), nil
+	// memory_search renders the budget-packed result as compact lines: the
+	// text block is the compact-line form the agent reads; structuredContent
+	// carries the rendered envelope. (knowledge_search keeps the raw
+	// structured JSON — its docs have no memory_read drill-down, so it never
+	// truncates a body to a gist.)
+	result := packAndSpill(hits, memoryFacetFields, ToolSearch)
+	rendered := renderSearchResult(result)
+	return toolResultWithText(rendered, compactLines(rendered)), nil
 }
 
 // packAndSpill budget-packs hits (facet hints computed over facetFields) and,
@@ -275,11 +303,45 @@ func packAndSpill(hits []Hit, facetFields []string, toolName string) searchResul
 	if result.Omitted > 0 {
 		if path, spillErr := spillFullResult(hits); spillErr != nil {
 			slog.Warn(toolName+": spilling full result set to disk failed; returning capped response without overflow_path", "error", spillErr)
+			// buildSearchResult (budget.go) built Hint optimistically,
+			// assuming this spill would succeed; now that it hasn't,
+			// rebuild the hint so it doesn't dangle a path that was never
+			// written (DW-3.2).
+			result.Hint = refineHint(result.Omitted, result.OmittedFacets, facetFields, false)
 		} else {
 			result.OverflowPath = path
 		}
 	}
 	return result
+}
+
+// callRead is the memory_read tool: the deliberate full-record drill for an
+// (id, source) pair surfaced by memory_search. Arguments are validated here
+// at the tool barricade (they arrive from the agent — external input); the
+// server re-validates and authorizes fail-closed on its side of the gRPC
+// boundary, so a miss, mismatch, or denial surfaces as one opaque not-found.
+func (s *Server) callRead(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		ID     string `json:"id"`
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "invalid memory_read arguments"}
+	}
+	if args.ID == "" || args.Source == "" {
+		return toolError("memory_read requires non-empty id and source"), nil
+	}
+	if !readSources[args.Source] {
+		return toolError(`memory_read source must be "episodic" or "semantic" (as shown in the memory_search result line)`), nil
+	}
+	if args.Source == "graph" {
+		return toolError("graph records have no drill-down: the memory_search result already carries the full statement"), nil
+	}
+	result, err := s.backend.Read(ctx, args.ID, args.Source)
+	if err != nil {
+		return toolError(fmt.Sprintf("read failed: %v", err)), nil
+	}
+	return toolResult(result), nil
 }
 
 func (s *Server) callStatus(ctx context.Context) (any, *rpcError) {
@@ -413,6 +475,20 @@ func toolResult(payload any) map[string]any {
 	text, _ := json.Marshal(payload)
 	return map[string]any{
 		"content":           []any{map[string]any{"type": "text", "text": string(text)}},
+		"structuredContent": payload,
+		"isError":           false,
+	}
+}
+
+// toolResultWithText wraps a structured payload as an MCP tool result whose
+// content text block is the caller-supplied rendering (memory_search's
+// compact-line format) rather than a straight marshal of payload — while
+// structuredContent still carries the full structured payload for clients
+// that consume it. toolResult stays the JSON-marshal-both-ways default;
+// this is the divergent case.
+func toolResultWithText(payload any, text string) map[string]any {
+	return map[string]any{
+		"content":           []any{map[string]any{"type": "text", "text": text}},
 		"structuredContent": payload,
 		"isError":           false,
 	}

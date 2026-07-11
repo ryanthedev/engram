@@ -842,6 +842,248 @@ func (x *AuditResponse) GetVersions() []*FactVersion {
 	return nil
 }
 
+// ReadRequest names one record by the (id, source) pair a search Hit exposes.
+type ReadRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Doc id exactly as surfaced by a search Hit. Empty -> INVALID_ARGUMENT.
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Source tier the id lives in: "episodic" | "semantic". Selects the ONE
+	// index consulted (never both). Empty or unknown -> INVALID_ARGUMENT;
+	// "graph" -> UNIMPLEMENTED (a graph hit already carries its statement).
+	Source        string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadRequest) Reset() {
+	*x = ReadRequest{}
+	mi := &file_engram_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadRequest) ProtoMessage() {}
+
+func (x *ReadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadRequest.ProtoReflect.Descriptor instead.
+func (*ReadRequest) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ReadRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ReadRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+// EpisodicRecord is one full episodic event as Read returns it: the record's
+// content projection ONLY. ACL/provenance fields (tenant_id, team_id, scope,
+// owner_agent_id) are authorized against server-side and then deliberately
+// projected away (fetch -> authorize -> project); embeddings and outbox
+// worker state never leave the store.
+type EpisodicRecord struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Doc id (the address the caller passed).
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Client-supplied idempotency identity (D13).
+	EventId string `protobuf:"bytes,2,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// Event classification (e.g. "tool_result", "conversation", "task").
+	Kind string `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
+	// Full, untruncated raw event text — the payload memory_read exists for.
+	Text          string                 `protobuf:"bytes,4,opt,name=text,proto3" json:"text,omitempty"`
+	SourceIds     []string               `protobuf:"bytes,5,rep,name=source_ids,json=sourceIds,proto3" json:"source_ids,omitempty"`
+	OccurredAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EpisodicRecord) Reset() {
+	*x = EpisodicRecord{}
+	mi := &file_engram_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EpisodicRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EpisodicRecord) ProtoMessage() {}
+
+func (x *EpisodicRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EpisodicRecord.ProtoReflect.Descriptor instead.
+func (*EpisodicRecord) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *EpisodicRecord) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *EpisodicRecord) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *EpisodicRecord) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *EpisodicRecord) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *EpisodicRecord) GetSourceIds() []string {
+	if x != nil {
+		return x.SourceIds
+	}
+	return nil
+}
+
+func (x *EpisodicRecord) GetOccurredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.OccurredAt
+	}
+	return nil
+}
+
+func (x *EpisodicRecord) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+// ReadResponse carries exactly one record: the branch matching the requested
+// source is populated, the other stays unset.
+type ReadResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Echoes the request's source ("episodic" | "semantic").
+	Source string `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	// Set when source=episodic.
+	Episodic *EpisodicRecord `protobuf:"bytes,2,opt,name=episodic,proto3" json:"episodic,omitempty"`
+	// Set when source=semantic: the TARGET version itself (a superseded id
+	// returns that immutable version with its possibly-closed validity
+	// interval), plus its provenance and full bi-temporal history — the Audit
+	// contract, reused.
+	Fact          *FactVersion   `protobuf:"bytes,3,opt,name=fact,proto3" json:"fact,omitempty"`
+	Provenance    *Provenance    `protobuf:"bytes,4,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	Versions      []*FactVersion `protobuf:"bytes,5,rep,name=versions,proto3" json:"versions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadResponse) Reset() {
+	*x = ReadResponse{}
+	mi := &file_engram_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadResponse) ProtoMessage() {}
+
+func (x *ReadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadResponse.ProtoReflect.Descriptor instead.
+func (*ReadResponse) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ReadResponse) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *ReadResponse) GetEpisodic() *EpisodicRecord {
+	if x != nil {
+		return x.Episodic
+	}
+	return nil
+}
+
+func (x *ReadResponse) GetFact() *FactVersion {
+	if x != nil {
+		return x.Fact
+	}
+	return nil
+}
+
+func (x *ReadResponse) GetProvenance() *Provenance {
+	if x != nil {
+		return x.Provenance
+	}
+	return nil
+}
+
+func (x *ReadResponse) GetVersions() []*FactVersion {
+	if x != nil {
+		return x.Versions
+	}
+	return nil
+}
+
 // ExportRequest resumes a paged graph export. cursor is the opaque
 // continuation token from the previous ExportResponse; empty starts from the
 // beginning. Clients never construct or inspect a non-empty cursor.
@@ -854,7 +1096,7 @@ type ExportRequest struct {
 
 func (x *ExportRequest) Reset() {
 	*x = ExportRequest{}
-	mi := &file_engram_proto_msgTypes[9]
+	mi := &file_engram_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -866,7 +1108,7 @@ func (x *ExportRequest) String() string {
 func (*ExportRequest) ProtoMessage() {}
 
 func (x *ExportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[9]
+	mi := &file_engram_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -879,7 +1121,7 @@ func (x *ExportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportRequest.ProtoReflect.Descriptor instead.
 func (*ExportRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{9}
+	return file_engram_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ExportRequest) GetCursor() string {
@@ -915,7 +1157,7 @@ type ExportEntity struct {
 
 func (x *ExportEntity) Reset() {
 	*x = ExportEntity{}
-	mi := &file_engram_proto_msgTypes[10]
+	mi := &file_engram_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -927,7 +1169,7 @@ func (x *ExportEntity) String() string {
 func (*ExportEntity) ProtoMessage() {}
 
 func (x *ExportEntity) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[10]
+	mi := &file_engram_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -940,7 +1182,7 @@ func (x *ExportEntity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportEntity.ProtoReflect.Descriptor instead.
 func (*ExportEntity) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{10}
+	return file_engram_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ExportEntity) GetId() string {
@@ -1035,7 +1277,7 @@ type ExportEdge struct {
 
 func (x *ExportEdge) Reset() {
 	*x = ExportEdge{}
-	mi := &file_engram_proto_msgTypes[11]
+	mi := &file_engram_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1047,7 +1289,7 @@ func (x *ExportEdge) String() string {
 func (*ExportEdge) ProtoMessage() {}
 
 func (x *ExportEdge) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[11]
+	mi := &file_engram_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1060,7 +1302,7 @@ func (x *ExportEdge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportEdge.ProtoReflect.Descriptor instead.
 func (*ExportEdge) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{11}
+	return file_engram_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ExportEdge) GetId() string {
@@ -1154,7 +1396,7 @@ type ExportResponse struct {
 
 func (x *ExportResponse) Reset() {
 	*x = ExportResponse{}
-	mi := &file_engram_proto_msgTypes[12]
+	mi := &file_engram_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1166,7 +1408,7 @@ func (x *ExportResponse) String() string {
 func (*ExportResponse) ProtoMessage() {}
 
 func (x *ExportResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[12]
+	mi := &file_engram_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1179,7 +1421,7 @@ func (x *ExportResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportResponse.ProtoReflect.Descriptor instead.
 func (*ExportResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{12}
+	return file_engram_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ExportResponse) GetEntities() []*ExportEntity {
@@ -1216,7 +1458,7 @@ type Range struct {
 
 func (x *Range) Reset() {
 	*x = Range{}
-	mi := &file_engram_proto_msgTypes[13]
+	mi := &file_engram_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1228,7 +1470,7 @@ func (x *Range) String() string {
 func (*Range) ProtoMessage() {}
 
 func (x *Range) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[13]
+	mi := &file_engram_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1241,7 +1483,7 @@ func (x *Range) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Range.ProtoReflect.Descriptor instead.
 func (*Range) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{13}
+	return file_engram_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Range) GetGte() *structpb.Value {
@@ -1277,7 +1519,7 @@ type Predicate struct {
 
 func (x *Predicate) Reset() {
 	*x = Predicate{}
-	mi := &file_engram_proto_msgTypes[14]
+	mi := &file_engram_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1289,7 +1531,7 @@ func (x *Predicate) String() string {
 func (*Predicate) ProtoMessage() {}
 
 func (x *Predicate) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[14]
+	mi := &file_engram_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1302,7 +1544,7 @@ func (x *Predicate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Predicate.ProtoReflect.Descriptor instead.
 func (*Predicate) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{14}
+	return file_engram_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Predicate) GetField() string {
@@ -1371,7 +1613,7 @@ type SortKey struct {
 
 func (x *SortKey) Reset() {
 	*x = SortKey{}
-	mi := &file_engram_proto_msgTypes[15]
+	mi := &file_engram_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1383,7 +1625,7 @@ func (x *SortKey) String() string {
 func (*SortKey) ProtoMessage() {}
 
 func (x *SortKey) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[15]
+	mi := &file_engram_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1396,7 +1638,7 @@ func (x *SortKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SortKey.ProtoReflect.Descriptor instead.
 func (*SortKey) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{15}
+	return file_engram_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SortKey) GetField() string {
@@ -1427,7 +1669,7 @@ type FieldSpec struct {
 
 func (x *FieldSpec) Reset() {
 	*x = FieldSpec{}
-	mi := &file_engram_proto_msgTypes[16]
+	mi := &file_engram_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1439,7 +1681,7 @@ func (x *FieldSpec) String() string {
 func (*FieldSpec) ProtoMessage() {}
 
 func (x *FieldSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[16]
+	mi := &file_engram_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1452,7 +1694,7 @@ func (x *FieldSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldSpec.ProtoReflect.Descriptor instead.
 func (*FieldSpec) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{16}
+	return file_engram_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *FieldSpec) GetType() string {
@@ -1489,7 +1731,7 @@ type AccessPolicy struct {
 
 func (x *AccessPolicy) Reset() {
 	*x = AccessPolicy{}
-	mi := &file_engram_proto_msgTypes[17]
+	mi := &file_engram_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1501,7 +1743,7 @@ func (x *AccessPolicy) String() string {
 func (*AccessPolicy) ProtoMessage() {}
 
 func (x *AccessPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[17]
+	mi := &file_engram_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1514,7 +1756,7 @@ func (x *AccessPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AccessPolicy.ProtoReflect.Descriptor instead.
 func (*AccessPolicy) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{17}
+	return file_engram_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AccessPolicy) GetPublic() bool {
@@ -1547,7 +1789,7 @@ type CollectionSpec struct {
 
 func (x *CollectionSpec) Reset() {
 	*x = CollectionSpec{}
-	mi := &file_engram_proto_msgTypes[18]
+	mi := &file_engram_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1559,7 +1801,7 @@ func (x *CollectionSpec) String() string {
 func (*CollectionSpec) ProtoMessage() {}
 
 func (x *CollectionSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[18]
+	mi := &file_engram_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1572,7 +1814,7 @@ func (x *CollectionSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CollectionSpec.ProtoReflect.Descriptor instead.
 func (*CollectionSpec) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{18}
+	return file_engram_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CollectionSpec) GetName() string {
@@ -1622,7 +1864,7 @@ type KnowledgeDocument struct {
 
 func (x *KnowledgeDocument) Reset() {
 	*x = KnowledgeDocument{}
-	mi := &file_engram_proto_msgTypes[19]
+	mi := &file_engram_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1634,7 +1876,7 @@ func (x *KnowledgeDocument) String() string {
 func (*KnowledgeDocument) ProtoMessage() {}
 
 func (x *KnowledgeDocument) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[19]
+	mi := &file_engram_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1647,7 +1889,7 @@ func (x *KnowledgeDocument) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeDocument.ProtoReflect.Descriptor instead.
 func (*KnowledgeDocument) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{19}
+	return file_engram_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *KnowledgeDocument) GetId() string {
@@ -1701,7 +1943,7 @@ type KnowledgeIngestRequest struct {
 
 func (x *KnowledgeIngestRequest) Reset() {
 	*x = KnowledgeIngestRequest{}
-	mi := &file_engram_proto_msgTypes[20]
+	mi := &file_engram_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1713,7 +1955,7 @@ func (x *KnowledgeIngestRequest) String() string {
 func (*KnowledgeIngestRequest) ProtoMessage() {}
 
 func (x *KnowledgeIngestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[20]
+	mi := &file_engram_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1726,7 +1968,7 @@ func (x *KnowledgeIngestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeIngestRequest.ProtoReflect.Descriptor instead.
 func (*KnowledgeIngestRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{20}
+	return file_engram_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *KnowledgeIngestRequest) GetCollection() string {
@@ -1768,7 +2010,7 @@ type KnowledgeIngestResponse struct {
 
 func (x *KnowledgeIngestResponse) Reset() {
 	*x = KnowledgeIngestResponse{}
-	mi := &file_engram_proto_msgTypes[21]
+	mi := &file_engram_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1780,7 +2022,7 @@ func (x *KnowledgeIngestResponse) String() string {
 func (*KnowledgeIngestResponse) ProtoMessage() {}
 
 func (x *KnowledgeIngestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[21]
+	mi := &file_engram_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1793,7 +2035,7 @@ func (x *KnowledgeIngestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeIngestResponse.ProtoReflect.Descriptor instead.
 func (*KnowledgeIngestResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{21}
+	return file_engram_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *KnowledgeIngestResponse) GetIndexed() int32 {
@@ -1819,7 +2061,7 @@ type KnowledgeSearchRequest struct {
 
 func (x *KnowledgeSearchRequest) Reset() {
 	*x = KnowledgeSearchRequest{}
-	mi := &file_engram_proto_msgTypes[22]
+	mi := &file_engram_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1831,7 +2073,7 @@ func (x *KnowledgeSearchRequest) String() string {
 func (*KnowledgeSearchRequest) ProtoMessage() {}
 
 func (x *KnowledgeSearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[22]
+	mi := &file_engram_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1844,7 +2086,7 @@ func (x *KnowledgeSearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeSearchRequest.ProtoReflect.Descriptor instead.
 func (*KnowledgeSearchRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{22}
+	return file_engram_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *KnowledgeSearchRequest) GetCollection() string {
@@ -1893,7 +2135,7 @@ type KnowledgeSearchResponse struct {
 
 func (x *KnowledgeSearchResponse) Reset() {
 	*x = KnowledgeSearchResponse{}
-	mi := &file_engram_proto_msgTypes[23]
+	mi := &file_engram_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1905,7 +2147,7 @@ func (x *KnowledgeSearchResponse) String() string {
 func (*KnowledgeSearchResponse) ProtoMessage() {}
 
 func (x *KnowledgeSearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[23]
+	mi := &file_engram_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1918,7 +2160,7 @@ func (x *KnowledgeSearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeSearchResponse.ProtoReflect.Descriptor instead.
 func (*KnowledgeSearchResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{23}
+	return file_engram_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *KnowledgeSearchResponse) GetHits() []*Hit {
@@ -1938,7 +2180,7 @@ type KnowledgeCollectionsRequest struct {
 
 func (x *KnowledgeCollectionsRequest) Reset() {
 	*x = KnowledgeCollectionsRequest{}
-	mi := &file_engram_proto_msgTypes[24]
+	mi := &file_engram_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1950,7 +2192,7 @@ func (x *KnowledgeCollectionsRequest) String() string {
 func (*KnowledgeCollectionsRequest) ProtoMessage() {}
 
 func (x *KnowledgeCollectionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[24]
+	mi := &file_engram_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1963,7 +2205,7 @@ func (x *KnowledgeCollectionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeCollectionsRequest.ProtoReflect.Descriptor instead.
 func (*KnowledgeCollectionsRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{24}
+	return file_engram_proto_rawDescGZIP(), []int{27}
 }
 
 // CollectionInfo is one listed collection: its spec (so a caller can learn
@@ -1982,7 +2224,7 @@ type CollectionInfo struct {
 
 func (x *CollectionInfo) Reset() {
 	*x = CollectionInfo{}
-	mi := &file_engram_proto_msgTypes[25]
+	mi := &file_engram_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1994,7 +2236,7 @@ func (x *CollectionInfo) String() string {
 func (*CollectionInfo) ProtoMessage() {}
 
 func (x *CollectionInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[25]
+	mi := &file_engram_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2007,7 +2249,7 @@ func (x *CollectionInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CollectionInfo.ProtoReflect.Descriptor instead.
 func (*CollectionInfo) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{25}
+	return file_engram_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *CollectionInfo) GetSpec() *CollectionSpec {
@@ -2048,7 +2290,7 @@ type KnowledgeCollectionsResponse struct {
 
 func (x *KnowledgeCollectionsResponse) Reset() {
 	*x = KnowledgeCollectionsResponse{}
-	mi := &file_engram_proto_msgTypes[26]
+	mi := &file_engram_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2060,7 +2302,7 @@ func (x *KnowledgeCollectionsResponse) String() string {
 func (*KnowledgeCollectionsResponse) ProtoMessage() {}
 
 func (x *KnowledgeCollectionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[26]
+	mi := &file_engram_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2073,7 +2315,7 @@ func (x *KnowledgeCollectionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeCollectionsResponse.ProtoReflect.Descriptor instead.
 func (*KnowledgeCollectionsResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{26}
+	return file_engram_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *KnowledgeCollectionsResponse) GetCollections() []*CollectionInfo {
@@ -2096,7 +2338,7 @@ type KnowledgeDeleteRequest struct {
 
 func (x *KnowledgeDeleteRequest) Reset() {
 	*x = KnowledgeDeleteRequest{}
-	mi := &file_engram_proto_msgTypes[27]
+	mi := &file_engram_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2108,7 +2350,7 @@ func (x *KnowledgeDeleteRequest) String() string {
 func (*KnowledgeDeleteRequest) ProtoMessage() {}
 
 func (x *KnowledgeDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[27]
+	mi := &file_engram_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2121,7 +2363,7 @@ func (x *KnowledgeDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeDeleteRequest.ProtoReflect.Descriptor instead.
 func (*KnowledgeDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{27}
+	return file_engram_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *KnowledgeDeleteRequest) GetCollection() string {
@@ -2156,7 +2398,7 @@ type KnowledgeDeleteResponse struct {
 
 func (x *KnowledgeDeleteResponse) Reset() {
 	*x = KnowledgeDeleteResponse{}
-	mi := &file_engram_proto_msgTypes[28]
+	mi := &file_engram_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2168,7 +2410,7 @@ func (x *KnowledgeDeleteResponse) String() string {
 func (*KnowledgeDeleteResponse) ProtoMessage() {}
 
 func (x *KnowledgeDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[28]
+	mi := &file_engram_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2181,7 +2423,7 @@ func (x *KnowledgeDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeDeleteResponse.ProtoReflect.Descriptor instead.
 func (*KnowledgeDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{28}
+	return file_engram_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *KnowledgeDeleteResponse) GetDeleted() int64 {
@@ -2201,7 +2443,7 @@ type CreateCollectionRequest struct {
 
 func (x *CreateCollectionRequest) Reset() {
 	*x = CreateCollectionRequest{}
-	mi := &file_engram_proto_msgTypes[29]
+	mi := &file_engram_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2213,7 +2455,7 @@ func (x *CreateCollectionRequest) String() string {
 func (*CreateCollectionRequest) ProtoMessage() {}
 
 func (x *CreateCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[29]
+	mi := &file_engram_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2226,7 +2468,7 @@ func (x *CreateCollectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCollectionRequest.ProtoReflect.Descriptor instead.
 func (*CreateCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{29}
+	return file_engram_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *CreateCollectionRequest) GetSpec() *CollectionSpec {
@@ -2245,7 +2487,7 @@ type CreateCollectionResponse struct {
 
 func (x *CreateCollectionResponse) Reset() {
 	*x = CreateCollectionResponse{}
-	mi := &file_engram_proto_msgTypes[30]
+	mi := &file_engram_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2257,7 +2499,7 @@ func (x *CreateCollectionResponse) String() string {
 func (*CreateCollectionResponse) ProtoMessage() {}
 
 func (x *CreateCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[30]
+	mi := &file_engram_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2270,7 +2512,7 @@ func (x *CreateCollectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCollectionResponse.ProtoReflect.Descriptor instead.
 func (*CreateCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{30}
+	return file_engram_proto_rawDescGZIP(), []int{33}
 }
 
 // UpdateCollectionRequest replaces the named collection's spec (spec.name
@@ -2284,7 +2526,7 @@ type UpdateCollectionRequest struct {
 
 func (x *UpdateCollectionRequest) Reset() {
 	*x = UpdateCollectionRequest{}
-	mi := &file_engram_proto_msgTypes[31]
+	mi := &file_engram_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2296,7 +2538,7 @@ func (x *UpdateCollectionRequest) String() string {
 func (*UpdateCollectionRequest) ProtoMessage() {}
 
 func (x *UpdateCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[31]
+	mi := &file_engram_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2309,7 +2551,7 @@ func (x *UpdateCollectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateCollectionRequest.ProtoReflect.Descriptor instead.
 func (*UpdateCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{31}
+	return file_engram_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *UpdateCollectionRequest) GetSpec() *CollectionSpec {
@@ -2328,7 +2570,7 @@ type UpdateCollectionResponse struct {
 
 func (x *UpdateCollectionResponse) Reset() {
 	*x = UpdateCollectionResponse{}
-	mi := &file_engram_proto_msgTypes[32]
+	mi := &file_engram_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2340,7 +2582,7 @@ func (x *UpdateCollectionResponse) String() string {
 func (*UpdateCollectionResponse) ProtoMessage() {}
 
 func (x *UpdateCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[32]
+	mi := &file_engram_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2353,7 +2595,7 @@ func (x *UpdateCollectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateCollectionResponse.ProtoReflect.Descriptor instead.
 func (*UpdateCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{32}
+	return file_engram_proto_rawDescGZIP(), []int{35}
 }
 
 // StatusRequest is empty; the caller is identified by the bearer token.
@@ -2365,7 +2607,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_engram_proto_msgTypes[33]
+	mi := &file_engram_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2377,7 +2619,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[33]
+	mi := &file_engram_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2390,7 +2632,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{33}
+	return file_engram_proto_rawDescGZIP(), []int{36}
 }
 
 // StatusResponse reports liveness, the resolved identity, and tier counts.
@@ -2413,7 +2655,7 @@ type StatusResponse struct {
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_engram_proto_msgTypes[34]
+	mi := &file_engram_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2425,7 +2667,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[34]
+	mi := &file_engram_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2438,7 +2680,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{34}
+	return file_engram_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *StatusResponse) GetHealthy() bool {
@@ -2561,7 +2803,29 @@ const file_engram_proto_rawDesc = "" +
 	"\n" +
 	"provenance\x18\x01 \x01(\v2\x15.engram.v1.ProvenanceR\n" +
 	"provenance\x122\n" +
-	"\bversions\x18\x02 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"'\n" +
+	"\bversions\x18\x02 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"5\n" +
+	"\vReadRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\"\xfa\x01\n" +
+	"\x0eEpisodicRecord\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
+	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12\x12\n" +
+	"\x04kind\x18\x03 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04text\x18\x04 \x01(\tR\x04text\x12\x1d\n" +
+	"\n" +
+	"source_ids\x18\x05 \x03(\tR\tsourceIds\x12;\n" +
+	"\voccurred_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"occurredAt\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xf4\x01\n" +
+	"\fReadResponse\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\tR\x06source\x125\n" +
+	"\bepisodic\x18\x02 \x01(\v2\x19.engram.v1.EpisodicRecordR\bepisodic\x12*\n" +
+	"\x04fact\x18\x03 \x01(\v2\x16.engram.v1.FactVersionR\x04fact\x125\n" +
+	"\n" +
+	"provenance\x18\x04 \x01(\v2\x15.engram.v1.ProvenanceR\n" +
+	"provenance\x122\n" +
+	"\bversions\x18\x05 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"'\n" +
 	"\rExportRequest\x12\x16\n" +
 	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\xd7\x02\n" +
 	"\fExportEntity\x12\x0e\n" +
@@ -2695,12 +2959,13 @@ const file_engram_proto_rawDesc = "" +
 	"\tSortOrder\x12\x1a\n" +
 	"\x16SORT_ORDER_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSORT_ORDER_ASC\x10\x01\x12\x13\n" +
-	"\x0fSORT_ORDER_DESC\x10\x022\xf1\x06\n" +
+	"\x0fSORT_ORDER_DESC\x10\x022\xaa\a\n" +
 	"\x06Engram\x12=\n" +
 	"\x06Ingest\x12\x18.engram.v1.IngestRequest\x1a\x19.engram.v1.IngestResponse\x12=\n" +
 	"\x06Search\x12\x18.engram.v1.SearchRequest\x1a\x19.engram.v1.SearchResponse\x12=\n" +
 	"\x06Status\x12\x18.engram.v1.StatusRequest\x1a\x19.engram.v1.StatusResponse\x12:\n" +
-	"\x05Audit\x12\x17.engram.v1.AuditRequest\x1a\x18.engram.v1.AuditResponse\x12=\n" +
+	"\x05Audit\x12\x17.engram.v1.AuditRequest\x1a\x18.engram.v1.AuditResponse\x127\n" +
+	"\x04Read\x12\x16.engram.v1.ReadRequest\x1a\x17.engram.v1.ReadResponse\x12=\n" +
 	"\x06Export\x12\x18.engram.v1.ExportRequest\x1a\x19.engram.v1.ExportResponse\x12X\n" +
 	"\x0fKnowledgeIngest\x12!.engram.v1.KnowledgeIngestRequest\x1a\".engram.v1.KnowledgeIngestResponse\x12X\n" +
 	"\x0fKnowledgeSearch\x12!.engram.v1.KnowledgeSearchRequest\x1a\".engram.v1.KnowledgeSearchResponse\x12g\n" +
@@ -2722,7 +2987,7 @@ func file_engram_proto_rawDescGZIP() []byte {
 }
 
 var file_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_engram_proto_goTypes = []any{
 	(PredicateOp)(0),                     // 0: engram.v1.PredicateOp
 	(SortOrder)(0),                       // 1: engram.v1.SortOrder
@@ -2735,100 +3000,111 @@ var file_engram_proto_goTypes = []any{
 	(*Provenance)(nil),                   // 8: engram.v1.Provenance
 	(*FactVersion)(nil),                  // 9: engram.v1.FactVersion
 	(*AuditResponse)(nil),                // 10: engram.v1.AuditResponse
-	(*ExportRequest)(nil),                // 11: engram.v1.ExportRequest
-	(*ExportEntity)(nil),                 // 12: engram.v1.ExportEntity
-	(*ExportEdge)(nil),                   // 13: engram.v1.ExportEdge
-	(*ExportResponse)(nil),               // 14: engram.v1.ExportResponse
-	(*Range)(nil),                        // 15: engram.v1.Range
-	(*Predicate)(nil),                    // 16: engram.v1.Predicate
-	(*SortKey)(nil),                      // 17: engram.v1.SortKey
-	(*FieldSpec)(nil),                    // 18: engram.v1.FieldSpec
-	(*AccessPolicy)(nil),                 // 19: engram.v1.AccessPolicy
-	(*CollectionSpec)(nil),               // 20: engram.v1.CollectionSpec
-	(*KnowledgeDocument)(nil),            // 21: engram.v1.KnowledgeDocument
-	(*KnowledgeIngestRequest)(nil),       // 22: engram.v1.KnowledgeIngestRequest
-	(*KnowledgeIngestResponse)(nil),      // 23: engram.v1.KnowledgeIngestResponse
-	(*KnowledgeSearchRequest)(nil),       // 24: engram.v1.KnowledgeSearchRequest
-	(*KnowledgeSearchResponse)(nil),      // 25: engram.v1.KnowledgeSearchResponse
-	(*KnowledgeCollectionsRequest)(nil),  // 26: engram.v1.KnowledgeCollectionsRequest
-	(*CollectionInfo)(nil),               // 27: engram.v1.CollectionInfo
-	(*KnowledgeCollectionsResponse)(nil), // 28: engram.v1.KnowledgeCollectionsResponse
-	(*KnowledgeDeleteRequest)(nil),       // 29: engram.v1.KnowledgeDeleteRequest
-	(*KnowledgeDeleteResponse)(nil),      // 30: engram.v1.KnowledgeDeleteResponse
-	(*CreateCollectionRequest)(nil),      // 31: engram.v1.CreateCollectionRequest
-	(*CreateCollectionResponse)(nil),     // 32: engram.v1.CreateCollectionResponse
-	(*UpdateCollectionRequest)(nil),      // 33: engram.v1.UpdateCollectionRequest
-	(*UpdateCollectionResponse)(nil),     // 34: engram.v1.UpdateCollectionResponse
-	(*StatusRequest)(nil),                // 35: engram.v1.StatusRequest
-	(*StatusResponse)(nil),               // 36: engram.v1.StatusResponse
-	nil,                                  // 37: engram.v1.CollectionSpec.MappingsEntry
-	(*timestamppb.Timestamp)(nil),        // 38: google.protobuf.Timestamp
-	(*structpb.Value)(nil),               // 39: google.protobuf.Value
-	(*structpb.Struct)(nil),              // 40: google.protobuf.Struct
+	(*ReadRequest)(nil),                  // 11: engram.v1.ReadRequest
+	(*EpisodicRecord)(nil),               // 12: engram.v1.EpisodicRecord
+	(*ReadResponse)(nil),                 // 13: engram.v1.ReadResponse
+	(*ExportRequest)(nil),                // 14: engram.v1.ExportRequest
+	(*ExportEntity)(nil),                 // 15: engram.v1.ExportEntity
+	(*ExportEdge)(nil),                   // 16: engram.v1.ExportEdge
+	(*ExportResponse)(nil),               // 17: engram.v1.ExportResponse
+	(*Range)(nil),                        // 18: engram.v1.Range
+	(*Predicate)(nil),                    // 19: engram.v1.Predicate
+	(*SortKey)(nil),                      // 20: engram.v1.SortKey
+	(*FieldSpec)(nil),                    // 21: engram.v1.FieldSpec
+	(*AccessPolicy)(nil),                 // 22: engram.v1.AccessPolicy
+	(*CollectionSpec)(nil),               // 23: engram.v1.CollectionSpec
+	(*KnowledgeDocument)(nil),            // 24: engram.v1.KnowledgeDocument
+	(*KnowledgeIngestRequest)(nil),       // 25: engram.v1.KnowledgeIngestRequest
+	(*KnowledgeIngestResponse)(nil),      // 26: engram.v1.KnowledgeIngestResponse
+	(*KnowledgeSearchRequest)(nil),       // 27: engram.v1.KnowledgeSearchRequest
+	(*KnowledgeSearchResponse)(nil),      // 28: engram.v1.KnowledgeSearchResponse
+	(*KnowledgeCollectionsRequest)(nil),  // 29: engram.v1.KnowledgeCollectionsRequest
+	(*CollectionInfo)(nil),               // 30: engram.v1.CollectionInfo
+	(*KnowledgeCollectionsResponse)(nil), // 31: engram.v1.KnowledgeCollectionsResponse
+	(*KnowledgeDeleteRequest)(nil),       // 32: engram.v1.KnowledgeDeleteRequest
+	(*KnowledgeDeleteResponse)(nil),      // 33: engram.v1.KnowledgeDeleteResponse
+	(*CreateCollectionRequest)(nil),      // 34: engram.v1.CreateCollectionRequest
+	(*CreateCollectionResponse)(nil),     // 35: engram.v1.CreateCollectionResponse
+	(*UpdateCollectionRequest)(nil),      // 36: engram.v1.UpdateCollectionRequest
+	(*UpdateCollectionResponse)(nil),     // 37: engram.v1.UpdateCollectionResponse
+	(*StatusRequest)(nil),                // 38: engram.v1.StatusRequest
+	(*StatusResponse)(nil),               // 39: engram.v1.StatusResponse
+	nil,                                  // 40: engram.v1.CollectionSpec.MappingsEntry
+	(*timestamppb.Timestamp)(nil),        // 41: google.protobuf.Timestamp
+	(*structpb.Value)(nil),               // 42: google.protobuf.Value
+	(*structpb.Struct)(nil),              // 43: google.protobuf.Struct
 }
 var file_engram_proto_depIdxs = []int32{
-	38, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
+	41, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
 	5,  // 1: engram.v1.SearchResponse.hits:type_name -> engram.v1.Hit
-	38, // 2: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
-	38, // 3: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
-	38, // 4: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
-	38, // 5: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
-	38, // 6: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
+	41, // 2: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
+	41, // 3: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
+	41, // 4: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
+	41, // 5: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
+	41, // 6: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
 	8,  // 7: engram.v1.AuditResponse.provenance:type_name -> engram.v1.Provenance
 	9,  // 8: engram.v1.AuditResponse.versions:type_name -> engram.v1.FactVersion
-	38, // 9: engram.v1.ExportEntity.valid_at:type_name -> google.protobuf.Timestamp
-	38, // 10: engram.v1.ExportEntity.created_at:type_name -> google.protobuf.Timestamp
-	38, // 11: engram.v1.ExportEdge.valid_at:type_name -> google.protobuf.Timestamp
-	38, // 12: engram.v1.ExportEdge.created_at:type_name -> google.protobuf.Timestamp
-	12, // 13: engram.v1.ExportResponse.entities:type_name -> engram.v1.ExportEntity
-	13, // 14: engram.v1.ExportResponse.edges:type_name -> engram.v1.ExportEdge
-	39, // 15: engram.v1.Range.gte:type_name -> google.protobuf.Value
-	39, // 16: engram.v1.Range.lte:type_name -> google.protobuf.Value
-	0,  // 17: engram.v1.Predicate.op:type_name -> engram.v1.PredicateOp
-	39, // 18: engram.v1.Predicate.scalar:type_name -> google.protobuf.Value
-	15, // 19: engram.v1.Predicate.range:type_name -> engram.v1.Range
-	1,  // 20: engram.v1.SortKey.order:type_name -> engram.v1.SortOrder
-	37, // 21: engram.v1.CollectionSpec.mappings:type_name -> engram.v1.CollectionSpec.MappingsEntry
-	19, // 22: engram.v1.CollectionSpec.access:type_name -> engram.v1.AccessPolicy
-	40, // 23: engram.v1.KnowledgeDocument.fields:type_name -> google.protobuf.Struct
-	21, // 24: engram.v1.KnowledgeIngestRequest.docs:type_name -> engram.v1.KnowledgeDocument
-	16, // 25: engram.v1.KnowledgeSearchRequest.filters:type_name -> engram.v1.Predicate
-	17, // 26: engram.v1.KnowledgeSearchRequest.sort:type_name -> engram.v1.SortKey
-	5,  // 27: engram.v1.KnowledgeSearchResponse.hits:type_name -> engram.v1.Hit
-	20, // 28: engram.v1.CollectionInfo.spec:type_name -> engram.v1.CollectionSpec
-	38, // 29: engram.v1.CollectionInfo.newest_harvested_at:type_name -> google.protobuf.Timestamp
-	38, // 30: engram.v1.CollectionInfo.newest_doc_date:type_name -> google.protobuf.Timestamp
-	27, // 31: engram.v1.KnowledgeCollectionsResponse.collections:type_name -> engram.v1.CollectionInfo
-	20, // 32: engram.v1.CreateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
-	20, // 33: engram.v1.UpdateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
-	18, // 34: engram.v1.CollectionSpec.MappingsEntry.value:type_name -> engram.v1.FieldSpec
-	2,  // 35: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
-	4,  // 36: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
-	35, // 37: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
-	7,  // 38: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
-	11, // 39: engram.v1.Engram.Export:input_type -> engram.v1.ExportRequest
-	22, // 40: engram.v1.Engram.KnowledgeIngest:input_type -> engram.v1.KnowledgeIngestRequest
-	24, // 41: engram.v1.Engram.KnowledgeSearch:input_type -> engram.v1.KnowledgeSearchRequest
-	26, // 42: engram.v1.Engram.KnowledgeCollections:input_type -> engram.v1.KnowledgeCollectionsRequest
-	29, // 43: engram.v1.Engram.KnowledgeDelete:input_type -> engram.v1.KnowledgeDeleteRequest
-	31, // 44: engram.v1.Engram.CreateCollection:input_type -> engram.v1.CreateCollectionRequest
-	33, // 45: engram.v1.Engram.UpdateCollection:input_type -> engram.v1.UpdateCollectionRequest
-	3,  // 46: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
-	6,  // 47: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
-	36, // 48: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
-	10, // 49: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
-	14, // 50: engram.v1.Engram.Export:output_type -> engram.v1.ExportResponse
-	23, // 51: engram.v1.Engram.KnowledgeIngest:output_type -> engram.v1.KnowledgeIngestResponse
-	25, // 52: engram.v1.Engram.KnowledgeSearch:output_type -> engram.v1.KnowledgeSearchResponse
-	28, // 53: engram.v1.Engram.KnowledgeCollections:output_type -> engram.v1.KnowledgeCollectionsResponse
-	30, // 54: engram.v1.Engram.KnowledgeDelete:output_type -> engram.v1.KnowledgeDeleteResponse
-	32, // 55: engram.v1.Engram.CreateCollection:output_type -> engram.v1.CreateCollectionResponse
-	34, // 56: engram.v1.Engram.UpdateCollection:output_type -> engram.v1.UpdateCollectionResponse
-	46, // [46:57] is the sub-list for method output_type
-	35, // [35:46] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	41, // 9: engram.v1.EpisodicRecord.occurred_at:type_name -> google.protobuf.Timestamp
+	41, // 10: engram.v1.EpisodicRecord.created_at:type_name -> google.protobuf.Timestamp
+	12, // 11: engram.v1.ReadResponse.episodic:type_name -> engram.v1.EpisodicRecord
+	9,  // 12: engram.v1.ReadResponse.fact:type_name -> engram.v1.FactVersion
+	8,  // 13: engram.v1.ReadResponse.provenance:type_name -> engram.v1.Provenance
+	9,  // 14: engram.v1.ReadResponse.versions:type_name -> engram.v1.FactVersion
+	41, // 15: engram.v1.ExportEntity.valid_at:type_name -> google.protobuf.Timestamp
+	41, // 16: engram.v1.ExportEntity.created_at:type_name -> google.protobuf.Timestamp
+	41, // 17: engram.v1.ExportEdge.valid_at:type_name -> google.protobuf.Timestamp
+	41, // 18: engram.v1.ExportEdge.created_at:type_name -> google.protobuf.Timestamp
+	15, // 19: engram.v1.ExportResponse.entities:type_name -> engram.v1.ExportEntity
+	16, // 20: engram.v1.ExportResponse.edges:type_name -> engram.v1.ExportEdge
+	42, // 21: engram.v1.Range.gte:type_name -> google.protobuf.Value
+	42, // 22: engram.v1.Range.lte:type_name -> google.protobuf.Value
+	0,  // 23: engram.v1.Predicate.op:type_name -> engram.v1.PredicateOp
+	42, // 24: engram.v1.Predicate.scalar:type_name -> google.protobuf.Value
+	18, // 25: engram.v1.Predicate.range:type_name -> engram.v1.Range
+	1,  // 26: engram.v1.SortKey.order:type_name -> engram.v1.SortOrder
+	40, // 27: engram.v1.CollectionSpec.mappings:type_name -> engram.v1.CollectionSpec.MappingsEntry
+	22, // 28: engram.v1.CollectionSpec.access:type_name -> engram.v1.AccessPolicy
+	43, // 29: engram.v1.KnowledgeDocument.fields:type_name -> google.protobuf.Struct
+	24, // 30: engram.v1.KnowledgeIngestRequest.docs:type_name -> engram.v1.KnowledgeDocument
+	19, // 31: engram.v1.KnowledgeSearchRequest.filters:type_name -> engram.v1.Predicate
+	20, // 32: engram.v1.KnowledgeSearchRequest.sort:type_name -> engram.v1.SortKey
+	5,  // 33: engram.v1.KnowledgeSearchResponse.hits:type_name -> engram.v1.Hit
+	23, // 34: engram.v1.CollectionInfo.spec:type_name -> engram.v1.CollectionSpec
+	41, // 35: engram.v1.CollectionInfo.newest_harvested_at:type_name -> google.protobuf.Timestamp
+	41, // 36: engram.v1.CollectionInfo.newest_doc_date:type_name -> google.protobuf.Timestamp
+	30, // 37: engram.v1.KnowledgeCollectionsResponse.collections:type_name -> engram.v1.CollectionInfo
+	23, // 38: engram.v1.CreateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
+	23, // 39: engram.v1.UpdateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
+	21, // 40: engram.v1.CollectionSpec.MappingsEntry.value:type_name -> engram.v1.FieldSpec
+	2,  // 41: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
+	4,  // 42: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
+	38, // 43: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
+	7,  // 44: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
+	11, // 45: engram.v1.Engram.Read:input_type -> engram.v1.ReadRequest
+	14, // 46: engram.v1.Engram.Export:input_type -> engram.v1.ExportRequest
+	25, // 47: engram.v1.Engram.KnowledgeIngest:input_type -> engram.v1.KnowledgeIngestRequest
+	27, // 48: engram.v1.Engram.KnowledgeSearch:input_type -> engram.v1.KnowledgeSearchRequest
+	29, // 49: engram.v1.Engram.KnowledgeCollections:input_type -> engram.v1.KnowledgeCollectionsRequest
+	32, // 50: engram.v1.Engram.KnowledgeDelete:input_type -> engram.v1.KnowledgeDeleteRequest
+	34, // 51: engram.v1.Engram.CreateCollection:input_type -> engram.v1.CreateCollectionRequest
+	36, // 52: engram.v1.Engram.UpdateCollection:input_type -> engram.v1.UpdateCollectionRequest
+	3,  // 53: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
+	6,  // 54: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
+	39, // 55: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
+	10, // 56: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
+	13, // 57: engram.v1.Engram.Read:output_type -> engram.v1.ReadResponse
+	17, // 58: engram.v1.Engram.Export:output_type -> engram.v1.ExportResponse
+	26, // 59: engram.v1.Engram.KnowledgeIngest:output_type -> engram.v1.KnowledgeIngestResponse
+	28, // 60: engram.v1.Engram.KnowledgeSearch:output_type -> engram.v1.KnowledgeSearchResponse
+	31, // 61: engram.v1.Engram.KnowledgeCollections:output_type -> engram.v1.KnowledgeCollectionsResponse
+	33, // 62: engram.v1.Engram.KnowledgeDelete:output_type -> engram.v1.KnowledgeDeleteResponse
+	35, // 63: engram.v1.Engram.CreateCollection:output_type -> engram.v1.CreateCollectionResponse
+	37, // 64: engram.v1.Engram.UpdateCollection:output_type -> engram.v1.UpdateCollectionResponse
+	53, // [53:65] is the sub-list for method output_type
+	41, // [41:53] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_engram_proto_init() }
@@ -2836,7 +3112,7 @@ func file_engram_proto_init() {
 	if File_engram_proto != nil {
 		return
 	}
-	file_engram_proto_msgTypes[14].OneofWrappers = []any{
+	file_engram_proto_msgTypes[17].OneofWrappers = []any{
 		(*Predicate_Scalar)(nil),
 		(*Predicate_Range)(nil),
 	}
@@ -2846,7 +3122,7 @@ func file_engram_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engram_proto_rawDesc), len(file_engram_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   36,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

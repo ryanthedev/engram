@@ -1,7 +1,10 @@
 # Plan: memory_search breadth-first results + memory_read drill-down
 
 **Created:** 2026-07-11
-**Status:** ready
+**Status:** complete
+**Started:** 2026-07-11 14:30
+**Completed:** 2026-07-11 15:20
+**Duration:** ~50 min (3 phases)
 **Complexity:** medium
 
 ---
@@ -27,7 +30,7 @@
 ## Implementation Phases
 
 ### Phase 1: Breadth results + compact-line rendering
-**Skills:** `none` -- MCP presentation-layer formatting; no design-skill leverage
+**Skills:** `code-foundations:cc-routine-and-class-design` -- designing the renderer routine + rune-safe truncation
 **Model:** sonnet
 **Gate:** Standard
 **Depends on:** none
@@ -82,7 +85,7 @@
 - [ ] DW-2.7: an id/`source` mismatch or unknown id returns `NOT_FOUND` without probing the other index.
 
 ### Phase 3: hint → overflow_path escape hatch
-**Skills:** `none` -- envelope wording change, no design leverage
+**Skills:** `code-foundations:code-clarity-and-docs` -- clarity of the caller-facing hint guidance text
 **Model:** sonnet
 **Gate:** Standard
 **Depends on:** Phase 1, Phase 2 (DW-3.3's `hint` names `memory_read`, which Phase 2 produces)
@@ -132,4 +135,24 @@
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Breadth results + compact-line rendering (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation complete (new `internal/mcp/render.go` + 15 tests)
+- [x] REVIEW: Verification passed (all 7 DW with execution evidence; 69/69 mcp tests, full suite + vet + lint clean)
+- [x] Committed
+Commit: ac9fb65
+Summary: `memory_search` now renders compact tab-separated lines (`id\tsource\tscore\tgist\tkey=value…`) in the MCP layer — episodic `text` is a rune-safe single-line lead snippet; every hit exposes `id`+`source` (the Phase-2 drill contract); the gRPC `Hit` still carries full untruncated `text`.
+
+### Phase 2: memory_read(id, source) drill-down (Gate: Full, security-sensitive)
+- [x] BUILD: Discovery + design + implementation complete (proto `Read` RPC + regen, `GetEpisodic`, `internal/server/read.go`, `Backend.Read`, `memory_read` tool; 10 new test funcs)
+- [x] REVIEW: 3-sample fable majority PASS (3/3) — fetch→authorize→project proven via spy enforcer; every denial byte-identical opaque NOT_FOUND; no cross-index probing; proto regen idempotent (proto-check exit 0 post-commit)
+- [x] Committed
+Commit: ca571d1
+Summary: `memory_read(id, source)` drills to a single record's full body — new gRPC `Read` RPC, fail-closed episodic getter (`GetEpisodic`, fetch→authorize→project), Audit-reusing semantic branch, graph UNIMPLEMENTED; wired through `engramclient`→`Backend.Read`→`memory_read` MCP tool; output is structured un-nested JSON.
+
+### Phase 3: hint → overflow_path escape hatch (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation complete (`refineHint` gains `overflowPathSet` gating in `budget.go`; spill-failure downgrade in `tools.go`; 8 tests)
+- [x] REVIEW: Verification passed (all 3 DW with evidence incl. a real filesystem-permission spill-failure dirty test; suite + vet + lint clean)
+- [x] Committed
+Commit: 009c2d4
+Summary: the `memory_search` `hint` now names engram's own `overflow_path` (full set on disk) and `memory_read(id, source)` (single-hit drill) when a set overflows the budget — never dangling a path the spill didn't write; spill/packing behavior unchanged.

@@ -74,6 +74,10 @@ type Server struct {
 	KnowledgeWriter KnowledgeWriter
 	KnowledgeReader KnowledgeReader
 	KnowledgeAuth   knowledgeauth.Authorizer
+
+	// Episodic backs the Read RPC's episodic branch; nil disables episodic
+	// reads (UNIMPLEMENTED). See read.go.
+	Episodic EpisodicReader
 }
 
 // New returns a Server wired to s (write path) and r (read path).

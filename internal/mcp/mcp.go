@@ -39,6 +39,25 @@ type Hit struct {
 	Fields string  `json:"fields_json,omitempty"`
 }
 
+// ReadResult is one record's full content, surfaced through the memory_read
+// tool — the deliberate drill-down for an (id, source) pair a memory_search
+// compact line exposed. A full read spends the caller's context, so it is a
+// separate explicit call, never inlined into search results.
+type ReadResult struct {
+	ID     string `json:"id"`
+	Source string `json:"source"`
+	// Fields is the record's content as a real JSON object (never a
+	// stringified fields_json): episodic carries the full untruncated text
+	// plus kind/event_id/occurred_at/source_ids; semantic carries the target
+	// version's statement/subject/predicate/object and validity interval.
+	Fields map[string]any `json:"fields"`
+	// Provenance (semantic only): who wrote the fact and from what.
+	Provenance map[string]any `json:"provenance,omitempty"`
+	// Versions (semantic only): the fact's full bi-temporal history,
+	// oldest-first.
+	Versions []map[string]any `json:"versions,omitempty"`
+}
+
 // Status is the memory_status payload.
 type Status struct {
 	Healthy           bool   `json:"healthy"`
@@ -117,6 +136,10 @@ type Backend interface {
 	Ingest(ctx context.Context, eventID, text, source string) (id string, err error)
 	// Search runs one hybrid query and returns fused hits.
 	Search(ctx context.Context, query string, k int) ([]Hit, error)
+	// Read fetches one record's full content by the (id, source) pair a
+	// search hit exposed. Authorization is fail-closed server-side: an
+	// unknown, cross-tenant, mismatched, or denied id errors NOT_FOUND.
+	Read(ctx context.Context, id, source string) (ReadResult, error)
 	// Status reports server health, the caller's identity, and tier counts.
 	Status(ctx context.Context) (Status, error)
 

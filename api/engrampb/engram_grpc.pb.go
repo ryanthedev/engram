@@ -43,6 +43,7 @@ const (
 	Engram_Search_FullMethodName               = "/engram.v1.Engram/Search"
 	Engram_Status_FullMethodName               = "/engram.v1.Engram/Status"
 	Engram_Audit_FullMethodName                = "/engram.v1.Engram/Audit"
+	Engram_Read_FullMethodName                 = "/engram.v1.Engram/Read"
 	Engram_Export_FullMethodName               = "/engram.v1.Engram/Export"
 	Engram_KnowledgeIngest_FullMethodName      = "/engram.v1.Engram/KnowledgeIngest"
 	Engram_KnowledgeSearch_FullMethodName      = "/engram.v1.Engram/KnowledgeSearch"
@@ -76,6 +77,18 @@ type EngramClient interface {
 	// fact; an unauthorized or unknown id returns NOT_FOUND (no existence
 	// oracle). Scope enforcement applies here exactly as it does to search.
 	Audit(ctx context.Context, in *AuditRequest, opts ...grpc.CallOption) (*AuditResponse, error)
+	// Read returns ONE record's full content by (id, source) — the deliberate
+	// drill-down behind the MCP memory_read tool. A full read spends the
+	// caller's context, so it is a separate explicit call, never inlined into
+	// Search. source selects the index dispatched to: "episodic" returns the
+	// full raw event text, "semantic" returns the target fact version plus its
+	// provenance and bi-temporal history (the Audit contract). Graph statements
+	// are already whole in search hits, so "graph" is UNIMPLEMENTED. Read is a
+	// by-id trust boundary: it runs the same fail-closed authorization as
+	// Search/Audit — an unknown id, a cross-tenant record, an id/source
+	// mismatch, or a record the caller may not read all return NOT_FOUND (no
+	// existence oracle), and the handler never probes the other index.
+	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
 	// Export returns one bounded page of the caller's tenant-scoped, live,
 	// ACL-filtered graph (entities then edges) plus an opaque continuation
 	// cursor — the backing RPC for `engram export <dir>`. The tenant is pinned
@@ -150,6 +163,16 @@ func (c *engramClient) Audit(ctx context.Context, in *AuditRequest, opts ...grpc
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AuditResponse)
 	err := c.cc.Invoke(ctx, Engram_Audit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramClient) Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadResponse)
+	err := c.cc.Invoke(ctx, Engram_Read_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -250,6 +273,18 @@ type EngramServer interface {
 	// fact; an unauthorized or unknown id returns NOT_FOUND (no existence
 	// oracle). Scope enforcement applies here exactly as it does to search.
 	Audit(context.Context, *AuditRequest) (*AuditResponse, error)
+	// Read returns ONE record's full content by (id, source) — the deliberate
+	// drill-down behind the MCP memory_read tool. A full read spends the
+	// caller's context, so it is a separate explicit call, never inlined into
+	// Search. source selects the index dispatched to: "episodic" returns the
+	// full raw event text, "semantic" returns the target fact version plus its
+	// provenance and bi-temporal history (the Audit contract). Graph statements
+	// are already whole in search hits, so "graph" is UNIMPLEMENTED. Read is a
+	// by-id trust boundary: it runs the same fail-closed authorization as
+	// Search/Audit — an unknown id, a cross-tenant record, an id/source
+	// mismatch, or a record the caller may not read all return NOT_FOUND (no
+	// existence oracle), and the handler never probes the other index.
+	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	// Export returns one bounded page of the caller's tenant-scoped, live,
 	// ACL-filtered graph (entities then edges) plus an opaque continuation
 	// cursor — the backing RPC for `engram export <dir>`. The tenant is pinned
@@ -301,6 +336,9 @@ func (UnimplementedEngramServer) Status(context.Context, *StatusRequest) (*Statu
 }
 func (UnimplementedEngramServer) Audit(context.Context, *AuditRequest) (*AuditResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Audit not implemented")
+}
+func (UnimplementedEngramServer) Read(context.Context, *ReadRequest) (*ReadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Read not implemented")
 }
 func (UnimplementedEngramServer) Export(context.Context, *ExportRequest) (*ExportResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Export not implemented")
@@ -412,6 +450,24 @@ func _Engram_Audit_Handler(srv interface{}, ctx context.Context, dec func(interf
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(EngramServer).Audit(ctx, req.(*AuditRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Engram_Read_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).Read(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_Read_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).Read(ctx, req.(*ReadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -564,6 +620,10 @@ var Engram_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Audit",
 			Handler:    _Engram_Audit_Handler,
+		},
+		{
+			MethodName: "Read",
+			Handler:    _Engram_Read_Handler,
 		},
 		{
 			MethodName: "Export",
