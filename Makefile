@@ -11,13 +11,17 @@ COMPOSE_FILE := deploy/local/docker-compose.yml
 E2E_OS_URL := http://localhost:9201
 E2E_ADDR := localhost:7071
 
-.PHONY: build test lint proto proto-check integration apply-templates eval dev-cluster e2e e2e-up e2e-down \
+.PHONY: build build-harvester test lint proto proto-check integration apply-templates eval dev-cluster e2e e2e-up e2e-down \
 	deploy-staging deploy-prod deploy-localstack deploy-localstack-up deploy-localstack-down \
 	loadtest drill e2e-cloud eval-seed eval-gate eval-dashboard eval-drill \
 	extract-shim smoke-extract-shim smoke-extract-shim-ensemble-judge
 
 build:
 	go build ./...
+
+build-harvester:
+	go build -o bin/engram-harvester ./cmd/engram-harvester
+
 
 test:
 	go test ./...
