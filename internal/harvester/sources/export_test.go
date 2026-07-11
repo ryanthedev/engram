@@ -17,4 +17,9 @@ var (
 		allowLocalGitTransport = val
 		return func() { allowLocalGitTransport = orig }
 	}
+	ExportedSetAllowLoopbackCrawl = func(val bool) func() {
+		orig := allowLoopbackCrawl
+		allowLoopbackCrawl = val
+		return func() { allowLoopbackCrawl = orig }
+	}
 )
