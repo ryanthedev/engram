@@ -12,4 +12,9 @@ var (
 		maxTokenLen = val
 		return func() { maxTokenLen = orig }
 	}
+	ExportedSetAllowLocalGitTransport = func(val bool) func() {
+		orig := allowLocalGitTransport
+		allowLocalGitTransport = val
+		return func() { allowLocalGitTransport = orig }
+	}
 )
