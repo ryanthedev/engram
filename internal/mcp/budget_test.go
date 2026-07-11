@@ -12,7 +12,10 @@ import (
 // regardless of query, sliced to k. It lets budget/facet tests control exact
 // hit content (real per-tier fields_json) that fakeBackend's substring
 // filter can't produce.
-type fixedHitsBackend struct{ hits []Hit }
+type fixedHitsBackend struct {
+	knowledgeStubs
+	hits []Hit
+}
 
 func (b *fixedHitsBackend) Ingest(context.Context, string, string, string) (string, error) {
 	return "", nil
@@ -365,7 +368,10 @@ func TestCallSearchDefaultKUsesDefaultRequestK(t *testing.T) {
 }
 
 // recordingKBackend records the k passed to Search and returns no hits.
-type recordingKBackend struct{ onSearch func(k int) }
+type recordingKBackend struct {
+	knowledgeStubs
+	onSearch func(k int)
+}
 
 func (b *recordingKBackend) Ingest(context.Context, string, string, string) (string, error) {
 	return "", nil

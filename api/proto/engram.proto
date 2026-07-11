@@ -23,6 +23,7 @@ package engram.v1;
 
 option go_package = "github.com/ryanthedev/engram/api/engrampb";
 
+import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 // Engram is the agent-memory service: sync episodic ingest and hybrid search.
@@ -57,6 +58,40 @@ service Engram {
   // next_cursor means the graph is exhausted. Unary by design: it runs under
   // the same auth/telemetry interceptor chain as every other call.
   rpc Export(ExportRequest) returns (ExportResponse);
+
+  // --- Knowledge platform (document collections: BM25/FTS only, no fact
+  // extraction, no embeddings; upsert-by-id + mark-and-sweep delete — the
+  // documented deviation from memory's append-only writes). Every field shape
+  // here is generic over collections: filters and sort name registry-mapped
+  // fields, never source-specific ones.
+
+  // KnowledgeIngest bulk-upserts one harvest batch of documents into a
+  // collection. Rows are stamped server-side with harvest_id and harvested_at;
+  // replays of the same document ids overwrite in place, so a failed batch is
+  // safely retried whole.
+  rpc KnowledgeIngest(KnowledgeIngestRequest) returns (KnowledgeIngestResponse);
+
+  // KnowledgeSearch runs one BM25 query over a collection's text field with
+  // generic field filters and sort. No kNN, no RRF, no memory-tier fusion.
+  rpc KnowledgeSearch(KnowledgeSearchRequest) returns (KnowledgeSearchResponse);
+
+  // KnowledgeCollections lists the collections the caller may read, each with
+  // its field mappings (which fields are filterable/sortable), document count,
+  // and staleness (newest harvested_at / newest document date).
+  rpc KnowledgeCollections(KnowledgeCollectionsRequest) returns (KnowledgeCollectionsResponse);
+
+  // KnowledgeDelete is the mark-and-sweep sweep: it hard-deletes every row in
+  // the collection from the named source whose harvest_id differs from
+  // current_harvest_id (rows the latest harvest run did not touch).
+  rpc KnowledgeDelete(KnowledgeDeleteRequest) returns (KnowledgeDeleteResponse);
+
+  // CreateCollection registers a new collection and provisions its backing
+  // index live — no server restart. A duplicate name is ALREADY_EXISTS.
+  rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
+
+  // UpdateCollection amends an existing collection's spec (new fields, access
+  // policy); the registry applies mapping changes live.
+  rpc UpdateCollection(UpdateCollectionRequest) returns (UpdateCollectionResponse);
 }
 
 // IngestRequest is one episodic event.
@@ -132,6 +167,9 @@ message Provenance {
   string extractor_version = 6;
   // System append time of the audited version.
   google.protobuf.Timestamp created_at = 7;
+  // Role claims of the writing identity (RBAC). Populated from the verified
+  // token only — never from client-supplied request fields.
+  repeated string roles = 8;
 }
 
 // FactVersion is one record in a fact's bi-temporal chain.
@@ -212,6 +250,179 @@ message ExportResponse {
   repeated ExportEdge edges = 2;
   string next_cursor = 3;
 }
+
+// PredicateOp is the closed set of generic filter operations a Predicate can
+// apply to a registry-mapped field.
+enum PredicateOp {
+  PREDICATE_OP_UNSPECIFIED = 0;
+  // Exact match on a filterable field.
+  PREDICATE_OP_TERM = 1;
+  // Bounded match (gte/lte) via the predicate's Range value.
+  PREDICATE_OP_RANGE = 2;
+  // Leading-substring match on a filterable field.
+  PREDICATE_OP_PREFIX = 3;
+}
+
+// SortOrder is the direction of one SortKey.
+enum SortOrder {
+  SORT_ORDER_UNSPECIFIED = 0;
+  SORT_ORDER_ASC = 1;
+  SORT_ORDER_DESC = 2;
+}
+
+// Range bounds a RANGE predicate. Either bound may be unset (open interval);
+// bounds are google.protobuf.Value so numbers, dates-as-strings, and other
+// scalars travel without a per-type field.
+message Range {
+  google.protobuf.Value gte = 1;
+  google.protobuf.Value lte = 2;
+}
+
+// Predicate is one generic field filter: TERM and PREFIX carry a scalar,
+// RANGE carries a Range. The field must be declared filterable in the
+// collection's mappings; an unknown field is INVALID_ARGUMENT naming the
+// valid filterable fields.
+message Predicate {
+  string field = 1;
+  PredicateOp op = 2;
+  oneof value {
+    google.protobuf.Value scalar = 3;
+    Range range = 4;
+  }
+}
+
+// SortKey orders results by one sortable field.
+message SortKey {
+  string field = 1;
+  SortOrder order = 2;
+}
+
+// FieldSpec declares one collection field: its index type (OpenSearch type
+// name, e.g. "keyword", "date", "integer") and whether queries may filter or
+// sort on it.
+message FieldSpec {
+  string type = 1;
+  bool filterable = 2;
+  bool sortable = 3;
+}
+
+// AccessPolicy is a collection's read gate: public (any authenticated caller)
+// or restricted to callers holding one of the named roles. Writes always
+// require the harvester/admin role, independent of this policy.
+message AccessPolicy {
+  bool public = 1;
+  repeated string roles = 2;
+}
+
+// CollectionSpec describes one document collection. It deliberately carries
+// no index or alias name — physical storage is registry-internal.
+message CollectionSpec {
+  string name = 1;
+  // The full-text field BM25 queries target.
+  string text_field = 2;
+  // Declared document fields by name.
+  map<string, FieldSpec> mappings = 3;
+  AccessPolicy access = 4;
+}
+
+// KnowledgeDocument is one document in an ingest batch. fields carries the
+// collection-specific values matching the spec's mappings; the platform
+// itself has no per-source schema.
+message KnowledgeDocument {
+  // Required: the upsert identity. Re-ingesting an id overwrites in place.
+  string id = 1;
+  string title = 2;
+  // The full-text body indexed under the collection's text_field.
+  string text = 3;
+  // Source-side version marker for change detection (opaque to the server).
+  string source_version = 4;
+  google.protobuf.Struct fields = 5;
+}
+
+// KnowledgeIngestRequest is one harvest batch: every document comes from one
+// (collection, source, harvest_id) run — the mark-and-sweep unit.
+message KnowledgeIngestRequest {
+  string collection = 1;
+  // Logical origin of the batch (which harvester/feed wrote it).
+  string source = 2;
+  // Identifier of this harvest run; stamped onto every row for the sweep.
+  string harvest_id = 3;
+  repeated KnowledgeDocument docs = 4;
+}
+
+// KnowledgeIngestResponse acknowledges the upserted batch. Partial failures
+// surface as an RPC error (retrying the whole batch is idempotent).
+message KnowledgeIngestResponse {
+  int32 indexed = 1;
+}
+
+// KnowledgeSearchRequest is one BM25 query over a collection.
+message KnowledgeSearchRequest {
+  string collection = 1;
+  // Query text; empty with filters set means a filter-only search.
+  string query = 2;
+  repeated Predicate filters = 3;
+  repeated SortKey sort = 4;
+  // Max results (default: server-chosen; clamped server-side).
+  int32 k = 5;
+}
+
+// KnowledgeSearchResponse reuses Hit: id, BM25 score, source = collection
+// name, and the stored document as fields_json.
+message KnowledgeSearchResponse {
+  repeated Hit hits = 1;
+}
+
+// KnowledgeCollectionsRequest is empty; the caller is identified by the
+// bearer token and sees only collections it may read.
+message KnowledgeCollectionsRequest {}
+
+// CollectionInfo is one listed collection: its spec (so a caller can learn
+// the filterable/sortable fields), size, and staleness.
+message CollectionInfo {
+  CollectionSpec spec = 1;
+  int64 count = 2;
+  // Newest server-stamped harvest time (unset when the collection is empty).
+  google.protobuf.Timestamp newest_harvested_at = 3;
+  // Newest document-declared date (unset when absent).
+  google.protobuf.Timestamp newest_doc_date = 4;
+}
+
+// KnowledgeCollectionsResponse lists readable collections.
+message KnowledgeCollectionsResponse {
+  repeated CollectionInfo collections = 1;
+}
+
+// KnowledgeDeleteRequest is the mark-and-sweep predicate: delete rows in
+// collection from source whose harvest_id != current_harvest_id.
+message KnowledgeDeleteRequest {
+  string collection = 1;
+  string source = 2;
+  string current_harvest_id = 3;
+}
+
+// KnowledgeDeleteResponse reports the sweep. Zero matches is deleted: 0, not
+// an error.
+message KnowledgeDeleteResponse {
+  int64 deleted = 1;
+}
+
+// CreateCollectionRequest registers spec as a new collection.
+message CreateCollectionRequest {
+  CollectionSpec spec = 1;
+}
+
+// CreateCollectionResponse is empty: creation is acknowledged by success.
+message CreateCollectionResponse {}
+
+// UpdateCollectionRequest replaces the named collection's spec (spec.name
+// selects the collection).
+message UpdateCollectionRequest {
+  CollectionSpec spec = 1;
+}
+
+// UpdateCollectionResponse is empty: the update is acknowledged by success.
+message UpdateCollectionResponse {}
 
 // StatusRequest is empty; the caller is identified by the bearer token.
 message StatusRequest {}
