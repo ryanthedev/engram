@@ -15,6 +15,7 @@ import (
 	"github.com/ryanthedev/engram/internal/harvester"
 	"github.com/ryanthedev/engram/internal/harvester/sources"
 	"github.com/ryanthedev/engram/internal/mcp"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type testSink struct {
@@ -780,5 +781,98 @@ func TestGithubReposTransportAllowlist(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// buildScopedGithub builds the github-repos source and asserts it is a
+// ScopedSource (per-repo mark-and-sweep scopes).
+func buildScopedGithub(t *testing.T, cfg harvester.SourceConfig) harvester.ScopedSource {
+	t.Helper()
+	src, err := harvester.Build(cfg, harvester.Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatalf("failed to build source: %v", err)
+	}
+	scoped, ok := src.(harvester.ScopedSource)
+	if !ok {
+		t.Fatalf("github-repos source does not implement harvester.ScopedSource")
+	}
+	return scoped
+}
+
+// TestGithubReposSweepScopesPerRepo asserts each configured repo becomes its own
+// per-repo sweep scope (github-repos:owner/repo), deduplicated — the core of the
+// fix that stops one repo's run from sweeping another repo's docs.
+func TestGithubReposSweepScopesPerRepo(t *testing.T) {
+	parentDir, _ := createLocalRepo(t, "orgA", "repoA", map[string]string{"README.md": "a"})
+	createLocalRepoAt(t, parentDir, "orgB", "repoB", map[string]string{"README.md": "b"})
+
+	scoped := buildScopedGithub(t, harvester.SourceConfig{Type: "github-repos", Raw: map[string]any{
+		// Duplicate orgA/repoA to prove scopes are deduplicated.
+		"repos":    []any{"orgA/repoA", "orgB/repoB", "orgA/repoA"},
+		"base_url": parentDir,
+	}})
+
+	got := scoped.SweepScopes()
+	want := []string{"github-repos:orgA/repoA", "github-repos:orgB/repoB"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d deduplicated scopes, got %d: %v", len(want), len(got), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("scope %d: expected %q, got %q", i, w, got[i])
+		}
+	}
+}
+
+// TestGithubReposHarvestScopeIsolation proves HarvestScope for one repo emits
+// ONLY that repo's docs — so the Runner ingests+sweeps each repo under its own
+// source string and repo B's run can never touch repo A's docs.
+func TestGithubReposHarvestScopeIsolation(t *testing.T) {
+	parentDir, _ := createLocalRepo(t, "orgA", "repoA", map[string]string{"README.md": "alpha"})
+	createLocalRepoAt(t, parentDir, "orgB", "repoB", map[string]string{"README.md": "bravo"})
+
+	scoped := buildScopedGithub(t, harvester.SourceConfig{Type: "github-repos", Raw: map[string]any{
+		"repos":    []any{"orgA/repoA", "orgB/repoB"},
+		"base_url": parentDir,
+	}})
+
+	sink := &testSink{}
+	if err := scoped.HarvestScope(context.Background(), "github-repos:orgA/repoA", sink); err != nil {
+		t.Fatalf("HarvestScope failed: %v", err)
+	}
+	if len(sink.docs) != 1 {
+		t.Fatalf("expected exactly 1 doc from repoA scope, got %d", len(sink.docs))
+	}
+	if got := sink.docs[0].ID; got != "orgA/repoA/README.md" {
+		t.Errorf("expected repoA doc, got %q", got)
+	}
+	if repo, _ := sink.docs[0].Fields["repo"].(string); repo != "orgA/repoA" {
+		t.Errorf("expected repo field orgA/repoA, got %q", repo)
+	}
+}
+
+// TestGithubReposDocFieldsStructpbEncodable is the structpb-encodability
+// regression guard: KnowledgeDoc.Fields is wire-encoded via structpb.NewStruct
+// in engramclient.KnowledgeIngest, which REJECTS typed slices (e.g. []string).
+// A fake Sink never exercises that encoder, so this asserts the real doc a
+// github-repos harvest emits round-trips through structpb.NewStruct.
+func TestGithubReposDocFieldsStructpbEncodable(t *testing.T) {
+	parentDir, _ := createLocalRepo(t, "orgA", "repoA", map[string]string{"README.md": "alpha"})
+	scoped := buildScopedGithub(t, harvester.SourceConfig{Type: "github-repos", Raw: map[string]any{
+		"repos":    []any{"orgA/repoA"},
+		"base_url": parentDir,
+	}})
+
+	sink := &testSink{}
+	if err := scoped.HarvestScope(context.Background(), "github-repos:orgA/repoA", sink); err != nil {
+		t.Fatalf("HarvestScope failed: %v", err)
+	}
+	if len(sink.docs) == 0 {
+		t.Fatal("expected at least one harvested doc")
+	}
+	for _, doc := range sink.docs {
+		if _, err := structpb.NewStruct(doc.Fields); err != nil {
+			t.Fatalf("doc %q Fields are not structpb-encodable (breaks KnowledgeIngest): %v", doc.ID, err)
+		}
 	}
 }

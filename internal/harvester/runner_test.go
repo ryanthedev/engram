@@ -37,6 +37,44 @@ func (s *testSource) Harvest(ctx context.Context, sink harvester.Sink) error {
 	return nil
 }
 
+// testScopedSource is a ScopedSource fake: it partitions docs by scope and can
+// fail on a chosen scope to exercise the run-wide fail-safe.
+type testScopedSource struct {
+	typ        string
+	mode       harvester.HarvestMode
+	scopes     []string
+	docs       map[string][]mcp.KnowledgeDoc
+	err        error
+	errOnScope string // if set, err fires only for this scope; else for all
+}
+
+var _ harvester.ScopedSource = (*testScopedSource)(nil)
+
+func (s *testScopedSource) Type() string                { return s.typ }
+func (s *testScopedSource) Mode() harvester.HarvestMode { return s.mode }
+func (s *testScopedSource) SweepScopes() []string       { return s.scopes }
+
+func (s *testScopedSource) Harvest(ctx context.Context, sink harvester.Sink) error {
+	for _, scope := range s.scopes {
+		if err := s.HarvestScope(ctx, scope, sink); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *testScopedSource) HarvestScope(ctx context.Context, scope string, sink harvester.Sink) error {
+	if s.err != nil && (s.errOnScope == "" || s.errOnScope == scope) {
+		return s.err
+	}
+	for _, doc := range s.docs[scope] {
+		if err := sink.Add(doc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func TestRunner_Run(t *testing.T) {
 	t.Run("DW-2.1: Run batches N docs into Ingest", func(t *testing.T) {
 		ec := &testEngramClient{}
@@ -270,6 +308,159 @@ func TestRunner_Run(t *testing.T) {
 		}
 		if !matched2 {
 			t.Errorf("harvest ID 2 %q does not match expected format %q", id2, pattern)
+		}
+	})
+
+	t.Run("scoped: each scope ingests and sweeps under its own source string", func(t *testing.T) {
+		ec := &testEngramClient{}
+		runner := harvester.NewRunner(ec, 500, nil)
+
+		src := &testScopedSource{
+			typ:    "multi",
+			mode:   harvester.FullHarvest,
+			scopes: []string{"multi:a", "multi:b"},
+			docs: map[string][]mcp.KnowledgeDoc{
+				"multi:a": {{ID: "a1"}, {ID: "a2"}},
+				"multi:b": {{ID: "b1"}},
+			},
+		}
+
+		report, err := runner.Run(context.Background(), "col", src)
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+		if report.Indexed != 3 {
+			t.Errorf("expected 3 indexed, got %d", report.Indexed)
+		}
+
+		// Each scope's docs ingested under that scope's source string.
+		gotSources := map[string]int{}
+		for _, ic := range ec.ingestCalls {
+			gotSources[ic.source] += len(ic.docs)
+		}
+		if gotSources["multi:a"] != 2 || gotSources["multi:b"] != 1 {
+			t.Errorf("expected per-scope ingest {multi:a:2, multi:b:1}, got %v", gotSources)
+		}
+
+		// Each config scope swept exactly once, under its own source string.
+		sweptScopes := map[string]int{}
+		for _, dc := range ec.deleteCalls {
+			if dc.harvestID != report.HarvestID {
+				t.Errorf("delete used harvestID %q, want %q", dc.harvestID, report.HarvestID)
+			}
+			sweptScopes[dc.source]++
+		}
+		if sweptScopes["multi:a"] != 1 || sweptScopes["multi:b"] != 1 || len(ec.deleteCalls) != 2 {
+			t.Errorf("expected each scope swept once, got %v (%d calls)", sweptScopes, len(ec.deleteCalls))
+		}
+	})
+
+	t.Run("scoped: zero-doc scope is still swept (config-derived scope)", func(t *testing.T) {
+		ec := &testEngramClient{}
+		runner := harvester.NewRunner(ec, 500, nil)
+
+		src := &testScopedSource{
+			typ:    "multi",
+			mode:   harvester.FullHarvest,
+			scopes: []string{"multi:a", "multi:empty"},
+			docs: map[string][]mcp.KnowledgeDoc{
+				"multi:a": {{ID: "a1"}},
+				// multi:empty emits nothing this run
+			},
+		}
+
+		_, err := runner.Run(context.Background(), "col", src)
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		swept := map[string]bool{}
+		for _, dc := range ec.deleteCalls {
+			swept[dc.source] = true
+		}
+		if !swept["multi:empty"] {
+			t.Errorf("expected zero-doc scope multi:empty to still be swept; delete calls: %v", ec.deleteCalls)
+		}
+		if !swept["multi:a"] {
+			t.Errorf("expected scope multi:a to be swept; delete calls: %v", ec.deleteCalls)
+		}
+	})
+
+	t.Run("scoped: A-survives-B — separate runs sweep only their own scope", func(t *testing.T) {
+		ec := &testEngramClient{}
+		runner := harvester.NewRunner(ec, 500, nil)
+
+		runA := &testScopedSource{typ: "multi", mode: harvester.FullHarvest,
+			scopes: []string{"multi:a"}, docs: map[string][]mcp.KnowledgeDoc{"multi:a": {{ID: "a1"}}}}
+		runB := &testScopedSource{typ: "multi", mode: harvester.FullHarvest,
+			scopes: []string{"multi:b"}, docs: map[string][]mcp.KnowledgeDoc{"multi:b": {{ID: "b1"}}}}
+
+		if _, err := runner.Run(context.Background(), "col", runA); err != nil {
+			t.Fatalf("run A failed: %v", err)
+		}
+		if _, err := runner.Run(context.Background(), "col", runB); err != nil {
+			t.Fatalf("run B failed: %v", err)
+		}
+
+		// No delete call ever targeted the OTHER run's scope: run A swept only
+		// multi:a, run B swept only multi:b — so B's run can never delete A's docs.
+		for _, dc := range ec.deleteCalls {
+			if dc.source != "multi:a" && dc.source != "multi:b" {
+				t.Errorf("unexpected sweep scope %q", dc.source)
+			}
+		}
+		var sweptA, sweptB int
+		for _, dc := range ec.deleteCalls {
+			switch dc.source {
+			case "multi:a":
+				sweptA++
+			case "multi:b":
+				sweptB++
+			}
+		}
+		if sweptA != 1 || sweptB != 1 {
+			t.Errorf("expected exactly one sweep per scope across the two runs, got a=%d b=%d", sweptA, sweptB)
+		}
+	})
+
+	t.Run("scoped: HarvestScope error aborts before ANY sweep (fail-safe)", func(t *testing.T) {
+		ec := &testEngramClient{}
+		runner := harvester.NewRunner(ec, 500, nil)
+
+		src := &testScopedSource{
+			typ:        "multi",
+			mode:       harvester.FullHarvest,
+			scopes:     []string{"multi:a", "multi:b"},
+			docs:       map[string][]mcp.KnowledgeDoc{"multi:a": {{ID: "a1"}}},
+			err:        errors.New("scope harvest boom"),
+			errOnScope: "multi:b",
+		}
+
+		_, err := runner.Run(context.Background(), "col", src)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if len(ec.deleteCalls) != 0 {
+			t.Errorf("expected NO sweep on scope error, got %d delete calls", len(ec.deleteCalls))
+		}
+	})
+
+	t.Run("scoped: Incremental scoped source never sweeps", func(t *testing.T) {
+		ec := &testEngramClient{}
+		runner := harvester.NewRunner(ec, 500, nil)
+
+		src := &testScopedSource{
+			typ:    "multi",
+			mode:   harvester.Incremental,
+			scopes: []string{"multi:a"},
+			docs:   map[string][]mcp.KnowledgeDoc{"multi:a": {{ID: "a1"}}},
+		}
+
+		if _, err := runner.Run(context.Background(), "col", src); err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+		if len(ec.deleteCalls) != 0 {
+			t.Errorf("expected 0 sweeps for Incremental scoped source, got %d", len(ec.deleteCalls))
 		}
 	})
 

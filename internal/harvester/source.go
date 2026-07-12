@@ -38,6 +38,35 @@ type Sink interface {
 	Flush(ctx context.Context) error
 }
 
+// ScopedSource is an optional extension a Source may implement to partition its
+// documents into independent mark-and-sweep scopes — one `source` value per
+// scope, used for BOTH ingest and the not-current sweep. Because each scope's
+// sweep only matches rows carrying that scope's `source`, harvesting one scope
+// in a separate run can never delete another scope's documents (the multi-repo
+// wipe bug: github-repos previously shared one scope = Type(), so re-harvesting
+// one repo swept every other repo's docs in the collection).
+//
+// Scopes are derived from CONFIG, not from the documents emitted this run, so a
+// scope that yields zero documents this run still has its own stale docs swept
+// and nothing orphans. The Runner harvests every scope before sweeping any, so
+// the run-wide fail-safe still holds: any error aborts before every sweep.
+//
+// A Source that does NOT implement ScopedSource is harvested as a single scope
+// equal to Type(), swept with the zero-doc empty guard — the pre-existing
+// behavior (backward compatible). The seam is generic; only multi-item sources
+// (e.g. github-repos, one scope per repo) need adopt it.
+type ScopedSource interface {
+	Source
+	// SweepScopes returns the full, config-derived set of sweep scopes. Each
+	// element becomes the `source` value for its documents' ingest and sweep and
+	// must be non-empty and validated at construction (the same owner/repo +
+	// flag-injection barricade as the identifiers it is built from).
+	SweepScopes() []string
+	// HarvestScope harvests only the documents belonging to scope into sink.
+	// scope is always one of SweepScopes().
+	HarvestScope(ctx context.Context, scope string, sink Sink) error
+}
+
 // Deps carries runtime dependencies injected into each source at construction.
 // It is the stable extensibility seam in the factory signature; v1 carries a
 // logger (sources log skips, deleted-record notices, and politeness backoffs).

@@ -38,7 +38,10 @@ func NewRunner(ec EngramClient, batchSize int, logger *slog.Logger) *Runner {
 	}
 }
 
-// Run executes a harvest run for a given collection and source.
+// Run executes a harvest run for a given collection and source. A source that
+// implements ScopedSource is harvested and swept per config-derived scope (so
+// one scope's run never deletes another's docs); a plain Source is harvested as
+// a single scope equal to Type() (the pre-existing behavior).
 func (r *Runner) Run(ctx context.Context, collection string, source Source) (Report, error) {
 	counter := atomic.AddUint64(&globalCounter, 1)
 	harvestID := fmt.Sprintf("%s-%d#%s", time.Now().UTC().Format(time.RFC3339Nano), counter, source.Type())
@@ -49,7 +52,17 @@ func (r *Runner) Run(ctx context.Context, collection string, source Source) (Rep
 		slog.String("harvest_id", harvestID),
 	)
 
-	sink := newBatchSink(r.ec, collection, source.Type(), harvestID, r.batchSize, r.logger)
+	if scoped, ok := source.(ScopedSource); ok {
+		return r.runScoped(ctx, collection, source, scoped, harvestID)
+	}
+	return r.runSingleScope(ctx, collection, source, source.Type(), harvestID)
+}
+
+// runSingleScope harvests a source under one sweep scope and, for a FullHarvest,
+// runs the not-current sweep — guarded by the zero-doc empty guard so an empty
+// successful full harvest never wipes the collection to zero.
+func (r *Runner) runSingleScope(ctx context.Context, collection string, source Source, scope, harvestID string) (Report, error) {
+	sink := newBatchSink(r.ec, collection, scope, harvestID, r.batchSize, r.logger)
 	sink.ctx = ctx
 
 	if err := source.Harvest(ctx, sink); err != nil {
@@ -65,7 +78,7 @@ func (r *Runner) Run(ctx context.Context, collection string, source Source) (Rep
 
 	if source.Mode() == FullHarvest {
 		if indexed > 0 {
-			n, err := r.ec.Delete(ctx, collection, source.Type(), harvestID)
+			n, err := r.ec.Delete(ctx, collection, scope, harvestID)
 			if err != nil {
 				return Report{HarvestID: harvestID, Indexed: indexed}, fmt.Errorf("harvester: sweep deletion: %w", err)
 			}
@@ -73,27 +86,76 @@ func (r *Runner) Run(ctx context.Context, collection string, source Source) (Rep
 		} else {
 			r.logger.InfoContext(ctx, "harvester: skipped delete sweep: full harvest indexed zero documents",
 				slog.String("collection", collection),
-				slog.String("source", source.Type()),
+				slog.String("source", scope),
 				slog.String("harvest_id", harvestID),
 			)
 		}
 	}
 
-	report := Report{
-		Indexed:   indexed,
-		Deleted:   deleted,
-		HarvestID: harvestID,
+	report := Report{Indexed: indexed, Deleted: deleted, HarvestID: harvestID}
+	r.logFinished(ctx, collection, source.Type(), report)
+	return report, nil
+}
+
+// runScoped harvests every config-declared scope of a ScopedSource under its own
+// `source` value, then (for a FullHarvest) sweeps each scope independently.
+//
+// Fail-safe: ALL scopes are harvested and flushed before ANY sweep — if any
+// scope errors, the run aborts before every sweep, so a partial run never
+// deletes live rows (correctness on a delete path, matching the single-scope
+// path). Already-ingested docs from earlier scopes are harmless (idempotent
+// upsert-by-id; reconciled on the next clean run).
+//
+// Unlike the single-scope path there is NO aggregate zero-doc guard: each scope
+// is swept regardless of how many docs IT emitted, because the scope set comes
+// from config, not from emitted docs. A repo whose files were all deleted (zero
+// docs this run) thus has its own stale docs swept, and one scope's sweep can
+// never touch another scope's rows.
+func (r *Runner) runScoped(ctx context.Context, collection string, source Source, scoped ScopedSource, harvestID string) (Report, error) {
+	scopes := scoped.SweepScopes()
+
+	var totalIndexed int
+	for _, scope := range scopes {
+		if err := ctx.Err(); err != nil {
+			return Report{HarvestID: harvestID, Indexed: totalIndexed}, fmt.Errorf("harvester: harvesting scope %q: %w", scope, err)
+		}
+		sink := newBatchSink(r.ec, collection, scope, harvestID, r.batchSize, r.logger)
+		sink.ctx = ctx
+
+		if err := scoped.HarvestScope(ctx, scope, sink); err != nil {
+			return Report{HarvestID: harvestID, Indexed: totalIndexed}, fmt.Errorf("harvester: harvesting scope %q: %w", scope, err)
+		}
+		if err := sink.Flush(ctx); err != nil {
+			return Report{HarvestID: harvestID, Indexed: totalIndexed}, fmt.Errorf("harvester: flushing scope %q: %w", scope, err)
+		}
+		totalIndexed += sink.Indexed()
 	}
 
+	var totalDeleted int
+	if source.Mode() == FullHarvest {
+		for _, scope := range scopes {
+			n, err := r.ec.Delete(ctx, collection, scope, harvestID)
+			if err != nil {
+				return Report{HarvestID: harvestID, Indexed: totalIndexed, Deleted: totalDeleted}, fmt.Errorf("harvester: sweep deletion for scope %q: %w", scope, err)
+			}
+			totalDeleted += n
+		}
+	}
+
+	report := Report{Indexed: totalIndexed, Deleted: totalDeleted, HarvestID: harvestID}
+	r.logFinished(ctx, collection, source.Type(), report)
+	return report, nil
+}
+
+// logFinished emits the run-completion log line shared by both harvest paths.
+func (r *Runner) logFinished(ctx context.Context, collection, sourceType string, report Report) {
 	r.logger.InfoContext(ctx, "harvester: harvest run finished",
 		slog.String("collection", collection),
-		slog.String("source", source.Type()),
-		slog.String("harvest_id", harvestID),
+		slog.String("source", sourceType),
+		slog.String("harvest_id", report.HarvestID),
 		slog.Int("indexed", report.Indexed),
 		slog.Int("deleted", report.Deleted),
 	)
-
-	return report, nil
 }
 
 // Collections returns the list of collections from the Engram client.

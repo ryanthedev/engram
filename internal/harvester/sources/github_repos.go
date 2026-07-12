@@ -117,207 +117,262 @@ func (s *githubSource) Mode() harvester.HarvestMode {
 	return harvester.FullHarvest
 }
 
+// scopePrefix namespaces github-repos sweep scopes. A per-repo scope is
+// scopePrefix + owner/repo, giving each repo its OWN mark-and-sweep scope so
+// harvesting one repo in a separate run never deletes another repo's documents.
+const scopePrefix = "github-repos:"
+
+var _ harvester.ScopedSource = (*githubSource)(nil)
+
+// SweepScopes returns one sweep scope per configured repo (deduplicated),
+// derived from CONFIG so a repo that yields zero docs this run still has its own
+// stale docs swept.
+//
+// Known, unsolved edge case: two manifest entries for the SAME owner/repo under
+// different subdirs collapse to ONE scope (and thus one sweep), so the second
+// entry's run would sweep the first's docs within that repo. The workaround is a
+// single manifest entry per repo (subdirs are a per-target concern of one
+// scope), consistent with the per-owner/repo scope granularity chosen here.
+func (s *githubSource) SweepScopes() []string {
+	seen := make(map[string]bool, len(s.repos))
+	scopes := make([]string, 0, len(s.repos))
+	for _, t := range s.repos {
+		scope := scopePrefix + t.repo
+		if seen[scope] {
+			continue
+		}
+		seen[scope] = true
+		scopes = append(scopes, scope)
+	}
+	return scopes
+}
+
+// HarvestScope harvests only the repo(s) belonging to scope into sink. scope is
+// always one of SweepScopes(); repos not matching the scope are skipped.
+func (s *githubSource) HarvestScope(ctx context.Context, scope string, sink harvester.Sink) error {
+	for _, target := range s.repos {
+		if scopePrefix+target.repo != scope {
+			continue
+		}
+		if err := s.harvestTarget(ctx, target, sink); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Harvest clones each configured repo and adds glob-matching files to the sink.
+// This is the single-scope interpretation (all repos under source=Type()); the
+// Runner drives github-repos per-scope via ScopedSource instead, so each repo is
+// swept independently. Retained for the plain Source contract and direct use.
 func (s *githubSource) Harvest(ctx context.Context, sink harvester.Sink) error {
 	for _, target := range s.repos {
-		repo := target.repo
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("harvester: github-repos: cancelled: %w", err)
+		if err := s.harvestTarget(ctx, target, sink); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// harvestTarget clones one repo target and adds its glob-matching files to sink.
+func (s *githubSource) harvestTarget(ctx context.Context, target repoTarget, sink harvester.Sink) error {
+	repo := target.repo
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("harvester: github-repos: cancelled: %w", err)
+	}
+
+	// 1. Create a fresh temp dir
+	tmpDir, err := os.MkdirTemp("", "harvester-github-")
+	if err != nil {
+		return fmt.Errorf("harvester: github-repos: creating temp dir: %w", err)
+	}
+
+	err = func() error {
+		defer os.RemoveAll(tmpDir)
+
+		// Construct repo URL: base_url + owner/repo
+		baseURL := s.baseURL
+		if !strings.HasSuffix(baseURL, "/") {
+			baseURL += "/"
+		}
+		repoURL := baseURL + repo
+
+		if err := validateURL(repoURL); err != nil {
+			return fmt.Errorf("invalid transport: %w", err)
 		}
 
-		// 1. Create a fresh temp dir
-		tmpDir, err := os.MkdirTemp("", "harvester-github-")
+		// 2. git clone
+		if err := cloneRepo(ctx, target, repoURL, tmpDir); err != nil {
+			return err
+		}
+
+		// 3. read HEAD SHA
+		cmdSHA := exec.CommandContext(ctx, "git", "-C", tmpDir, "rev-parse", "HEAD")
+		var stdoutSHA, stderrSHA bytes.Buffer
+		cmdSHA.Stdout = &stdoutSHA
+		cmdSHA.Stderr = &stderrSHA
+		if err := cmdSHA.Run(); err != nil {
+			return fmt.Errorf("getting HEAD SHA for %q: %w (stderr: %s)", repo, err, stderrSHA.String())
+		}
+		headSHA := strings.TrimSpace(stdoutSHA.String())
+		sourceVersion := "sha:" + headSHA
+
+		// Keep track of glob match counts
+		globMatchCount := make(map[string]int)
+		for _, pattern := range s.files {
+			globMatchCount[pattern] = 0
+		}
+
+		// 4. walk the configured tree
+		walkRoot := tmpDir
+		if target.subdir != "" {
+			walkRoot = filepath.Join(tmpDir, filepath.FromSlash(target.subdir))
+		}
+		resolvedTmp, err := filepath.EvalSymlinks(tmpDir)
 		if err != nil {
-			return fmt.Errorf("harvester: github-repos: creating temp dir: %w", err)
+			return fmt.Errorf("resolving clone dir for %q: %w", repo, err)
+		}
+		resolvedWalk, err := filepath.EvalSymlinks(walkRoot)
+		if err != nil {
+			if target.subdir != "" && os.IsNotExist(err) {
+				s.deps.Logger.WarnContext(ctx, "harvester: github-repos: subdir not present",
+					slog.String("repo", repo),
+					slog.String("subdir", target.subdir),
+				)
+				return nil
+			}
+			return fmt.Errorf("resolving walk root for %q: %w", repo, err)
+		}
+		if resolvedWalk != resolvedTmp && !strings.HasPrefix(resolvedWalk, resolvedTmp+string(os.PathSeparator)) {
+			return fmt.Errorf("subdir %q resolves outside cloned repo %q", target.subdir, repo)
 		}
 
-		err = func() error {
-			defer os.RemoveAll(tmpDir)
-
-			// Construct repo URL: base_url + owner/repo
-			baseURL := s.baseURL
-			if !strings.HasSuffix(baseURL, "/") {
-				baseURL += "/"
-			}
-			repoURL := baseURL + repo
-
-			if err := validateURL(repoURL); err != nil {
-				return fmt.Errorf("invalid transport: %w", err)
-			}
-
-			// 2. git clone
-			if err := cloneRepo(ctx, target, repoURL, tmpDir); err != nil {
+		err = filepath.WalkDir(resolvedWalk, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
 				return err
 			}
-
-			// 3. read HEAD SHA
-			cmdSHA := exec.CommandContext(ctx, "git", "-C", tmpDir, "rev-parse", "HEAD")
-			var stdoutSHA, stderrSHA bytes.Buffer
-			cmdSHA.Stdout = &stdoutSHA
-			cmdSHA.Stderr = &stderrSHA
-			if err := cmdSHA.Run(); err != nil {
-				return fmt.Errorf("getting HEAD SHA for %q: %w (stderr: %s)", repo, err, stderrSHA.String())
-			}
-			headSHA := strings.TrimSpace(stdoutSHA.String())
-			sourceVersion := "sha:" + headSHA
-
-			// Keep track of glob match counts
-			globMatchCount := make(map[string]int)
-			for _, pattern := range s.files {
-				globMatchCount[pattern] = 0
-			}
-
-			// 4. walk the configured tree
-			walkRoot := tmpDir
-			if target.subdir != "" {
-				walkRoot = filepath.Join(tmpDir, filepath.FromSlash(target.subdir))
-			}
-			resolvedTmp, err := filepath.EvalSymlinks(tmpDir)
-			if err != nil {
-				return fmt.Errorf("resolving clone dir for %q: %w", repo, err)
-			}
-			resolvedWalk, err := filepath.EvalSymlinks(walkRoot)
-			if err != nil {
-				if target.subdir != "" && os.IsNotExist(err) {
-					s.deps.Logger.WarnContext(ctx, "harvester: github-repos: subdir not present",
-						slog.String("repo", repo),
-						slog.String("subdir", target.subdir),
-					)
-					return nil
+			if d.IsDir() {
+				if d.Name() == ".git" {
+					return filepath.SkipDir
 				}
-				return fmt.Errorf("resolving walk root for %q: %w", repo, err)
-			}
-			if resolvedWalk != resolvedTmp && !strings.HasPrefix(resolvedWalk, resolvedTmp+string(os.PathSeparator)) {
-				return fmt.Errorf("subdir %q resolves outside cloned repo %q", target.subdir, repo)
-			}
-
-			err = filepath.WalkDir(resolvedWalk, func(path string, d os.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if d.IsDir() {
-					if d.Name() == ".git" {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-
-				if d.Type()&os.ModeSymlink != 0 {
-					s.deps.Logger.WarnContext(ctx, "harvester: github-repos: skipping symlink",
-						slog.String("repo", repo),
-						slog.String("path", path),
-					)
-					return nil
-				}
-				if !d.Type().IsRegular() {
-					return nil
-				}
-
-				// Get relative path to the resolved clone dir.
-				relPath, err := filepath.Rel(resolvedTmp, path)
-				if err != nil {
-					return fmt.Errorf("getting relative path for %s: %w", path, err)
-				}
-
-				// Check if relPath matches any glob
-				matchedAny := false
-				for _, pattern := range s.files {
-					matched, err := matchGlob(pattern, relPath)
-					if err != nil {
-						s.deps.Logger.WarnContext(ctx, "harvester: github-repos: invalid glob pattern",
-							slog.String("pattern", pattern),
-							slog.String("error", err.Error()),
-						)
-						continue
-					}
-					if matched {
-						matchedAny = true
-						globMatchCount[pattern]++
-					}
-				}
-
-				if !matchedAny {
-					return nil
-				}
-
-				// Read and check size
-				info, err := d.Info()
-				if err != nil {
-					return fmt.Errorf("getting info for %s: %w", path, err)
-				}
-				if !info.Mode().IsRegular() {
-					return nil
-				}
-				if info.Size() > s.maxFileBytes {
-					s.deps.Logger.WarnContext(ctx, "harvester: github-repos: skipping oversized file",
-						slog.String("repo", repo),
-						slog.String("path", relPath),
-						slog.Int64("size", info.Size()),
-						slog.Int64("max_bytes", s.maxFileBytes),
-					)
-					return nil
-				}
-
-				data, err := os.ReadFile(path)
-				if err != nil {
-					return fmt.Errorf("reading file %s: %w", path, err)
-				}
-
-				if int64(len(data)) > s.maxFileBytes {
-					s.deps.Logger.WarnContext(ctx, "harvester: github-repos: skipping oversized file after read",
-						slog.String("repo", repo),
-						slog.String("path", relPath),
-					)
-					return nil
-				}
-
-				// Check for binary
-				if bytes.IndexByte(data, 0) != -1 {
-					s.deps.Logger.WarnContext(ctx, "harvester: github-repos: skipping binary file",
-						slog.String("repo", repo),
-						slog.String("path", relPath),
-					)
-					return nil
-				}
-
-				// sink.Add
-				doc := mcp.KnowledgeDoc{
-					ID:            repo + "/" + relPath,
-					Title:         relPath,
-					Text:          string(data),
-					SourceVersion: sourceVersion,
-					Fields: map[string]any{
-						"repo": repo,
-						"path": relPath,
-					},
-				}
-
-				if err := sink.Add(doc); err != nil {
-					return fmt.Errorf("adding doc to sink: %w", err)
-				}
-
 				return nil
-			})
-			if err != nil {
-				return fmt.Errorf("walking files for %q: %w", repo, err)
 			}
 
-			// Log warning for any glob matching zero files
-			for pattern, count := range globMatchCount {
-				if count == 0 {
-					s.deps.Logger.WarnContext(ctx, "harvester: github-repos: glob matched zero files",
-						slog.String("repo", repo),
+			if d.Type()&os.ModeSymlink != 0 {
+				s.deps.Logger.WarnContext(ctx, "harvester: github-repos: skipping symlink",
+					slog.String("repo", repo),
+					slog.String("path", path),
+				)
+				return nil
+			}
+			if !d.Type().IsRegular() {
+				return nil
+			}
+
+			// Get relative path to the resolved clone dir.
+			relPath, err := filepath.Rel(resolvedTmp, path)
+			if err != nil {
+				return fmt.Errorf("getting relative path for %s: %w", path, err)
+			}
+
+			// Check if relPath matches any glob
+			matchedAny := false
+			for _, pattern := range s.files {
+				matched, err := matchGlob(pattern, relPath)
+				if err != nil {
+					s.deps.Logger.WarnContext(ctx, "harvester: github-repos: invalid glob pattern",
 						slog.String("pattern", pattern),
+						slog.String("error", err.Error()),
 					)
+					continue
 				}
+				if matched {
+					matchedAny = true
+					globMatchCount[pattern]++
+				}
+			}
+
+			if !matchedAny {
+				return nil
+			}
+
+			// Read and check size
+			info, err := d.Info()
+			if err != nil {
+				return fmt.Errorf("getting info for %s: %w", path, err)
+			}
+			if !info.Mode().IsRegular() {
+				return nil
+			}
+			if info.Size() > s.maxFileBytes {
+				s.deps.Logger.WarnContext(ctx, "harvester: github-repos: skipping oversized file",
+					slog.String("repo", repo),
+					slog.String("path", relPath),
+					slog.Int64("size", info.Size()),
+					slog.Int64("max_bytes", s.maxFileBytes),
+				)
+				return nil
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("reading file %s: %w", path, err)
+			}
+
+			if int64(len(data)) > s.maxFileBytes {
+				s.deps.Logger.WarnContext(ctx, "harvester: github-repos: skipping oversized file after read",
+					slog.String("repo", repo),
+					slog.String("path", relPath),
+				)
+				return nil
+			}
+
+			// Check for binary
+			if bytes.IndexByte(data, 0) != -1 {
+				s.deps.Logger.WarnContext(ctx, "harvester: github-repos: skipping binary file",
+					slog.String("repo", repo),
+					slog.String("path", relPath),
+				)
+				return nil
+			}
+
+			// sink.Add
+			doc := mcp.KnowledgeDoc{
+				ID:            repo + "/" + relPath,
+				Title:         relPath,
+				Text:          string(data),
+				SourceVersion: sourceVersion,
+				Fields: map[string]any{
+					"repo": repo,
+					"path": relPath,
+				},
+			}
+
+			if err := sink.Add(doc); err != nil {
+				return fmt.Errorf("adding doc to sink: %w", err)
 			}
 
 			return nil
-		}()
-
+		})
 		if err != nil {
-			return fmt.Errorf("harvester: github-repos: %w", err)
+			return fmt.Errorf("walking files for %q: %w", repo, err)
 		}
+
+		// Log warning for any glob matching zero files
+		for pattern, count := range globMatchCount {
+			if count == 0 {
+				s.deps.Logger.WarnContext(ctx, "harvester: github-repos: glob matched zero files",
+					slog.String("repo", repo),
+					slog.String("pattern", pattern),
+				)
+			}
+		}
+
+		return nil
+	}()
+
+	if err != nil {
+		return fmt.Errorf("harvester: github-repos: %w", err)
 	}
 
 	return nil
