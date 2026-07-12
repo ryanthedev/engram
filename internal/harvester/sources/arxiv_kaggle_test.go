@@ -110,7 +110,7 @@ func TestDW_3_1_KaggleHarvestSuccess(t *testing.T) {
 		t.Errorf("expected SourceVersion 'dump:2026-07-11', got %q", doc.SourceVersion)
 	}
 
-	categories, ok := doc.Fields["categories"].([]string)
+	categories, ok := doc.Fields["categories"].([]any)
 	if !ok || len(categories) != 2 || categories[0] != "cs.CL" {
 		t.Errorf("unexpected categories: %v", doc.Fields["categories"])
 	}

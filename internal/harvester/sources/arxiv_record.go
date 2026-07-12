@@ -32,7 +32,13 @@ func toKnowledgeDoc(rec ArXivRecord) mcp.KnowledgeDoc {
 	// Assert: No PDF / full-text fetching is performed here. Only metadata.
 	fields := make(map[string]any)
 	if len(rec.Categories) > 0 {
-		fields["categories"] = rec.Categories
+		// structpb (the Fields wire encoder in engramclient.KnowledgeIngest)
+		// rejects typed slices like []string — list values must be []any.
+		cats := make([]any, len(rec.Categories))
+		for i, c := range rec.Categories {
+			cats[i] = c
+		}
+		fields["categories"] = cats
 	}
 	if rec.PublishedDate != "" {
 		fields["published_date"] = rec.PublishedDate
