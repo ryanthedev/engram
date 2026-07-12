@@ -220,7 +220,15 @@ func (s *KnowledgeStore) DeleteByQuery(ctx context.Context, index, collection, s
 		return 0, fmt.Errorf("store: sweeping %s (collection=%s source=%s): currentHarvestID must not be empty", index, collection, source)
 	}
 	body := deleteByQueryBody(collection, source, currentHarvestID)
-	status, decoded, err := doJSON(ctx, s.client, http.MethodPost, s.baseURL+"/"+index+"/_delete_by_query", body)
+	// conflicts=proceed: a sweep runs immediately after the run's bulk upsert,
+	// so _delete_by_query's point-in-time snapshot can still see a just-
+	// re-upserted row under its OLD harvest_id and match it for deletion; by
+	// the time the delete executes the row carries the CURRENT harvest_id and
+	// a bumped version, yielding a version conflict. Skipping that conflict is
+	// exactly correct — the row was touched by this run and must survive — so
+	// proceed rather than aborting the whole sweep. Genuine orphans (untouched,
+	// no version change) still delete.
+	status, decoded, err := doJSON(ctx, s.client, http.MethodPost, s.baseURL+"/"+index+"/_delete_by_query?conflicts=proceed", body)
 	if err != nil {
 		return 0, fmt.Errorf("store: sweeping %s (collection=%s source=%s): %w", index, collection, source, err)
 	}
