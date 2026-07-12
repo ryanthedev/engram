@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Engram platform architecture and API surface, rendered from the repository documentation and protobuf contract.">
+  <title>Engram | Architecture &amp; API Report</title>
+  <script>
+    (function () {
+      var saved;
+      try { saved = localStorage.getItem('engram-report-theme'); } catch (_) {}
+      var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.dataset.theme = saved || (dark ? 'dark' : 'light');
+    }());
+  </script>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: oklch(0.965 0.008 85);
+      --bg-2: oklch(0.935 0.01 85);
+      --panel: oklch(0.985 0.006 85);
+      --ink: oklch(0.245 0.014 155);
+      --ink-2: oklch(0.39 0.014 155);
+      --sage: oklch(0.42 0.035 155);
+      --copper: oklch(0.46 0.115 50);
+      --copper-2: oklch(0.41 0.105 50);
+      --green: oklch(0.42 0.07 160);
+      --rule: oklch(0.72 0.06 55 / .56);
+      --hair: oklch(0.45 0.025 155 / .18);
+      --hair-2: oklch(0.45 0.025 155 / .10);
+      --code-bg: oklch(0.91 0.014 85);
+      --focus: oklch(0.58 0.14 50);
+      --shadow: 0 18px 50px oklch(0.25 0.02 155 / .08);
+      --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, 'Times New Roman', serif;
+      --sans: 'Avenir Next', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      --mono: 'SFMono-Regular', Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+      --rail: 17rem;
+      --content: 74rem;
+    }
+    :root[data-theme="dark"] {
+      --bg: oklch(0.18 0.012 155);
+      --bg-2: oklch(0.215 0.012 200);
+      --panel: oklch(0.23 0.014 200);
+      --ink: oklch(0.91 0.015 85);
+      --ink-2: oklch(0.79 0.014 85);
+      --sage: oklch(0.7 0.035 155);
+      --copper: oklch(0.68 0.13 50);
+      --copper-2: oklch(0.76 0.12 50);
+      --green: oklch(0.67 0.075 160);
+      --rule: oklch(0.68 0.11 50 / .42);
+      --hair: oklch(0.73 0.035 155 / .17);
+      --hair-2: oklch(0.73 0.035 155 / .09);
+      --code-bg: oklch(0.265 0.018 155);
+      --focus: oklch(0.76 0.14 50);
+      --shadow: 0 18px 60px oklch(0.08 0.02 155 / .28);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--bg); }
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      color: var(--ink);
+      background:
+        radial-gradient(60rem 42rem at 90% -8%, color-mix(in oklch, var(--green) 8%, transparent), transparent 68%),
+        radial-gradient(45rem 34rem at -8% 2%, color-mix(in oklch, var(--copper) 7%, transparent), transparent 68%),
+        var(--bg);
+      font-family: var(--sans);
+      font-size: 1rem;
+      line-height: 1.65;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+    }
+    ::selection { background: color-mix(in oklch, var(--copper) 30%, transparent); }
+    a { color: var(--copper-2); text-underline-offset: .18em; }
+    a:hover { color: var(--copper); }
+    a:focus-visible, button:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--focus); outline-offset: 3px; border-radius: .2rem;
+    }
+    .skip-link { position: fixed; z-index: 100; top: .7rem; left: .7rem; transform: translateY(-180%); padding: .65rem .9rem; background: var(--ink); color: var(--bg); }
+    .skip-link:focus { transform: none; }
+    code, .mono {
+      font-family: var(--mono); font-size: .88em; color: var(--copper-2); background: var(--code-bg);
+      border: 1px solid var(--hair); border-radius: .28rem; padding: .08rem .28rem; overflow-wrap: anywhere;
+    }
+    .shell { width: min(100%, calc(var(--content) + var(--rail) + 5rem)); margin: 0 auto; }
+    header { padding: clamp(4.8rem, 10vw, 8.5rem) clamp(1.1rem, 4vw, 3rem) clamp(4rem, 8vw, 7rem); border-bottom: 1px solid var(--hair); }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(14rem, 23rem); align-items: end; gap: clamp(2rem, 6vw, 7rem); }
+    .kicker, .section-no, .toc-title, .stack-line, .table-note, figcaption, .badge {
+      font-family: var(--mono); text-transform: uppercase; letter-spacing: .13em;
+    }
+    .kicker { margin: 0 0 1.2rem; color: var(--sage); font-size: .72rem; }
+    h1 { margin: 0; font-family: var(--serif); font-weight: 500; letter-spacing: -.045em; line-height: .9; font-size: clamp(4rem, 12vw, 9.2rem); }
+    h1 .dot { color: var(--copper); }
+    .subtitle { margin: 1rem 0 0; font-family: var(--serif); font-size: clamp(1.4rem, 3vw, 2.15rem); color: var(--sage); font-style: italic; }
+    .overview { margin: 0; max-width: 46ch; font-size: clamp(1.05rem, 2vw, 1.23rem); color: var(--ink-2); }
+    .stack-line { margin: 2.6rem 0 0; padding-top: 1.2rem; border-top: 1px solid var(--rule); font-size: .68rem; line-height: 1.9; color: var(--sage); }
+    .stack-line strong { color: var(--ink); font-weight: 600; }
+    .layout { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); gap: clamp(2rem, 5vw, 5rem); padding: 0 clamp(1.1rem, 4vw, 3rem); }
+    nav { position: sticky; top: 0; align-self: start; height: 100vh; padding: 2.4rem 0 2rem; overflow-y: auto; }
+    .toc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.1rem; }
+    .toc-title { color: var(--sage); font-size: .66rem; }
+    .theme-toggle { width: 2.35rem; height: 2.35rem; border: 1px solid var(--hair); border-radius: 50%; background: transparent; color: var(--ink); cursor: pointer; font-size: 1rem; }
+    .toc { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
+    .toc li { counter-increment: toc; }
+    .toc a { display: grid; grid-template-columns: 1.8rem 1fr; gap: .45rem; padding: .38rem .35rem; color: var(--sage); text-decoration: none; border-radius: .3rem; font-size: .78rem; line-height: 1.3; }
+    .toc a::before { content: counter(toc, decimal-leading-zero); font-family: var(--mono); font-size: .65rem; color: var(--copper); padding-top: .08rem; }
+    .toc a:hover, .toc a[aria-current="true"] { color: var(--ink); background: color-mix(in oklch, var(--panel) 70%, transparent); }
+    main { min-width: 0; padding-bottom: 7rem; }
+    section { position: relative; padding: clamp(4.4rem, 9vw, 7.5rem) 0; border-top: 1px solid var(--hair); scroll-margin-top: 1.2rem; }
+    section:first-child { border-top: 0; }
+    .section-no { display: flex; align-items: center; gap: .7rem; margin-bottom: 1rem; color: var(--copper); font-size: .67rem; }
+    .section-no::after { content: ''; width: 2.2rem; height: 1px; background: var(--rule); }
+    h2, h3, h4 { color: var(--ink); }
+    h2 { max-width: 22ch; margin: 0 0 1.35rem; font-family: var(--serif); font-size: clamp(2.1rem, 5vw, 3.4rem); font-weight: 500; line-height: 1.03; letter-spacing: -.025em; }
+    h3 { margin: 2.6rem 0 .7rem; font-size: 1.18rem; line-height: 1.3; }
+    h4 { margin: 1.7rem 0 .55rem; font-size: 1rem; }
+    p, ul, ol { max-width: 72ch; color: var(--ink-2); }
+    p { margin: .8rem 0; }
+    li + li { margin-top: .42rem; }
+    strong { color: var(--ink); }
+    .lead { max-width: 66ch; font-family: var(--serif); font-size: clamp(1.15rem, 2.2vw, 1.43rem); line-height: 1.52; color: var(--ink); }
+    .callout { max-width: 72ch; margin: 1.8rem 0; padding: 1rem 1.1rem; border: 1px solid var(--rule); border-radius: .55rem; background: color-mix(in oklch, var(--copper) 7%, var(--panel)); color: var(--ink-2); }
+    .callout strong { display: block; margin-bottom: .15rem; font-family: var(--mono); font-size: .72rem; letter-spacing: .09em; text-transform: uppercase; color: var(--copper-2); }
+    .chain { margin: 1.8rem 0; padding: 1.1rem 1.25rem; max-width: 72ch; border: 1px solid var(--hair); background: var(--panel); box-shadow: var(--shadow); font-family: var(--mono); font-size: .82rem; line-height: 1.8; overflow-x: auto; }
+    .chain b { color: var(--green); }
+    .arrow { color: var(--copper); }
+    .table-wrap { width: 100%; margin: 1.7rem 0 .8rem; overflow-x: auto; border: 1px solid var(--hair); border-radius: .6rem; background: color-mix(in oklch, var(--panel) 84%, transparent); box-shadow: var(--shadow); }
+    table { width: 100%; border-collapse: collapse; min-width: 42rem; font-size: .86rem; line-height: 1.48; }
+    th { position: sticky; top: 0; padding: .75rem .9rem; text-align: left; border-bottom: 1px solid var(--rule); background: var(--bg-2); color: var(--sage); font-family: var(--mono); font-size: .63rem; font-weight: 600; letter-spacing: .11em; text-transform: uppercase; }
+    td { padding: .72rem .9rem; vertical-align: top; border-bottom: 1px solid var(--hair-2); color: var(--ink-2); }
+    tbody tr:nth-child(even) td { background: color-mix(in oklch, var(--sage) 3%, transparent); }
+    tbody tr:last-child td { border-bottom: 0; }
+    td:first-child { color: var(--ink); }
+    .compact td { padding-block: .58rem; }
+    .table-note { margin: .65rem 0 0; color: var(--sage); font-size: .62rem; }
+    figure { margin: 2.4rem 0 1rem; }
+    .diagram-frame { position: relative; min-height: 12rem; overflow-x: auto; padding: 1.1rem; border: 1px solid var(--hair); border-radius: .7rem; background: var(--panel); box-shadow: var(--shadow); }
+    .mermaid { display: flex; justify-content: center; min-width: 42rem; color: var(--ink-2); font-family: var(--mono); font-size: .76rem; white-space: pre-wrap; }
+    .mermaid svg { max-width: 100%; height: auto; }
+    figcaption { margin-top: .75rem; color: var(--sage); font-size: .62rem; text-align: center; }
+    .api-group { margin-top: 2.6rem; padding-top: .2rem; }
+    details { margin: 1rem 0; border-top: 1px solid var(--hair); }
+    summary { cursor: pointer; padding: 1rem 0; color: var(--ink); font-weight: 650; }
+    summary::marker { color: var(--copper); }
+    .drift { display: grid; grid-template-columns: minmax(10rem, .65fr) minmax(0, 1.35fr); gap: 1.2rem; padding: 1.2rem 0; border-top: 1px solid var(--hair); }
+    .drift h3 { margin: 0; font-family: var(--mono); font-size: .82rem; color: var(--copper-2); }
+    .drift p { margin: 0; }
+    footer { padding: 2rem clamp(1.1rem, 4vw, 3rem) 4rem; border-top: 1px solid var(--rule); }
+    footer p { font-family: var(--mono); font-size: .72rem; color: var(--sage); }
+    @media (max-width: 980px) {
+      .hero-grid { grid-template-columns: 1fr; }
+      .layout { grid-template-columns: 1fr; }
+      nav { z-index: 20; height: auto; margin: 0 calc(-1 * clamp(1.1rem, 4vw, 3rem)); padding: .55rem clamp(1.1rem, 4vw, 3rem); background: color-mix(in oklch, var(--bg) 91%, transparent); border-bottom: 1px solid var(--hair); backdrop-filter: blur(12px); overflow: hidden; }
+      .toc-head { margin: 0; }
+      .toc-title { font-size: .72rem; }
+      .toc { display: flex; gap: .2rem; overflow-x: auto; padding: .45rem 0 .2rem; scrollbar-width: thin; }
+      .toc li { flex: 0 0 auto; }
+      .toc a { display: block; padding: .35rem .55rem; white-space: nowrap; }
+      .toc a::before { margin-right: .35rem; }
+      section { scroll-margin-top: 7rem; }
+    }
+    @media (max-width: 620px) {
+      body { font-size: .94rem; }
+      header { padding-top: 4.2rem; }
+      h1 { font-size: clamp(3.6rem, 22vw, 6.2rem); }
+      table { min-width: 38rem; }
+      .mermaid { min-width: 40rem; }
+      .drift { grid-template-columns: 1fr; gap: .35rem; }
+      .diagram-frame, .table-wrap { margin-left: -.35rem; margin-right: -.35rem; width: calc(100% + .7rem); }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      :root { color-scheme: light; --bg: oklch(0.98 0.004 85); --panel: oklch(0.99 0.003 85); --ink: oklch(0.2 0.01 155); --ink-2: oklch(0.32 0.01 155); }
+      nav, .theme-toggle { display: none; }
+      .layout { display: block; }
+      section { break-inside: avoid-page; }
+      .table-wrap, .diagram-frame { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to report</a>
+  <header id="top">
+    <div class="shell hero-grid">
+      <div>
+        <p class="kicker">Architecture &amp; API report · as built</p>
+        <h1>Engram<span class="dot">.</span></h1>
+        <p class="subtitle">Memory an agent can trust.</p>
+      </div>
+      <p class="overview">Engram is a single gRPC service backed by OpenSearch. It combines hybrid retrieval, four persisted memory tiers, asynchronous LLM-gated writes, document collections, and provenance-as-ACL access control behind one authenticated contract.</p>
+    </div>
+    <div class="shell stack-line"><strong>Go 1.25</strong> · <strong>OpenSearch 3.1</strong> (pinned) · Faiss HNSW kNN + BM25 + RRF · <strong>BGE-M3</strong> 1024 dimensions · gRPC / protobuf</div>
+  </header>
+
+  <div class="shell layout">
+    <nav aria-label="Report sections">
+      <div class="toc-head"><span class="toc-title">Contents</span><button class="theme-toggle" type="button" aria-label="Switch color theme" title="Switch color theme">◐</button></div>
+      <ol class="toc">
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#components">Components</a></li>
+        <li><a href="#assembly">Service assembly</a></li>
+        <li><a href="#tiers">Memory tiers</a></li>
+        <li><a href="#write-path">Write path</a></li>
+        <li><a href="#read-path">Read path</a></li>
+        <li><a href="#access-control">Access control</a></li>
+        <li><a href="#knowledge">Knowledge vs memory</a></li>
+        <li><a href="#embedding">Embedding</a></li>
+        <li><a href="#deployment">Deployment</a></li>
+        <li><a href="#api">API surface</a></li>
+        <li><a href="#drift">Known drift</a></li>
+      </ol>
+    </nav>
+
+    <main id="main">
+      <section id="overview" aria-labelledby="overview-title">
+        <div class="section-no">01 · Platform overview</div>
+        <h2 id="overview-title">One daemon, explicit seams</h2>
+        <p class="lead">Clients see one authenticated service. Inside it, write, read, extraction, embedding, access control, and collection registry concerns meet at narrow Go interfaces; OpenSearch owns durable state and ranked retrieval.</p>
+        <figure>
+          <div class="diagram-frame"><pre class="mermaid">
+flowchart LR
+  subgraph Clients[Clients]
+    CLI[engram CLI]
+    MCP[engram-mcp]
+    HARV[engram-harvester]
+  end
+  subgraph Daemon[engram-server · one gRPC service]
+    INT[Telemetry → Auth interceptors]
+    HAND[Handlers]
+    WRITE[Store · write seam]
+    READ[Retriever · read seam]
+    ACL[ACL + knowledge RBAC]
+    POOL[Outbox worker pool + sweeper]
+  end
+  OS[(OpenSearch 3.1)]
+  EMB[TEI embedder\nBGE-M3 or fake]
+  EXT[Extractor\nHTTP LLM or rule]
+  CLI --> INT
+  MCP --> INT
+  HARV --> INT
+  INT --> HAND
+  HAND --> WRITE
+  HAND --> READ
+  HAND --> ACL
+  WRITE --> OS
+  READ --> OS
+  READ --> EMB
+  POOL --> OS
+  POOL --> EXT
+  POOL --> EMB
+  ACL --> OS
+          </pre></div>
+          <figcaption>Component architecture: clients enter through the interceptor barricade; OpenSearch remains behind the server seams.</figcaption>
+        </figure>
+      </section>
+
+      <section id="components" aria-labelledby="components-title">
+        <div class="section-no">02 · Components at a glance</div>
+        <h2 id="components-title">The production process and its packages</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Component</th><th>Binary / package</th><th>Responsibility</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Service daemon</strong></td><td><code>cmd/engram-server</code></td><td>One production process: gRPC server, worker pool, repair sweep, enrichment job, and <code>/metrics</code>.</td></tr>
+            <tr><td>gRPC handlers</td><td><code>internal/server</code></td><td>Store and Retriever seams, independent of OpenSearch; derives tenancy from verified identity.</td></tr>
+            <tr><td>Write seam + store</td><td><code>internal/store</code></td><td>Durable writes, templates, cluster contract, outbox/ledger, ACL edges, auth tokens, and collection registry.</td></tr>
+            <tr><td>Read seam</td><td><code>internal/retrieval</code></td><td>Per-tier BM25 + kNN through RRF, cross-tier merge, ACL enforcement, and response projection.</td></tr>
+            <tr><td>Write vocabulary</td><td><code>internal/ingest</code></td><td>Extractor and reconciler seams; <code>Noop</code>, <code>Add</code>, <code>Update</code>, <code>Invalidate</code>; cost metering.</td></tr>
+            <tr><td>Async worker</td><td><code>internal/worker</code></td><td>Lease claim, ledger, extraction, reconciliation, bi-temporal landing, and repair sweep.</td></tr>
+            <tr><td>Enrichment</td><td><code>internal/enrich</code></td><td>Backfills <code>text_embedding</code> on text-first episodic documents.</td></tr>
+            <tr><td>Tier schemas</td><td><code>internal/memory</code></td><td>Record schemas and deterministic SHA-256 IDs/keys; no OpenSearch dependency.</td></tr>
+            <tr><td>Graph tier</td><td><code>internal/graph</code></td><td>Deduplicated entities and typed edges with bounded, at-most-two-hop expansion.</td></tr>
+            <tr><td>Experience tier</td><td><code>internal/experience</code></td><td>Task-experience trust boundary with mandatory admit, quarantine, or reject gate.</td></tr>
+            <tr><td>Access control</td><td><code>internal/acl</code></td><td>Fail-closed query filter and write-time scope guard.</td></tr>
+            <tr><td>Auth</td><td><code>internal/auth</code>, <code>internal/authgrpc</code></td><td>Hash-only opaque tokens and the identity-resolving gRPC interceptor.</td></tr>
+            <tr><td>Knowledge auth</td><td><code>internal/knowledgeauth</code></td><td>Per-collection <code>AuthorizeRead</code> / <code>AuthorizeWrite</code> from verified role claims.</td></tr>
+            <tr><td>Knowledge domain</td><td><code>internal/knowledge</code></td><td>Collection, field, access-policy, and document types with no OpenSearch dependency.</td></tr>
+            <tr><td>Embedding</td><td><code>internal/embed</code></td><td>Embedder port, TEI-style HTTP implementation, deterministic fake, startup dimension gate.</td></tr>
+            <tr><td>Telemetry</td><td><code>internal/telemetry</code>, <code>internal/telemetrygrpc</code></td><td>OTel/Prometheus RED metrics, cost kill-switch, and gated extraction.</td></tr>
+            <tr><td>Client library</td><td><code>internal/engramclient</code></td><td>Shared authenticated gRPC client for CLI, MCP server, and harvester.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="assembly" aria-labelledby="assembly-title">
+        <div class="section-no">03 · Service assembly</div>
+        <h2 id="assembly-title">Boot is a contract check</h2>
+        <p><code>cmd/engram-server/main.go</code> applies every embedded index template and the <code>engram-rrf</code> pipeline, creates indices idempotently, and refuses any OpenSearch version outside <code>3.1.x</code>. It then validates configured names against template prefixes.</p>
+        <ol>
+          <li><strong>Embedder:</strong> <code>-embed-url</code> selects the TEI-style HTTP adapter; empty selects the deterministic fake. Startup fails unless its dimension is exactly 1024.</li>
+          <li><strong>ACL:</strong> the ACL edge store feeds both the read filter and the store’s write guard.</li>
+          <li><strong>Data seams:</strong> <code>OpenSearchStore</code> serves writes; <code>OpenSearchRetriever</code> carries the ACL filter and tier-to-index map for reads.</li>
+          <li><strong>Background work:</strong> enrichment, worker pool, sweeper, cost logger, experience pruning, and telemetry start with the daemon.</li>
+          <li><strong>Extractor:</strong> <code>-extract-url</code> selects the HTTP extractor; empty uses deterministic rules. A gated wrapper fails closed if the extraction budget is breached.</li>
+        </ol>
+        <h3>Interceptor chain, outermost first</h3>
+        <div class="chain"><b>telemetrygrpc.UnaryServerInterceptor</b> <span class="arrow">→</span> RED metrics before auth<br><b>authgrpc.UnaryServerInterceptor</b> <span class="arrow">→</span> verify bearer token, inject Identity, otherwise opaque Unauthenticated<br><b>server handlers</b> <span class="arrow">→</span> assume a verified Identity is present</div>
+        <p>A single <code>server.Server</code> implements memory and knowledge RPCs from the <code>Probe</code>, <code>Auditor</code>, <code>ACL</code>, <code>Registry</code>, <code>KnowledgeWriter</code>, <code>KnowledgeReader</code>, <code>Episodic</code>, and <code>Exporter</code> seams.</p>
+      </section>
+
+      <section id="tiers" aria-labelledby="tiers-title">
+        <div class="section-no">04 · Memory tiers and indices</div>
+        <h2 id="tiers-title">Four persisted tiers, one working context</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Tier</th><th>Purpose</th><th>Concrete development index</th><th>Vector field</th></tr></thead>
+          <tbody>
+            <tr><td>Working</td><td>Conversational context; not persisted as an Engram tier.</td><td>None</td><td>None</td></tr>
+            <tr><td><strong>Episodic (T1)</strong></td><td>Raw appended events; also the outbox.</td><td><code>engram-episodic-000001</code></td><td><code>text_embedding</code>, 1024-d</td></tr>
+            <tr><td><strong>Semantic (T2)</strong></td><td>Extracted, bi-temporal facts.</td><td><code>engram-semantic-000001</code></td><td><code>fact_embedding</code>, 1024-d</td></tr>
+            <tr><td><strong>Experience (T3)</strong></td><td>Gated task-experience records.</td><td><code>engram-experience-000001</code><br><code>engram-experience-quarantine-000001</code></td><td>None</td></tr>
+            <tr><td><strong>Graph (T4)</strong></td><td>Deduplicated entities and typed edges.</td><td><code>engram-graph-entities-000001</code><br><code>engram-graph-edges-000001</code></td><td>None</td></tr>
+          </tbody>
+        </table></div>
+        <figure>
+          <div class="diagram-frame"><pre class="mermaid">
+flowchart LR
+  W[Working context\nnot persisted]
+  T1[Episodic · T1\nraw events + outbox] --> I1[(engram-episodic-000001)]
+  T2[Semantic · T2\nbi-temporal facts] --> I2[(engram-semantic-000001)]
+  T3[Experience · T3\ngated task records] --> I3[(engram-experience-000001)]
+  T3 --> IQ[(engram-experience-quarantine-000001)]
+  T4[Graph · T4\nentities + edges] --> IE[(engram-graph-entities-000001)]
+  T4 --> IG[(engram-graph-edges-000001)]
+  W -. transient .-> T1
+          </pre></div>
+          <figcaption>Memory tier to concrete OpenSearch index mapping.</figcaption>
+        </figure>
+        <p><strong>Supporting indices:</strong> <code>engram-ledger-000001</code>, <code>engram-auth-tokens-000001</code>, <code>engram-acl-edges-000001</code>, and <code>knowledge-collections-000001</code>. Knowledge data lives in <code>knowledge-&lt;name&gt;-vN</code> behind the <code>knowledge-&lt;name&gt;</code> alias.</p>
+      </section>
+
+      <section id="write-path" aria-labelledby="write-title">
+        <div class="section-no">05 · Write path</div>
+        <h2 id="write-title">Append now, extract safely</h2>
+        <p class="lead">Ingest synchronously appends an episodic event. That same record is the durable enqueue for asynchronous extraction, reconciliation, and post-write graph or experience work.</p>
+        <figure>
+          <div class="diagram-frame"><pre class="mermaid">
+flowchart TD
+  A[Ingest RPC] --> B{event_id present?}
+  B -- no --> BR[INVALID_ARGUMENT]
+  B -- yes --> C[Override tenancy from verified Identity]
+  C --> D[ScopeGuard.Check write]
+  D -- deny --> DR[PermissionDenied]
+  D -- allow --> E[Store.Append -> engram-episodic]
+  E --> F[Return doc id]
+  E -. outbox fields on the same doc .-> G[Outbox worker pool]
+  G --> H[ClaimBatch: scan unprocessed, lease-guarded per-doc claim]
+  H --> I[ClaimLedger op_type=create - idempotency]
+  I -->|Complete| Z[drain, done - replay]
+  I -->|Extracted| K[resume from cached extraction, no LLM]
+  I -->|new| J[Extract via LLM / rule extractor]
+  J --> L[UpdateLedger: persist extraction BEFORE any semantic write]
+  K --> M[Reconcile each fact]
+  L --> M
+  M --> N{Op}
+  N -->|Add| O[createFact op_type=create]
+  N -->|Update/Invalidate| P[create new fact first, then guarded-close predecessor]
+  N -->|late arrival| Q[insertHistorical, bounded]
+  O --> R[Post-write Stages: experience distill, graph upsert]
+  P --> R
+  Q --> R
+  R --> S[LedgerComplete -> Store.Complete stamps processed_at]
+          </pre></div>
+          <figcaption>The write-path flowchart reproduced from <span class="mono">docs/architecture.md</span>.</figcaption>
+        </figure>
+        <ul>
+          <li><strong>Idempotency:</strong> one SHA-256 ledger row for <code>{tenant_id, event_id, extractor_version}</code>. Replays short-circuit; an <code>Extracted</code> entry resumes from cached extraction without calling the LLM.</li>
+          <li><strong>Concurrency:</strong> guarded updates with sequence number and primary term let only one worker win a lease.</li>
+          <li><strong>Bi-temporal writes:</strong> update and invalidate create the successor first, then guarded-close the predecessor. Late arrivals land as bounded history. Memory records are never hard-deleted.</li>
+          <li><strong>Repair:</strong> the sweeper converges partial writes, divergent siblings, expired incomplete ledgers, and closed-closed overlaps to a documented five-minute-or-less SLO.</li>
+        </ul>
+      </section>
+
+      <section id="read-path" aria-labelledby="read-title">
+        <div class="section-no">06 · Read path</div>
+        <h2 id="read-title">Filter before fusion</h2>
+        <p class="lead"><code>Search</code> fuses BM25 and kNN within each tier, merges the tier lists, and applies authorization plus projection before a hit crosses the wire.</p>
+        <figure>
+          <div class="diagram-frame"><pre class="mermaid">
+flowchart TD
+  A[Search RPC] --> B[Pin tenant + Identity from verified token]
+  B --> C[Clamp k to 1..100; empty query short-circuits]
+  C --> D[Compile ACL clause once - fail closed]
+  D -- error --> DR[zero results, query never runs unfiltered]
+  D -- ok --> E[Fan out concurrently across tiers]
+  E --> E1[Episodic tier: match text + knn text_embedding]
+  E --> E2[Semantic tier: match statement + knn fact_embedding + validity filter]
+  E --> E3[Experience tier source]
+  E1 --> F[Per-tier RRF via engram-rrf search pipeline, rank_constant=60]
+  E2 --> F
+  E3 --> F
+  F --> G[Cross-tier merge: stable score sort + top-k]
+  G --> H[filterAuthorized BEFORE truncation]
+  H --> I[Post-hooks: graph expansion, re-authorized]
+  I --> J[projectFields: drop embeddings + ACL provenance]
+  J --> K[SearchResponse hits]
+          </pre></div>
+          <figcaption>The read-path flowchart reproduced from <span class="mono">docs/architecture.md</span>.</figcaption>
+        </figure>
+        <p>Tenant, ACL, optional owner, and semantic current-state filters sit inside both BM25 and kNN clauses, preserving filtered-kNN recall. RRF runs per tier with <code>rank_constant=60</code>; cross-tier results use a stable score sort, with no score normalization.</p>
+        <p>Read-side embedding has a 50 ms bound. A timeout or error falls back to BM25. <code>Read</code> and <code>Audit</code> apply the same fail-closed policy: unknown IDs, cross-tenant rows, and source mismatches return <code>NOT_FOUND</code>, avoiding an existence oracle.</p>
+      </section>
+
+      <section id="access-control" aria-labelledby="acl-title">
+        <div class="section-no">07 · Access control</div>
+        <h2 id="acl-title">Provenance is the ACL</h2>
+        <p class="lead">Memory authorization is calculated from who wrote a record and the scope they chose. Checks run at query time and write time, and every error path fails closed.</p>
+        <div class="table-wrap"><table class="compact">
+          <thead><tr><th>Scope</th><th>Read condition</th><th>Write condition</th></tr></thead>
+          <tbody>
+            <tr><td><code>private</code> (also empty)</td><td>Own <code>owner_agent_id</code>.</td><td>Any valid identity.</td></tr>
+            <tr><td><code>team</code></td><td>Owner is reachable and <code>team_id</code> is in reachable teams.</td><td>Writer belongs to the target team.</td></tr>
+            <tr><td><code>org</code></td><td>Owner is reachable.</td><td>Writer holds the organization grant.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Reachability is resolved from <code>engram-acl-edges</code> on every call, with no cache, so revocation takes effect on the next request. Self is always reachable. An empty reachable-agent set denies all.</p>
+        <p>The OpenSearch clause and its in-Go twin both enforce the policy. Knowledge collections do not use provenance ACLs; <code>internal/knowledgeauth</code> checks public access or verified token roles through <code>AuthorizeRead</code> and <code>AuthorizeWrite</code>.</p>
+      </section>
+
+      <section id="knowledge" aria-labelledby="knowledge-title">
+        <div class="section-no">08 · Knowledge platform versus memory</div>
+        <h2 id="knowledge-title">Same cluster, different rules</h2>
+        <p>The knowledge platform never writes a memory tier. Its runtime-mutable collections are a deliberate exception to memory’s append-only model.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Concern</th><th>Memory tiers</th><th>Knowledge platform</th></tr></thead>
+          <tbody>
+            <tr><td>Write model</td><td>Append-only; never overwrite.</td><td>Upsert by ID through bulk <code>index</code>.</td></tr>
+            <tr><td>Delete</td><td>Bi-temporal close; never hard-delete.</td><td>Mark-and-sweep hard delete.</td></tr>
+            <tr><td>Retrieval</td><td>BM25 + kNN + RRF, then tier merge.</td><td>BM25 with declared filters and sort.</td></tr>
+            <tr><td>Extraction</td><td>Async extraction to facts.</td><td>None; stores documents as supplied.</td></tr>
+            <tr><td>Access</td><td>Scope and provenance ACL.</td><td>Per-collection role-based policy.</td></tr>
+          </tbody>
+        </table></div>
+        <p>The durable registry lives in <code>knowledge-collections-000001</code>, with a whole-set in-process cache invalidated on write. Changing a field type reindexes to <code>vN+1</code> and atomically swaps the collection alias. The harvester feeds only <code>Knowledge*</code> RPCs.</p>
+      </section>
+
+      <section id="embedding" aria-labelledby="embedding-title">
+        <div class="section-no">09 · Embedding</div>
+        <h2 id="embedding-title">Co-located by contract, selected by configuration</h2>
+        <p class="lead"><code>embed.HTTPEmbedder</code> posts <code>{baseURL}/embed</code> with <code>{"inputs":[...]}</code> and expects index-aligned vectors. Without <code>-embed-url</code>, the daemon uses a deterministic fake.</p>
+        <ul>
+          <li>Default production model: <code>BAAI/bge-m3</code>, 1024 dimensions. A mismatch fails boot.</li>
+          <li><code>engram-embed-server</code> is the deterministic TEI-compatible stand-in used by local end-to-end runs.</li>
+          <li>Fact embedding on write is best-effort. BM25 still serves an unembedded fact, and enrichment backfills it later.</li>
+          <li>Query embedding is capped at 50 ms and degrades to BM25-only on failure.</li>
+        </ul>
+      </section>
+
+      <section id="deployment" aria-labelledby="deployment-title">
+        <div class="section-no">10 · Deployment topology</div>
+        <h2 id="deployment-title">Local compose, AWS converge</h2>
+        <figure>
+          <div class="diagram-frame"><pre class="mermaid">
+flowchart TB
+  subgraph Local[Local · docker-compose]
+    LCLI[Host clients] --> LD[engramd service\nhost 7071 → 7070]
+    LD --> LOS[(OpenSearch 3.1.0\nhost 9201 → 9200)]
+    LD --> LE[embed stub · :8081]
+    LD --> LL[LLM stub · :8082]
+    LX[Host extraction shim · :8088] -. intentionally outside compose .-> LD
+  end
+  subgraph AWS[AWS · engram-deploy]
+    ECS[3 ECS services\nengramd · worker · BGE-M3] --> AOS[(OpenSearch Service 3.1)]
+    SEC[Secrets Manager] --> ECS
+    VPC[VPC] --- ECS
+    VPC --- AOS
+  end
+          </pre></div>
+          <figcaption>Deployment topology described by the architecture document.</figcaption>
+        </figure>
+        <p><strong>Local:</strong> compose runs OpenSearch 3.1.0, the deterministic embed server, the chat-completions stub, and the daemon service. The host extraction shim is intentionally outside compose.</p>
+        <div class="callout"><strong>Data-loss warning</strong><code>make e2e</code> and <code>make e2e-down</code> run <code>docker compose down -v</code>, wiping the OpenSearch volume used as the live local memory store.</div>
+        <p><strong>AWS:</strong> <code>engram-deploy</code> performs an idempotent Go converge, without Terraform, for an OpenSearch Service 3.1 domain, three ECS services, Secrets Manager, and a VPC per <code>staging</code> or <code>prod</code> environment. It supports <code>-rollback</code>.</p>
+        <p>The daemon exposes Prometheus metrics at <code>:9464/metrics</code>. It has no HTTP health route; liveness is the authenticated gRPC <code>Status</code> RPC.</p>
+      </section>
+
+      <section id="api" aria-labelledby="api-title">
+        <div class="section-no">11 · API surface</div>
+        <h2 id="api-title">One contract, several clients</h2>
+        <p class="lead">Every RPC belongs to <code>engram.v1.Engram</code> and requires <code>authorization: Bearer &lt;raw-token&gt;</code> in gRPC metadata. Request tenancy and provenance never override the verified token identity.</p>
+
+        <div class="api-group">
+          <h3>gRPC: six memory RPCs</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>RPC</th><th>Request fields</th><th>Response fields</th><th>Contract detail</th></tr></thead>
+            <tbody>
+              <tr><td><code>Ingest</code></td><td><code>event_id</code>, <code>tenant_id</code>, <code>team_id</code>, <code>scope</code>, <code>owner_agent_id</code>, <code>source_ids[]</code>, <code>kind</code>, <code>text</code>, <code>occurred_at</code></td><td><code>id</code></td><td><code>event_id</code> is required; append is the async enqueue. Server replaces client tenancy/provenance.</td></tr>
+              <tr><td><code>Search</code></td><td><code>query</code>, <code>k</code>, <code>tenant_id</code>, <code>user_id</code>, <code>valid_only</code></td><td><code>hits[]</code>: <code>id</code>, <code>score</code>, <code>source</code>, <code>fields_json</code></td><td>Hybrid BM25 + kNN to RRF. Server pins identity and clamps <code>k</code>.</td></tr>
+              <tr><td><code>Status</code></td><td>Empty</td><td><code>healthy</code>, <code>tenant_id</code>, <code>user_id</code>, <code>agent_id</code>, <code>episodic_count</code>, <code>semantic_count</code>, <code>opensearch_version</code></td><td>Authenticated health and caller-scoped coarse counts.</td></tr>
+              <tr><td><code>Audit</code></td><td><code>id</code></td><td><code>provenance</code>, <code>versions[]</code></td><td>Provenance plus oldest-first bi-temporal history; unauthorized and unknown both return <code>NOT_FOUND</code>.</td></tr>
+              <tr><td><code>Read</code></td><td><code>id</code>, <code>source</code></td><td><code>source</code>, <code>episodic</code>, <code>fact</code>, <code>provenance</code>, <code>versions[]</code></td><td><code>episodic</code> or <code>semantic</code> only; <code>graph</code> is <code>UNIMPLEMENTED</code>. Exactly one source index is probed.</td></tr>
+              <tr><td><code>Export</code></td><td><code>cursor</code></td><td><code>entities[]</code>, <code>edges[]</code>, <code>next_cursor</code></td><td>Bounded live ACL-filtered graph page, entities before edges. Cursor is opaque and carries no tenancy.</td></tr>
+            </tbody>
+          </table></div>
+          <details><summary>Shared memory message fields</summary>
+            <div class="table-wrap"><table class="compact"><thead><tr><th>Message</th><th>Fields</th></tr></thead><tbody>
+              <tr><td><code>Provenance</code></td><td><code>tenant_id</code>, <code>team_id</code>, <code>scope</code>, <code>owner_agent_id</code>, <code>source_ids[]</code>, <code>extractor_version</code>, <code>created_at</code>, <code>roles[]</code></td></tr>
+              <tr><td><code>FactVersion</code></td><td><code>id</code>, <code>subject</code>, <code>predicate</code>, <code>object</code>, <code>statement</code>, <code>content_key</code>, <code>supersedes</code>, <code>valid_at</code>, <code>invalid_at</code>, <code>created_at</code>, <code>expired_at</code></td></tr>
+              <tr><td><code>EpisodicRecord</code></td><td><code>id</code>, <code>event_id</code>, <code>kind</code>, <code>text</code>, <code>source_ids[]</code>, <code>occurred_at</code>, <code>created_at</code></td></tr>
+              <tr><td><code>ExportEntity</code></td><td><code>id</code>, <code>name</code>, <code>aliases[]</code>, <code>mention_count</code>, <code>source_ids[]</code>, <code>scope</code>, <code>team_id</code>, <code>owner_agent_id</code>, <code>valid_at</code>, <code>created_at</code></td></tr>
+              <tr><td><code>ExportEdge</code></td><td><code>id</code>, <code>from_entity_id</code>, <code>to_entity_id</code>, <code>predicate</code>, <code>statement</code>, <code>source_ids[]</code>, <code>scope</code>, <code>team_id</code>, <code>owner_agent_id</code>, <code>valid_at</code>, <code>created_at</code></td></tr>
+            </tbody></table></div>
+          </details>
+        </div>
+
+        <div class="api-group">
+          <h3>gRPC: six knowledge RPCs</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>RPC</th><th>Request fields</th><th>Response fields</th><th>Contract detail</th></tr></thead>
+            <tbody>
+              <tr><td><code>KnowledgeIngest</code></td><td><code>collection</code>, <code>source</code>, <code>harvest_id</code>, <code>docs[]</code></td><td><code>indexed</code></td><td>Bulk upsert; whole-batch retry is idempotent. Requires <code>harvester</code> or <code>admin</code>.</td></tr>
+              <tr><td><code>KnowledgeSearch</code></td><td><code>collection</code>, <code>query</code>, <code>filters[]</code>, <code>sort[]</code>, <code>k</code></td><td><code>hits[]</code></td><td>BM25 only. Empty query with filters is valid.</td></tr>
+              <tr><td><code>KnowledgeCollections</code></td><td>Empty</td><td><code>collections[]</code></td><td>Only readable collections, including spec, count, and staleness timestamps.</td></tr>
+              <tr><td><code>KnowledgeDelete</code></td><td><code>collection</code>, <code>source</code>, <code>current_harvest_id</code></td><td><code>deleted</code></td><td>Deletes rows not touched by the current harvest. Empty harvest ID is refused.</td></tr>
+              <tr><td><code>CreateCollection</code></td><td><code>spec</code></td><td>Empty</td><td>Live provision; duplicate name is <code>ALREADY_EXISTS</code>. Requires <code>admin</code>.</td></tr>
+              <tr><td><code>UpdateCollection</code></td><td><code>spec</code></td><td>Empty</td><td>Replaces the named collection spec and applies mapping changes live. Requires <code>admin</code>.</td></tr>
+            </tbody>
+          </table></div>
+          <details><summary>Shared knowledge message and enum fields</summary>
+            <div class="table-wrap"><table class="compact"><thead><tr><th>Type</th><th>Fields / values</th></tr></thead><tbody>
+              <tr><td><code>KnowledgeDocument</code></td><td><code>id</code> (required upsert identity), <code>title</code>, <code>text</code>, <code>source_version</code>, <code>fields</code></td></tr>
+              <tr><td><code>CollectionSpec</code></td><td><code>name</code>, <code>text_field</code>, <code>mappings</code> map, <code>access</code></td></tr>
+              <tr><td><code>FieldSpec</code></td><td><code>type</code>, <code>filterable</code>, <code>sortable</code></td></tr>
+              <tr><td><code>AccessPolicy</code></td><td><code>public</code>, <code>roles[]</code></td></tr>
+              <tr><td><code>CollectionInfo</code></td><td><code>spec</code>, <code>count</code>, <code>newest_harvested_at</code>, <code>newest_doc_date</code></td></tr>
+              <tr><td><code>Predicate</code></td><td><code>field</code>, <code>op</code>, one of <code>scalar</code> or <code>range</code>; <code>Range</code> has optional <code>gte</code> and <code>lte</code>.</td></tr>
+              <tr><td><code>PredicateOp</code></td><td><code>PREDICATE_OP_UNSPECIFIED</code> (0), <code>PREDICATE_OP_TERM</code> (1), <code>PREDICATE_OP_RANGE</code> (2), <code>PREDICATE_OP_PREFIX</code> (3)</td></tr>
+              <tr><td><code>SortKey</code> / <code>SortOrder</code></td><td><code>field</code>, <code>order</code>; order is <code>SORT_ORDER_UNSPECIFIED</code> (0), <code>SORT_ORDER_ASC</code> (1), or <code>SORT_ORDER_DESC</code> (2).</td></tr>
+            </tbody></table></div>
+          </details>
+        </div>
+
+        <div class="api-group">
+          <h3><code>engram</code> CLI</h3>
+          <p>Token, ACL, and quarantine commands talk directly to OpenSearch so token bootstrapping does not require a token. Ingest, search, status, audit, and export use authenticated gRPC.</p>
+          <div class="table-wrap"><table class="compact">
+            <thead><tr><th>Command</th><th>Key flags</th><th>Backend</th></tr></thead><tbody>
+              <tr><td><code>engram token create</code></td><td><code>--tenant</code>* <code>--user</code>* <code>--agent</code> <code>--ttl</code> (720h) <code>--url</code></td><td><code>TokenIssuer.Issue</code></td></tr>
+              <tr><td><code>engram token list</code></td><td><code>--tenant</code>* <code>--user</code>* <code>--url</code></td><td><code>TokenIssuer.List</code></td></tr>
+              <tr><td><code>engram token revoke &lt;handle&gt;</code></td><td><code>--url</code></td><td><code>TokenIssuer.Revoke</code></td></tr>
+              <tr><td><code>engram acl grant</code></td><td><code>--tenant --user</code> and one of <code>--agent</code>, <code>--team</code>, <code>--org</code>; <code>--url</code></td><td><code>ACLEdgeStore.PutEdge</code></td></tr>
+              <tr><td><code>engram acl revoke</code></td><td>Same as grant</td><td><code>ACLEdgeStore.DeleteEdge</code></td></tr>
+              <tr><td><code>engram acl list</code></td><td><code>--tenant --user --url</code></td><td><code>ACLEdgeStore.ListEdges</code></td></tr>
+              <tr><td><code>engram quarantine list</code></td><td><code>--tenant</code>* <code>--url</code></td><td><code>experience.Store.ListQuarantine</code></td></tr>
+              <tr><td><code>engram quarantine release &lt;fingerprint&gt;</code></td><td><code>--tenant</code>* <code>--url</code></td><td><code>experience.Store.Release</code></td></tr>
+              <tr><td><code>engram ingest</code></td><td><code>--event-id</code>* <code>--text</code>* <code>--source --scope --team -addr -token</code></td><td>gRPC <code>Ingest</code></td></tr>
+              <tr><td><code>engram search &lt;query&gt;</code></td><td><code>-k</code> (10) <code>-addr -token</code></td><td>gRPC <code>Search</code> with <code>valid_only=true</code></td></tr>
+              <tr><td><code>engram status</code></td><td><code>-addr -token</code></td><td>gRPC <code>Status</code></td></tr>
+              <tr><td><code>engram audit &lt;fact-id&gt;</code></td><td><code>-addr -token</code></td><td>gRPC <code>Audit</code></td></tr>
+              <tr><td><code>engram export &lt;dir&gt;</code></td><td><code>--force -addr -token</code></td><td>Paginated gRPC <code>Export</code> to an Obsidian vault</td></tr>
+            </tbody>
+          </table></div>
+          <p class="table-note">* required. Address resolution: -addr → ENGRAM_ADDR → localhost:7070. Token: -token → ENGRAM_TOKEN. Admin URL: --url → ENGRAM_OPENSEARCH_URL → http://localhost:9200. The CLI has no read or knowledge subcommands.</p>
+        </div>
+
+        <div class="api-group">
+          <h3>Ten MCP tools</h3>
+          <p><code>engram-mcp</code> speaks JSON-RPC 2.0 over stdio, protocol <code>2024-11-05</code>, server version <code>0.1.0</code>. Each tool maps one-to-one to a gRPC RPC and authenticates with <code>ENGRAM_TOKEN</code>.</p>
+          <div class="table-wrap"><table class="compact">
+            <thead><tr><th>Tool</th><th>Arguments</th><th>Result / RPC</th></tr></thead><tbody>
+              <tr><td><code>memory_ingest</code></td><td><code>event_id</code>* <code>text</code>* <code>source</code></td><td><code>{id}</code> · Ingest</td></tr>
+              <tr><td><code>memory_search</code></td><td><code>query</code>* <code>k</code></td><td>Budget-packed hits, optional <code>overflow_path</code> · Search</td></tr>
+              <tr><td><code>memory_read</code></td><td><code>id</code>* <code>source</code>* (<code>episodic</code> or <code>semantic</code>)</td><td>Full record · Read</td></tr>
+              <tr><td><code>memory_status</code></td><td>None</td><td>Health, identity, counts, OpenSearch version · Status</td></tr>
+              <tr><td><code>knowledge_ingest</code></td><td><code>collection</code>* <code>source</code>* <code>harvest_id</code>* <code>docs[]</code>*</td><td><code>{indexed}</code> · KnowledgeIngest</td></tr>
+              <tr><td><code>knowledge_search</code></td><td><code>collection</code>* <code>query filters[] sort[] k</code></td><td>Budget-packed hits, optional spill · KnowledgeSearch</td></tr>
+              <tr><td><code>knowledge_collections</code></td><td>None</td><td>Specs, counts, staleness · KnowledgeCollections</td></tr>
+              <tr><td><code>knowledge_delete</code></td><td><code>collection</code>* <code>source</code>* <code>current_harvest_id</code>*</td><td><code>{deleted}</code> · KnowledgeDelete</td></tr>
+              <tr><td><code>knowledge_create_collection</code></td><td><code>name</code>* <code>text_field mappings public roles[]</code></td><td><code>{created}</code> · CreateCollection</td></tr>
+              <tr><td><code>knowledge_update_collection</code></td><td>Same collection spec</td><td><code>{updated}</code> · UpdateCollection</td></tr>
+            </tbody>
+          </table></div>
+          <p>Tool failures return <code>isError:true</code>; protocol misuse returns a JSON-RPC error. Search packing uses <code>ENGRAM_MCP_SEARCH_BUDGET_BYTES</code> and <code>ENGRAM_MCP_SPILL_DIR</code>.</p>
+        </div>
+
+        <div class="api-group">
+          <h3>Harvester and source types</h3>
+          <p><code>engram-harvester</code> is a one-shot, manifest-driven process for cron or systemd. It calls <code>KnowledgeCollections</code> to validate, <code>KnowledgeIngest</code> per batch, then <code>KnowledgeDelete</code> for the sweep. Its token comes only from <code>ENGRAM_HARVESTER_TOKEN</code>.</p>
+          <p><strong>Flags:</strong> <code>--manifest</code>*; repeatable or CSV <code>--collection</code> and <code>--source</code>; <code>--addr</code> (:7070); <code>--batch-size</code> (500); <code>--timeout</code> (6h). <code>--once</code> and <code>--backfill</code> are no-ops because every run is one-shot.</p>
+          <div class="table-wrap"><table class="compact"><thead><tr><th>Source type</th><th>Required and optional keys</th></tr></thead><tbody>
+            <tr><td><code>arxiv-kaggle</code></td><td><code>path</code>*; <code>filter</code>, <code>dump_date</code></td></tr>
+            <tr><td><code>arxiv-oaipmh</code></td><td><code>base_url</code>, <code>set</code>, <code>metadata_prefix</code>, <code>lookback</code></td></tr>
+            <tr><td><code>github-repos</code></td><td><code>repos</code>*; <code>files</code>, <code>base_url</code>, <code>max_file_bytes</code></td></tr>
+            <tr><td><code>web-crawl</code></td><td><code>seeds</code>*; <code>max_pages</code> (100), <code>max_page_bytes</code>, <code>delay</code>, <code>max_frontier</code>, <code>user_agent</code></td></tr>
+          </tbody></table></div>
+          <p>The crawler blocks loopback, RFC1918, link-local, IPv6 ULA/link-local, multicast, and unspecified addresses on every dial. It caps redirects at ten, rechecks cross-host redirects, honors <code>robots.txt</code>, and applies a per-host delay.</p>
+        </div>
+
+        <div class="api-group">
+          <h3>Authentication and tokens</h3>
+          <p>Tokens are opaque 256-bit values with the <code>egm_</code> prefix and base64url body. Only their SHA-256 hash is stored; the raw token appears once at issuance. Verification does a hash lookup, constant-time comparison, then revocation and TTL checks.</p>
+          <p>The resolved identity is <code>{TenantID, UserID, AgentID, Roles[]}</code>. <code>harvester</code> or <code>admin</code> permits knowledge ingest/delete; <code>admin</code> permits collection create/update. Roles come only from the token record. Memory access uses scope/provenance instead.</p>
+        </div>
+
+        <div class="api-group">
+          <h3>Server configuration</h3>
+          <div class="table-wrap"><table class="compact"><thead><tr><th>Group</th><th>Flags and defaults</th></tr></thead><tbody>
+            <tr><td>Core</td><td><code>-addr</code> (:7070), <code>-url</code> (ENGRAM_OPENSEARCH_URL), <code>-metrics-addr</code> (:9464)</td></tr>
+            <tr><td>Embedding</td><td><code>-embed-url</code> (empty → fake), <code>-embed-model</code> (BAAI/bge-m3), <code>-embed-revision</code>, <code>-enrich-interval</code> (2s), <code>-enrich-batch</code> (50)</td></tr>
+            <tr><td>Extraction</td><td><code>-extract-url</code> (empty → rule), <code>-extract-model</code>, <code>-extractor-version</code> (v1), <code>-extract-price-in</code>, <code>-extract-price-out</code>, <code>-budget-per-1k-usd</code> (5.0)</td></tr>
+            <tr><td>Outbox worker</td><td><code>-workers</code> (2), <code>-claim-batch</code> (16), <code>-claim-lease</code> (1m), <code>-poll-interval</code> (2s), <code>-max-attempts</code> (5), <code>-sweep-interval</code> (30s)</td></tr>
+            <tr><td>Experience</td><td><code>-gate-url</code>, <code>-gate-model</code> (gpt-4o-mini), <code>-prune-phi-max</code> (0.2), <code>-prune-retrieval-max</code> (0), <code>-prune-interval</code> (5m)</td></tr>
+            <tr><td>Graph</td><td><code>-graph-judge-url</code>, <code>-graph-judge-model</code> (gpt-4o-mini), <code>-graph-expand-depth</code> (≤2)</td></tr>
+            <tr><td>Telemetry / indices</td><td><code>-metrics-interval</code> (5s), <code>-episodic-index</code>, <code>-semantic-index</code>, <code>-ledger-index</code></td></tr>
+          </tbody></table></div>
+          <h4>Environment variables</h4>
+          <div class="table-wrap"><table class="compact"><thead><tr><th>Variable</th><th>Consumer</th><th>Meaning</th></tr></thead><tbody>
+            <tr><td><code>ENGRAM_TOKEN</code></td><td>CLI, MCP</td><td>Client bearer token.</td></tr>
+            <tr><td><code>ENGRAM_ADDR</code></td><td>CLI, harvester</td><td>gRPC address; default <code>localhost:7070</code>.</td></tr>
+            <tr><td><code>ENGRAM_OPENSEARCH_URL</code></td><td>CLI admin, server</td><td>OpenSearch URL; default <code>http://localhost:9200</code>.</td></tr>
+            <tr><td><code>ENGRAM_HARVESTER_TOKEN</code></td><td>Harvester</td><td>Required harvester token.</td></tr>
+            <tr><td><code>ENGRAM_MCP_SEARCH_BUDGET_BYTES</code>, <code>ENGRAM_MCP_SPILL_DIR</code></td><td>MCP</td><td>Search response budget and overflow directory.</td></tr>
+            <tr><td><code>ENGRAM_HALU_JUDGE_URL</code>, <code>ENGRAM_HALU_JUDGE_MODEL</code></td><td>engram-eval</td><td>Hallucination judge.</td></tr>
+            <tr><td><code>SHIM_BACKEND</code>, <code>SHIM_MODEL</code>, <code>SHIM_TIMEOUT</code></td><td>extract shim</td><td>Backend agent CLI settings.</td></tr>
+          </tbody></table></div>
+        </div>
+
+        <div class="api-group">
+          <h3>HTTP endpoints</h3>
+          <p>Memory and knowledge have no HTTP API. HTTP is reserved for metrics and local sidecars.</p>
+          <div class="table-wrap"><table class="compact"><thead><tr><th>Endpoint</th><th>Port</th><th>Process</th></tr></thead><tbody>
+            <tr><td><code>GET /metrics</code></td><td><code>:9464</code></td><td><code>engram-server</code></td></tr>
+            <tr><td><code>POST /embed</code>, <code>GET /health</code></td><td><code>:8081</code></td><td><code>engram-embed-server</code></td></tr>
+            <tr><td><code>POST /chat/completions</code>, <code>GET /health</code></td><td><code>:8082</code></td><td><code>engram-stub-llm</code></td></tr>
+            <tr><td><code>POST /chat/completions</code>, <code>GET /health</code></td><td><code>:8088</code></td><td><code>engram-extract-shim</code></td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <section id="drift" aria-labelledby="drift-title">
+        <div class="section-no">12 · Known document / code drift</div>
+        <h2 id="drift-title">Trust the running contract</h2>
+        <p class="lead">The source architecture document calls out three stale descriptions elsewhere in the repository.</p>
+        <div class="drift"><h3><code>cmd/engramd</code></h3><p>The README and several comments name it, but the directory is empty and has no <code>main.go</code>. The production daemon is <code>cmd/engram-server</code>.</p></div>
+        <div class="drift"><h3><code>docs/mcp.md</code></h3><p>It documents three MCP tools. The code and API reference expose ten: four memory tools and six knowledge tools.</p></div>
+        <div class="drift"><h3>Co-located embeddings</h3><p>The contract supports a co-located embedding service, but the daemon runs the deterministic fake unless <code>-embed-url</code> is supplied.</p></div>
+      </section>
+    </main>
+  </div>
+
+  <footer><div class="shell"><p>Source of truth: docs/architecture.md · docs/api.md · api/proto/engram.proto · visual language: docs/vision/index.html</p></div></footer>
+
+  <script>
+    (function () {
+      var button = document.querySelector('.theme-toggle');
+      function label() {
+        var dark = document.documentElement.dataset.theme === 'dark';
+        button.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+        button.title = button.getAttribute('aria-label');
+      }
+      button.addEventListener('click', function () {
+        var next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem('engram-report-theme', next); } catch (_) {}
+        label();
+        window.dispatchEvent(new CustomEvent('engramthemechange', { detail: next }));
+      });
+      label();
+
+      var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+      var sections = Array.prototype.slice.call(document.querySelectorAll('main > section[id]'));
+      function setActive(id) {
+        links.forEach(function (link) {
+          if (link.getAttribute('href') === '#' + id) link.setAttribute('aria-current', 'true');
+          else link.removeAttribute('aria-current');
+        });
+      }
+      if ('IntersectionObserver' in window) {
+        var observer = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) { if (entry.isIntersecting) setActive(entry.target.id); });
+        }, { rootMargin: '-20% 0px -68% 0px' });
+        sections.forEach(function (section) { observer.observe(section); });
+      }
+      setActive('overview');
+    }());
+  </script>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    var nodes = Array.prototype.slice.call(document.querySelectorAll('.mermaid'));
+    nodes.forEach(function (node) { node.dataset.source = node.textContent.trim(); });
+    function vars(dark) {
+      return dark ? {
+        darkMode: true, background: '#171d1f', primaryColor: '#1d2525', primaryBorderColor: '#5f8f7a', primaryTextColor: '#e8e4d8', secondaryColor: '#202b27', secondaryBorderColor: '#536e61', tertiaryColor: '#191e20', tertiaryBorderColor: '#4a5550', lineColor: '#c47a4a', textColor: '#e8e4d8', edgeLabelBackground: '#171d1f', clusterBkg: '#19211f', clusterBorder: '#536e61', fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace'
+      } : {
+        darkMode: false, background: '#f7f4eb', primaryColor: '#edf0e9', primaryBorderColor: '#547564', primaryTextColor: '#25312b', secondaryColor: '#f3e8dc', secondaryBorderColor: '#a65f37', tertiaryColor: '#f3f1ea', tertiaryBorderColor: '#8c9991', lineColor: '#a65f37', textColor: '#25312b', edgeLabelBackground: '#f7f4eb', clusterBkg: '#f0f2ed', clusterBorder: '#71857a', fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace'
+      };
+    }
+    async function renderAll() {
+      var dark = document.documentElement.dataset.theme === 'dark';
+      mermaid.initialize({ startOnLoad: false, theme: 'base', securityLevel: 'loose', flowchart: { curve: 'basis', htmlLabels: true, padding: 12, useMaxWidth: true }, themeVariables: vars(dark) });
+      nodes.forEach(function (node) { node.removeAttribute('data-processed'); node.textContent = node.dataset.source; });
+      try { await mermaid.run({ nodes: nodes }); } catch (error) { console.warn('Mermaid rendering failed; source diagrams remain available.', error); }
+    }
+    renderAll();
+    window.addEventListener('engramthemechange', renderAll);
+  </script>
+</body>
+</html>

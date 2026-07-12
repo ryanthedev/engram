@@ -12,6 +12,14 @@ Long context ≠ memory (BEAM: structured memory beats a 1M-token window by ~75%
 durable, retrievable, *trustworthy* memory: task experience they can reuse, a multi-hop knowledge
 base, and shared memory across agents with access control and concurrent-write safety.
 
+## Docs
+
+- **Architecture (as built):** [`docs/architecture.md`](docs/architecture.md) — components,
+  service assembly, the write/read paths, memory tiers, ACL, the knowledge platform, and
+  deployment topology.
+- **API surface reference:** [`docs/api.md`](docs/api.md) — gRPC RPCs, the `engram` CLI, MCP
+  tools, the harvester, auth/tokens, config, and HTTP endpoints.
+
 ## Where this is going
 
 - **Vision site (the map):** [`docs/vision/index.html`](docs/vision/index.html) — architecture,
