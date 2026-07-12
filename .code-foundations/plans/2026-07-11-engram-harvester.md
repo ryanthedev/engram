@@ -306,4 +306,25 @@ Source of intent: `.code-foundations/research/2026-07-09-engram-knowledge-collec
 
 ---
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+**Built 2026-07-11 on `feature/engram-harvester`.** Hand-orchestrated: sdd `agy` implemented every phase in the working tree, `codex-high` adversarially reviewed the three security-sensitive source phases, the main thread owned all gates + commits. All gates (`gofmt`/`go build`/`go vet`/`go test`/`make lint`) green per phase.
+
+| Phase | Commit | Result |
+|---|---|---|
+| P1 core (manifest, seams, engram client) | `911654f` | ✅ frozen contracts + barricade validation |
+| — deletion-model correction | `086c0c4` | ✅ API has no per-doc-id delete → Sink.Delete/StateStore removed; harvester stateless |
+| P2 engine (Runner, batching Sink, sweep) | `6fc154d` | ✅ fail-safe not-current sweep, empty-guard, unique harvest_id |
+| P3 arXiv (kaggle + oai-pmh) | `b1b3eb1` | ✅ codex-high: XXE/response-size/token-cap hardening applied |
+| P4 github-repos (FullHarvest+sweep) | `6eb9443` | ✅ codex-high: symlink-read blocker + git-transport allowlist fixed |
+| P5 web-crawl (SSRF-guarded) | `c1a9754` | ✅ codex-high: dial-time SSRF guard confirmed; frontier cap + config validation added |
+| P6 CLI + wiring + docs | `3e9cf10` | ✅ token env-only, exit codes, ValidateFilters |
+
+**Live e2e (DW-6.4) — VERIFIED** against a standalone engram-server on the throwaway dev cluster (`:9200`; never touched the live-memory `:9201`, and the hazardous `make e2e` — which `down -v`s `:9201` — was deliberately avoided). Minted an admin/harvester token, created the `arxiv` collection, harvested a sample dump via the real `engram-harvester` binary, and confirmed end-to-end: ingest → BM25 `knowledge_search` (found the cs papers) → `cs.*` filter (hep-ph paper excluded, 0 hits) → mark-and-sweep (reduced re-harvest cleanly removed the orphan: indexed=2 **deleted=1**, count 3→2, no error) → staleness (`newest_harvested_at` advances) → RBAC (empty token → non-zero exit).
+
+**Two integration bugs the live e2e caught (unit tests missed), both fixed + committed:**
+1. `4f255d5` — arxiv `categories` emitted as `[]string`; `structpb.NewStruct` (the Fields wire encoder) rejects typed slices → every arxiv ingest aborted. Fixed to `[]any` + regression test. (The fail-safe worked: the ingest error aborted with no sweep.)
+2. `cd67814` — Plan 1's knowledge-store sweep aborted on version conflicts from same-run re-upserts (stale `_delete_by_query` snapshot). Fixed with `conflicts=proceed` (knowledge path only; memory untouched).
+
+**Operational note:** a pre-Plan-2 `engram-auth-tokens` index has a strict mapping without the `roles` field; minting a role-bearing token requires adding it live (`PUT .../_mapping {"properties":{"roles":{"type":"keyword"}}}`) — matches Plan 1 Phase 2's "existing strict token indices need re-provisioning" follow-up. Not harvester code; an ops step for the token-issuing side.
+
+Status: **complete.** Not yet merged to `main` (on `feature/engram-harvester`, awaiting review).
