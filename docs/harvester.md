@@ -31,7 +31,10 @@ collections:
       # NOTE: list EVERY repo for one collection in a SINGLE github-repos entry
       # (see "Multi-repo & sweep scope" below) — one run, one sweep.
       - type: github-repos
-        repos: ["facebook/react-native-website", "cloudflare/cloudflare-docs"]
+        repos:
+          - facebook/react-native-website
+          - { repo: cloudflare/cloudflare-docs, branch: production }
+          - { repo: some/monorepo, branch: main, subdir: docs/reference }
         files: ["docs/**/*.md", "src/content/docs/**/*.mdx"]
 
   - name: docs-sites                  # text_field: body ; keyword field: url
@@ -61,7 +64,13 @@ collections:
    - Shallow-clones each repo via the `git` CLI and indexes matched files, one
      doc per file (`id = owner/repo/path`, `source_version = sha:<HEAD>`). Only
      `https`/`http` transports; symlinks are skipped.
-   - `repos` (array of `owner/repo`, **required**).
+   - `repos` (**required**) is an array whose entries may be either:
+     - an `owner/repo` string, which shallow-clones the default branch and whole
+       repository (the backward-compatible form); or
+     - an object with `repo` (string, required), `branch` (string, optional), and
+       `subdir` (repo-relative directory, optional). `branch` selects the cloned
+       ref. `subdir` uses a partial sparse clone when supported and limits the
+       walk to that subtree; emitted IDs and paths retain the subdirectory prefix.
    - `files` (array of globs, optional, default `["README.md"]`): supports `**`.
    - `base_url` (string, optional, default `https://github.com/`).
    - `max_file_bytes` (int, optional, default `1048576`): larger/binary files skipped.

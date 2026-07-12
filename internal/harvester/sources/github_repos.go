@@ -18,15 +18,22 @@ import (
 )
 
 var repoRegexp = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+var refPathRegexp = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
 var allowLocalGitTransport bool
 
 type githubSource struct {
-	repos        []string
+	repos        []repoTarget
 	files        []string
 	baseURL      string
 	maxFileBytes int64
 	deps         harvester.Deps
+}
+
+type repoTarget struct {
+	repo   string
+	branch string
+	subdir string
 }
 
 var _ harvester.Source = (*githubSource)(nil)
@@ -37,31 +44,12 @@ func init() {
 		if !ok {
 			return nil, fmt.Errorf("harvester: github-repos: missing required config 'repos'")
 		}
-		repos, err := parseStringSlice(reposVal)
+		repos, err := parseRepoTargets(reposVal)
 		if err != nil {
 			return nil, fmt.Errorf("harvester: github-repos: invalid 'repos' config: %w", err)
 		}
 		if len(repos) == 0 {
 			return nil, fmt.Errorf("harvester: github-repos: 'repos' list cannot be empty")
-		}
-
-		// Security validation of owner/repo
-		for _, repo := range repos {
-			if !repoRegexp.MatchString(repo) {
-				return nil, fmt.Errorf("harvester: github-repos: invalid repo format %q, must match ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo)
-			}
-			parts := strings.Split(repo, "/")
-			if len(parts) != 2 {
-				return nil, fmt.Errorf("harvester: github-repos: invalid repo format %q", repo)
-			}
-			for _, segment := range parts {
-				if segment == "." || segment == ".." {
-					return nil, fmt.Errorf("harvester: github-repos: repo %q contains invalid segment %q", repo, segment)
-				}
-				if strings.HasPrefix(segment, "-") {
-					return nil, fmt.Errorf("harvester: github-repos: repo %q contains segment starting with '-' (flag injection guard)", repo)
-				}
-			}
 		}
 
 		files := []string{"README.md"}
@@ -84,12 +72,12 @@ func init() {
 			}
 		}
 
-		for _, repo := range repos {
+		for _, target := range repos {
 			tempBaseURL := baseURL
 			if !strings.HasSuffix(tempBaseURL, "/") {
 				tempBaseURL += "/"
 			}
-			repoURL := tempBaseURL + repo
+			repoURL := tempBaseURL + target.repo
 			if err := validateURL(repoURL); err != nil {
 				return nil, fmt.Errorf("harvester: github-repos: invalid transport: %w", err)
 			}
@@ -131,7 +119,8 @@ func (s *githubSource) Mode() harvester.HarvestMode {
 
 // Harvest clones each configured repo and adds glob-matching files to the sink.
 func (s *githubSource) Harvest(ctx context.Context, sink harvester.Sink) error {
-	for _, repo := range s.repos {
+	for _, target := range s.repos {
+		repo := target.repo
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("harvester: github-repos: cancelled: %w", err)
 		}
@@ -157,18 +146,12 @@ func (s *githubSource) Harvest(ctx context.Context, sink harvester.Sink) error {
 			}
 
 			// 2. git clone
-			cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "--", repoURL, tmpDir)
-			cmd.Dir = filepath.Dir(tmpDir)
-			var stderr bytes.Buffer
-			cmd.Stderr = &stderr
-
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("cloning repo %q: %w (stderr: %s)", repo, err, stderr.String())
+			if err := cloneRepo(ctx, target, repoURL, tmpDir); err != nil {
+				return err
 			}
 
 			// 3. read HEAD SHA
-			cmdSHA := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
-			cmdSHA.Dir = tmpDir
+			cmdSHA := exec.CommandContext(ctx, "git", "-C", tmpDir, "rev-parse", "HEAD")
 			var stdoutSHA, stderrSHA bytes.Buffer
 			cmdSHA.Stdout = &stdoutSHA
 			cmdSHA.Stderr = &stderrSHA
@@ -184,8 +167,31 @@ func (s *githubSource) Harvest(ctx context.Context, sink harvester.Sink) error {
 				globMatchCount[pattern] = 0
 			}
 
-			// 4. walk the tree
-			err = filepath.WalkDir(tmpDir, func(path string, d os.DirEntry, err error) error {
+			// 4. walk the configured tree
+			walkRoot := tmpDir
+			if target.subdir != "" {
+				walkRoot = filepath.Join(tmpDir, filepath.FromSlash(target.subdir))
+			}
+			resolvedTmp, err := filepath.EvalSymlinks(tmpDir)
+			if err != nil {
+				return fmt.Errorf("resolving clone dir for %q: %w", repo, err)
+			}
+			resolvedWalk, err := filepath.EvalSymlinks(walkRoot)
+			if err != nil {
+				if target.subdir != "" && os.IsNotExist(err) {
+					s.deps.Logger.WarnContext(ctx, "harvester: github-repos: subdir not present",
+						slog.String("repo", repo),
+						slog.String("subdir", target.subdir),
+					)
+					return nil
+				}
+				return fmt.Errorf("resolving walk root for %q: %w", repo, err)
+			}
+			if resolvedWalk != resolvedTmp && !strings.HasPrefix(resolvedWalk, resolvedTmp+string(os.PathSeparator)) {
+				return fmt.Errorf("subdir %q resolves outside cloned repo %q", target.subdir, repo)
+			}
+
+			err = filepath.WalkDir(resolvedWalk, func(path string, d os.DirEntry, err error) error {
 				if err != nil {
 					return err
 				}
@@ -207,8 +213,8 @@ func (s *githubSource) Harvest(ctx context.Context, sink harvester.Sink) error {
 					return nil
 				}
 
-				// Get relative path to tmpDir
-				relPath, err := filepath.Rel(tmpDir, path)
+				// Get relative path to the resolved clone dir.
+				relPath, err := filepath.Rel(resolvedTmp, path)
 				if err != nil {
 					return fmt.Errorf("getting relative path for %s: %w", path, err)
 				}
@@ -315,6 +321,208 @@ func (s *githubSource) Harvest(ctx context.Context, sink harvester.Sink) error {
 	}
 
 	return nil
+}
+
+func parseRepoTargets(val any) ([]repoTarget, error) {
+	if val == nil {
+		return nil, nil
+	}
+
+	var values []any
+	switch slice := val.(type) {
+	case []string:
+		values = make([]any, len(slice))
+		for i, repo := range slice {
+			values[i] = repo
+		}
+	case []any:
+		values = slice
+	default:
+		return nil, fmt.Errorf("expected slice, got %T", val)
+	}
+
+	targets := make([]repoTarget, 0, len(values))
+	for i, value := range values {
+		var target repoTarget
+		switch item := value.(type) {
+		case string:
+			target.repo = item
+		case map[string]any:
+			repoValue, ok := item["repo"]
+			if !ok {
+				return nil, fmt.Errorf("element at index %d is missing required key 'repo'", i)
+			}
+			var repoOK bool
+			target.repo, repoOK = repoValue.(string)
+			if !repoOK {
+				return nil, fmt.Errorf("element at index %d key 'repo' must be a string, got %T", i, repoValue)
+			}
+			if branchValue, ok := item["branch"]; ok {
+				var branchOK bool
+				target.branch, branchOK = branchValue.(string)
+				if !branchOK {
+					return nil, fmt.Errorf("element at index %d key 'branch' must be a string, got %T", i, branchValue)
+				}
+				if err := validateBranch(target.branch); err != nil {
+					return nil, fmt.Errorf("invalid branch at index %d: %w", i, err)
+				}
+			}
+			if subdirValue, ok := item["subdir"]; ok {
+				var subdirOK bool
+				target.subdir, subdirOK = subdirValue.(string)
+				if !subdirOK {
+					return nil, fmt.Errorf("element at index %d key 'subdir' must be a string, got %T", i, subdirValue)
+				}
+				cleaned, err := validateSubdir(target.subdir)
+				if err != nil {
+					return nil, fmt.Errorf("invalid subdir at index %d: %w", i, err)
+				}
+				target.subdir = cleaned
+			}
+		default:
+			return nil, fmt.Errorf("element at index %d must be a string or map, got %T", i, value)
+		}
+
+		if err := validateRepo(target.repo); err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, nil
+}
+
+func validateRepo(repo string) error {
+	if !repoRegexp.MatchString(repo) {
+		return fmt.Errorf("invalid repo format %q, must match ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo)
+	}
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid repo format %q", repo)
+	}
+	for _, segment := range parts {
+		if segment == "." || segment == ".." {
+			return fmt.Errorf("repo %q contains invalid segment %q", repo, segment)
+		}
+		if strings.HasPrefix(segment, "-") {
+			return fmt.Errorf("repo %q contains segment starting with '-' (flag injection guard)", repo)
+		}
+	}
+	return nil
+}
+
+func validateBranch(branch string) error {
+	if branch == "" {
+		return fmt.Errorf("branch cannot be empty")
+	}
+	if strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("branch %q starts with '-' (flag injection guard)", branch)
+	}
+	if strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") {
+		return fmt.Errorf("branch %q cannot start or end with '/'", branch)
+	}
+	if !refPathRegexp.MatchString(branch) {
+		return fmt.Errorf("branch %q contains invalid characters", branch)
+	}
+	for _, segment := range strings.Split(branch, "/") {
+		if segment == ".." {
+			return fmt.Errorf("branch %q contains invalid '..' segment", branch)
+		}
+	}
+	return nil
+}
+
+func validateSubdir(subdir string) (string, error) {
+	if subdir == "" {
+		return "", fmt.Errorf("subdir cannot be empty")
+	}
+	if filepath.IsAbs(subdir) || strings.HasPrefix(subdir, "/") {
+		return "", fmt.Errorf("subdir %q must be repo-relative", subdir)
+	}
+	if strings.HasPrefix(subdir, "-") {
+		return "", fmt.Errorf("subdir %q starts with '-' (flag injection guard)", subdir)
+	}
+	if !refPathRegexp.MatchString(subdir) {
+		return "", fmt.Errorf("subdir %q contains invalid characters", subdir)
+	}
+	for _, segment := range strings.Split(subdir, "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("subdir %q contains invalid '..' segment", subdir)
+		}
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(subdir))
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) || filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("subdir %q escapes the repo root", subdir)
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(cleaned), "/") {
+		if strings.EqualFold(segment, ".git") {
+			return "", fmt.Errorf("subdir %q contains reserved .git segment", subdir)
+		}
+	}
+	return filepath.ToSlash(cleaned), nil
+}
+
+func cloneRepo(ctx context.Context, target repoTarget, repoURL, tmpDir string) error {
+	args := cloneArgs(target, repoURL, tmpDir, target.subdir != "")
+	stderr, err := runGitClone(ctx, filepath.Dir(tmpDir), args)
+	if err != nil {
+		if target.subdir == "" || !sparseUnsupported(stderr) {
+			return fmt.Errorf("cloning repo %q: %w (stderr: %s)", target.repo, err, stderr)
+		}
+		return cloneWithoutSparse(ctx, target, repoURL, tmpDir)
+	}
+	if target.subdir == "" {
+		return nil
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", tmpDir, "sparse-checkout", "set", "--", target.subdir)
+	var sparseStderr bytes.Buffer
+	cmd.Stderr = &sparseStderr
+	if err := cmd.Run(); err != nil {
+		if sparseUnsupported(sparseStderr.String()) {
+			return cloneWithoutSparse(ctx, target, repoURL, tmpDir)
+		}
+		return fmt.Errorf("setting sparse checkout for repo %q subdir %q: %w (stderr: %s)", target.repo, target.subdir, err, sparseStderr.String())
+	}
+	return nil
+}
+
+func cloneWithoutSparse(ctx context.Context, target repoTarget, repoURL, tmpDir string) error {
+	if err := os.RemoveAll(tmpDir); err != nil {
+		return fmt.Errorf("resetting temp dir for repo %q sparse-checkout fallback: %w", target.repo, err)
+	}
+	stderr, err := runGitClone(ctx, filepath.Dir(tmpDir), cloneArgs(target, repoURL, tmpDir, false))
+	if err != nil {
+		return fmt.Errorf("cloning repo %q without sparse checkout: %w (stderr: %s)", target.repo, err, stderr)
+	}
+	return nil
+}
+
+func cloneArgs(target repoTarget, repoURL, tmpDir string, sparse bool) []string {
+	args := []string{"clone", "--depth", "1"}
+	if sparse {
+		args = append(args, "--filter=blob:none", "--sparse")
+	}
+	if target.branch != "" {
+		args = append(args, "--branch", target.branch, "--single-branch")
+	}
+	return append(args, "--", repoURL, tmpDir)
+}
+
+func runGitClone(ctx context.Context, dir string, args []string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stderr.String(), err
+}
+
+func sparseUnsupported(stderr string) bool {
+	message := strings.ToLower(stderr)
+	return (strings.Contains(message, "unknown option") &&
+		(strings.Contains(message, "sparse") || strings.Contains(message, "filter"))) ||
+		strings.Contains(message, "'sparse-checkout' is not a git command") ||
+		strings.Contains(message, "unknown subcommand 'sparse-checkout'")
 }
 
 func parseStringSlice(val any) ([]string, error) {

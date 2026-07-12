@@ -1,3 +1,4 @@
+// Command engram-harvester runs one-shot document harvests from a YAML manifest.
 package main
 
 import (

@@ -3,6 +3,7 @@ package sources_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -32,6 +33,12 @@ func (s *testSink) Flush(ctx context.Context) error {
 func createLocalRepo(t *testing.T, owner, repo string, files map[string]string) (string, string) {
 	t.Helper()
 	parentDir := t.TempDir()
+	headSHA := createLocalRepoAt(t, parentDir, owner, repo, files)
+	return parentDir, headSHA
+}
+
+func createLocalRepoAt(t *testing.T, parentDir, owner, repo string, files map[string]string) string {
+	t.Helper()
 	repoDir := filepath.Join(parentDir, owner, repo)
 	if err := os.MkdirAll(repoDir, 0755); err != nil {
 		t.Fatalf("failed to create repo dir: %v", err)
@@ -68,7 +75,237 @@ func createLocalRepo(t *testing.T, owner, repo string, files map[string]string) 
 	runGit("commit", "-m", "initial commit")
 	headSHA := runGit("rev-parse", "HEAD")
 
-	return parentDir, headSHA
+	return headSHA
+}
+
+func runGitInRepo(t *testing.T, repoDir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoDir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git %v failed: %v (stderr: %s)", args, err, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String())
+}
+
+func TestGithubReposBranch(t *testing.T) {
+	owner := "testowner"
+	repo := "branchrepo"
+	parentDir, mainSHA := createLocalRepo(t, owner, repo, map[string]string{
+		"README.md": "main branch",
+	})
+	repoDir := filepath.Join(parentDir, owner, repo)
+	runGitInRepo(t, repoDir, "checkout", "-b", "docs")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("docs branch"), 0644); err != nil {
+		t.Fatalf("failed to update README on docs branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "DOCS.md"), []byte("branch-only file"), 0644); err != nil {
+		t.Fatalf("failed to write branch-only file: %v", err)
+	}
+	runGitInRepo(t, repoDir, "add", "README.md", "DOCS.md")
+	runGitInRepo(t, repoDir, "commit", "-m", "docs branch content")
+	docsSHA := runGitInRepo(t, repoDir, "rev-parse", "HEAD")
+
+	cfg := harvester.SourceConfig{Type: "github-repos", Raw: map[string]any{
+		"repos": []any{map[string]any{"repo": owner + "/" + repo, "branch": "docs"}},
+		"files": []string{"*.md"}, "base_url": parentDir,
+	}}
+	src, err := harvester.Build(cfg, harvester.Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatalf("failed to build source: %v", err)
+	}
+	sink := &testSink{}
+	if err := src.Harvest(context.Background(), sink); err != nil {
+		t.Fatalf("Harvest failed: %v", err)
+	}
+	if len(sink.docs) != 2 {
+		t.Fatalf("expected 2 docs from docs branch, got %d", len(sink.docs))
+	}
+	for _, doc := range sink.docs {
+		if doc.SourceVersion != "sha:"+docsSHA {
+			t.Errorf("expected docs branch SHA %q, got %q", docsSHA, doc.SourceVersion)
+		}
+		if doc.SourceVersion == "sha:"+mainSHA {
+			t.Errorf("source version unexpectedly used default branch SHA %q", mainSHA)
+		}
+	}
+	if sink.docs[0].Text != "branch-only file" && sink.docs[1].Text != "branch-only file" {
+		t.Error("branch-only file was not harvested")
+	}
+}
+
+func TestGithubReposSubdir(t *testing.T) {
+	owner := "testowner"
+	repo := "subdirrepo"
+	parentDir, _ := createLocalRepo(t, owner, repo, map[string]string{
+		"docs/reference.md": "reference docs",
+		"docs/guide.md":     "guide docs",
+		"other/private.md":  "outside docs",
+	})
+	cfg := harvester.SourceConfig{Type: "github-repos", Raw: map[string]any{
+		"repos": []any{map[string]any{"repo": owner + "/" + repo, "subdir": "docs"}},
+		"files": []string{"docs/**/*.md"}, "base_url": parentDir,
+	}}
+	src, err := harvester.Build(cfg, harvester.Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatalf("failed to build source: %v", err)
+	}
+	sink := &testSink{}
+	if err := src.Harvest(context.Background(), sink); err != nil {
+		t.Fatalf("Harvest failed: %v", err)
+	}
+	want := map[string]bool{
+		owner + "/" + repo + "/docs/reference.md": true,
+		owner + "/" + repo + "/docs/guide.md":     true,
+	}
+	if len(sink.docs) != len(want) {
+		t.Fatalf("expected %d docs, got %d", len(want), len(sink.docs))
+	}
+	for _, doc := range sink.docs {
+		if !want[doc.ID] {
+			t.Errorf("unexpected doc ID %q", doc.ID)
+		}
+	}
+}
+
+func TestGithubReposSubdirSymlinkCannotEscapeClone(t *testing.T) {
+	owner := "testowner"
+	repo := "symlinkescape"
+	parentDir, _ := createLocalRepo(t, owner, repo, map[string]string{
+		"README.md": "inside repo",
+	})
+	repoDir := filepath.Join(parentDir, owner, repo)
+	outsideDir := t.TempDir()
+	outsideSubdir := filepath.Join(outsideDir, "sub")
+	if err := os.Mkdir(outsideSubdir, 0755); err != nil {
+		t.Fatalf("failed to create outside subdir: %v", err)
+	}
+	const outsideContent = "must not be harvested"
+	if err := os.WriteFile(filepath.Join(outsideSubdir, "outside.md"), []byte(outsideContent), 0644); err != nil {
+		t.Fatalf("failed to write outside file: %v", err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(repoDir, "link")); err != nil {
+		t.Fatalf("failed to create escaping symlink: %v", err)
+	}
+	runGitInRepo(t, repoDir, "add", "link")
+	runGitInRepo(t, repoDir, "commit", "-m", "add escaping symlink")
+
+	cfg := harvester.SourceConfig{Type: "github-repos", Raw: map[string]any{
+		"repos":    []any{map[string]any{"repo": owner + "/" + repo, "subdir": "link/sub"}},
+		"files":    []string{"**/*.md"},
+		"base_url": parentDir,
+	}}
+	src, err := harvester.Build(cfg, harvester.Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatalf("failed to build source: %v", err)
+	}
+	sink := &testSink{}
+	err = src.Harvest(context.Background(), sink)
+	if err == nil {
+		t.Fatal("expected escaping subdir symlink to fail harvest")
+	}
+	if !strings.Contains(err.Error(), "subdir") || !strings.Contains(err.Error(), "outside") {
+		t.Errorf("expected clear subdir escape error, got %v", err)
+	}
+	for _, doc := range sink.docs {
+		if doc.Text == outsideContent {
+			t.Fatalf("harvest ingested file outside clone: %#v", doc)
+		}
+	}
+}
+
+func TestGithubReposRejectsGitMetadataSubdir(t *testing.T) {
+	for _, subdir := range []string{".git", ".git/config", "docs/.GiT/config"} {
+		t.Run(subdir, func(t *testing.T) {
+			cfg := harvester.SourceConfig{Type: "github-repos", Raw: map[string]any{
+				"repos":    []any{map[string]any{"repo": "owner/repo", "subdir": subdir}},
+				"base_url": filepath.Join(t.TempDir(), "must-not-be-cloned"),
+			}}
+			_, err := harvester.Build(cfg, harvester.Deps{Logger: slog.Default()})
+			if err == nil {
+				t.Fatalf("expected subdir %q to be rejected", subdir)
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), ".git") {
+				t.Errorf("expected .git validation error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestGithubReposRejectsInvalidBranchAndSubdir(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value string
+	}{
+		{name: "branch flag", field: "branch", value: "-x"},
+		{name: "branch shell text", field: "branch", value: "main;rm -rf /"},
+		{name: "branch parent segment", field: "branch", value: ".."},
+		{name: "branch space", field: "branch", value: "a b"},
+		{name: "absolute subdir", field: "subdir", value: "/etc"},
+		{name: "parent subdir", field: "subdir", value: "../secrets"},
+		{name: "subdir flag", field: "subdir", value: "-flag"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "git-side-effect")
+			target := map[string]any{"repo": "owner/repo", tc.field: tc.value}
+			cfg := harvester.SourceConfig{Type: "github-repos", Raw: map[string]any{
+				"repos":    []any{target},
+				"base_url": filepath.Dir(marker),
+			}}
+			_, err := harvester.Build(cfg, harvester.Deps{Logger: slog.Default()})
+			if err == nil {
+				t.Fatalf("expected %s %q to be rejected", tc.field, tc.value)
+			}
+			if !strings.Contains(err.Error(), "invalid "+tc.field) {
+				t.Errorf("expected invalid %s error, got %v", tc.field, err)
+			}
+			if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+				t.Errorf("validation produced side effect at %q", marker)
+			}
+		})
+	}
+}
+
+func TestGithubReposMixedStringAndMapTargets(t *testing.T) {
+	parentDir := t.TempDir()
+	createLocalRepoAt(t, parentDir, "owner", "plain", map[string]string{"README.md": "plain"})
+	createLocalRepoAt(t, parentDir, "owner", "mapped", map[string]string{"README.md": "mapped"})
+	manifest, err := harvester.LoadManifest([]byte(fmt.Sprintf(`
+collections:
+  - name: docs
+    sources:
+      - type: github-repos
+        repos:
+          - owner/plain
+          - { repo: owner/mapped }
+        base_url: %q
+`, parentDir)))
+	if err != nil {
+		t.Fatalf("failed to parse mixed target manifest: %v", err)
+	}
+	cfg := manifest.Collections[0].Sources[0]
+	src, err := harvester.Build(cfg, harvester.Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatalf("failed to build mixed targets: %v", err)
+	}
+	sink := &testSink{}
+	if err := src.Harvest(context.Background(), sink); err != nil {
+		t.Fatalf("Harvest failed: %v", err)
+	}
+	if len(sink.docs) != 2 {
+		t.Fatalf("expected 2 docs, got %d", len(sink.docs))
+	}
+	want := map[string]bool{"owner/plain/README.md": true, "owner/mapped/README.md": true}
+	for _, doc := range sink.docs {
+		if !want[doc.ID] {
+			t.Errorf("unexpected doc ID %q", doc.ID)
+		}
+	}
 }
 
 func TestDW_4_3_SecurityValidation(t *testing.T) {
