@@ -8,64 +8,85 @@ Engram's server (`engram-server`) itself is entirely passive; it handles storage
 
 The harvester is configured using a YAML manifest file. A manifest maps a set of `collections` to their respective document `sources`.
 
+Every collection `name` must already be registered in engram (via
+`knowledge_create_collection`) with a mapping that covers the fields a source
+emits — the knowledge index is `dynamic:strict`, so an unmapped field is
+rejected at ingest. arXiv sources emit `categories, published_date,
+update_date, doi, journal_ref, comments, authors`; `github-repos` emits
+`repo, path`; `web-crawl` emits `url`.
+
 ### Example `sources.yaml`
 
 ```yaml
 collections:
-  - name: general-knowledge
+  - name: arxiv                       # text_field: abstract
     sources:
-      - type: arxiv-kaggle
-        path: "/data/arxiv-metadata-oai-snapshot.json.gz"
-        filter: "cs.*"
-      - type: arxiv-oaipmh
-        endpoint: "http://export.arxiv.org/oai2"
-        set: "cs"
-        from: "2026-07-01"
+      # One-time backfill from the Kaggle metadata dump (download separately).
+      - { type: arxiv-kaggle, path: "/data/arxiv-metadata-oai-snapshot.json.gz", filter: "cs.*" }
+      # Nightly incremental via arXiv OAI-PMH (from = now - lookback).
+      - { type: arxiv-oaipmh, set: "cs", lookback: "48h" }
+
+  - name: docs                        # text_field: body ; keyword fields: repo, path
+    sources:
+      # NOTE: list EVERY repo for one collection in a SINGLE github-repos entry
+      # (see "Multi-repo & sweep scope" below) — one run, one sweep.
       - type: github-repos
-        owner: "google"
-        repo: "engram"
-        branch: "main"
-        includes:
-          - "*.md"
-          - "*.go"
-      - type: web-crawl
-        seeds:
-          - "https://example.com"
-        max_depth: 3
-        max_pages: 1000
-        delay: "1s"
+        repos: ["facebook/react-native-website", "cloudflare/cloudflare-docs"]
+        files: ["docs/**/*.md", "src/content/docs/**/*.mdx"]
+
+  - name: docs-sites                  # text_field: body ; keyword field: url
+    sources:
+      - { type: web-crawl, seeds: ["https://docs.astral.sh/uv/"], max_pages: 500 }
 ```
 
 ### Source Type Config Keys
 
-1. **`arxiv-kaggle`** (Full Harvest)
-   - Parses local arXiv metadata dump files.
-   - Config keys:
-     - `path` (string, required): Absolute or relative path to the `.json.gz` or `.json` metadata file.
-     - `filter` (string, optional): Regex matching category names (defaults to `cs.*`).
+1. **`arxiv-kaggle`** (Full Harvest — sweeps)
+   - Streams a local gzipped arXiv metadata dump (constant memory). No PDFs.
+   - `path` (string, **required**): path to the `.json.gz` metadata dump.
+   - `filter` (string, optional, default `cs.*`): category prefix filter.
+   - `dump_date` (string, optional): provenance date; defaults to the file mtime.
 
-2. **`arxiv-oaipmh`** (Incremental)
-   - Harvests metadata dynamically via the arXiv OAI-PMH HTTP interface.
-   - Config keys:
-     - `endpoint` (string, required): Base URL of the OAI-PMH service.
-     - `set` (string, optional): The arXiv category/set (e.g. `cs`).
-     - `from` (string, optional): Start date in `YYYY-MM-DD` format.
+2. **`arxiv-oaipmh`** (Incremental — additive, does NOT sweep)
+   - Pulls new/updated papers from the arXiv OAI-PMH endpoint. `status="deleted"`
+     records are logged and skipped (the API has no per-doc-id delete — a
+     withdrawn paper is not removed in real time). No PDFs.
+   - `base_url` (string, optional, default `https://oaipmh.arxiv.org/oai`).
+   - `set` (string, optional, default `cs`).
+   - `metadata_prefix` (string, optional, default `arXiv`).
+   - `lookback` (Go duration, optional, default `48h`): window is `from = now - lookback`
+     (date-granular). The overlap is idempotent (upsert-by-id), so no cursor is kept.
 
-3. **`github-repos`** (Full Harvest)
-   - Clones a remote repository and indexes text files.
-   - Config keys:
-     - `owner` (string, required): GitHub repository owner.
-     - `repo` (string, required): Repository name.
-     - `branch` (string, optional): Branch to index (defaults to the default branch).
-     - `includes` (array of strings, optional): Glob patterns for files to include.
+3. **`github-repos`** (Full Harvest — sweeps)
+   - Shallow-clones each repo via the `git` CLI and indexes matched files, one
+     doc per file (`id = owner/repo/path`, `source_version = sha:<HEAD>`). Only
+     `https`/`http` transports; symlinks are skipped.
+   - `repos` (array of `owner/repo`, **required**).
+   - `files` (array of globs, optional, default `["README.md"]`): supports `**`.
+   - `base_url` (string, optional, default `https://github.com/`).
+   - `max_file_bytes` (int, optional, default `1048576`): larger/binary files skipped.
 
-4. **`web-crawl`** (Full Harvest)
-   - Crawls a target site's HTML pages.
-   - Config keys:
-     - `seeds` (array of strings, required): Entry point URLs.
-     - `max_depth` (int, optional): Maximum link depth.
-     - `max_pages` (int, optional): Maximum number of pages to download.
-     - `delay` (duration, optional): Request spacing/delay (e.g. `1s`).
+4. **`web-crawl`** (Full Harvest — sweeps)
+   - Bounded, same-host BFS crawl; extracts page text; honors `robots.txt`.
+     SSRF-guarded (blocks private/loopback/link-local IPs at dial time).
+   - `seeds` (array of URLs, **required**).
+   - `max_pages` (int, optional, default `100`).
+   - `max_page_bytes` (int, optional, default `1048576`).
+   - `delay` (Go duration, optional, default `200ms`): per-host politeness.
+   - `max_frontier` (int, optional, default `10 × max_pages`): hard cap on discovered URLs.
+   - `user_agent` (string, optional).
+
+### Multi-repo & sweep scope (important)
+
+A Full-Harvest source's mark-and-sweep deletes every row for
+`(collection, source_type)` that the current run did **not** re-ingest. All
+rows written by a given source type share one sweep scope, so **every repo /
+seed feeding one collection under one source type must be harvested in a single
+manifest/run**. Harvesting `repoA` and `repoB` as two separate `engram-harvester`
+invocations (each `source=github-repos`) makes the second run's sweep delete the
+first run's documents. Put them in one `github-repos` entry (`repos: [repoA, repoB]`)
+so a single run ingests both and the sweep keeps both. (Per-repo sweep scoping is
+a possible future enhancement.)
 
 ## Running the Harvester
 
