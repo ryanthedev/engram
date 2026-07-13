@@ -347,3 +347,10 @@ Summary: `engram-graph-rebuild --tenant <id> --confirm` drops and recreates the 
 - [x] Committed
 Commit: (see git log)
 Summary: Each retrieval tier now declares its filterable fields, and predicates are routed only to tiers that own them — the tier-zeroing trap is structurally impossible. `retrieval.Filter` gained `Predicates` and `Sources`; registration is name-carrying (`RegisterTier(name, src)` / `RegisterPostHook(name, h)`) since neither interface exposed a name. `extractor_version` is now projected on semantic hits. Byte-identical query body when no filters are passed (goldens captured pre-change, independently re-derived by two reviewers). OPEN QUESTION for Phase 5: registered tier sources (e.g. `experience`) receive NO predicates — with `Sources: nil` and a `kind` filter, experience hits are silently unconstrained. Same shape as the trap this phase killed; needs an explicit decision when the MCP surface lands.
+
+### Phase 5: LLM-facing API surface — proto + flat MCP schema (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed (3-sample majority, 3/3 PASS)
+- [x] Committed
+Commit: (see git log)
+Summary: `memory_search` now accepts flat named filter params (kind, subject, predicate, object, extractor_version, since, until, include_superseded, sources), validated at the MCP/gRPC barricade and compiled to internal predicates at one site. `since`/`until` use a tier-neutral `time` alias (episodic→occurred_at, semantic→valid_at). `valid_only` removed from the proto in favor of `include_superseded`. Carry-forward resolved: a filtered search excludes sources that declare no filterable fields, rather than letting them return unconstrained hits. Phase 6 still needs the `expanded` block.

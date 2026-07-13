@@ -293,16 +293,23 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	if err != nil {
 		return toolError(err.Error()), nil
 	}
-	hits, err := s.backend.Search(ctx, query, k, filter)
+	res, err := s.backend.Search(ctx, query, k, filter)
 	if err != nil {
 		return toolError(fmt.Sprintf("search failed: %v", err)), nil
 	}
+	// Matched hits are packed (and spilled) FIRST, against the whole budget and
+	// exactly as they were before expansions had a block of their own; only then
+	// do graph expansions get appended into whatever budget is left (DW-6.4).
+	// So an expansion can never evict a match, and is the first thing dropped
+	// under pressure. Zero expansions leaves the block absent entirely (DW-6.3).
+	//
 	// memory_search renders the budget-packed result as compact lines: the
 	// text block is the compact-line form the agent reads; structuredContent
 	// carries the rendered envelope. (knowledge_search keeps the raw
 	// structured JSON — its docs have no memory_read drill-down, so it never
 	// truncates a body to a gist.)
-	result := packAndSpill(hits, memoryFacetFields, ToolSearch)
+	result := packAndSpill(res.Hits, memoryFacetFields, ToolSearch)
+	result = packExpanded(result, res.Expanded, searchByteBudget())
 	rendered := renderSearchResult(result)
 	return toolResultWithText(rendered, compactLines(rendered)), nil
 }

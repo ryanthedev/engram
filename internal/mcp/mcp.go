@@ -39,6 +39,24 @@ type Hit struct {
 	Fields string  `json:"fields_json,omitempty"`
 }
 
+// SearchResult is one memory_search answer in two labeled blocks. Hits are the
+// query's MATCHED hits — at most k of them, and never a graph expansion. Expanded
+// carries the graph expansions reached by traversing out of those matched hits:
+// bonus context that is NOT counted against k, so an expansion can neither evict
+// a match nor inflate the count the caller asked for.
+//
+// They are two fields rather than two positional return values precisely because
+// a caller cannot transpose them by accident — and because every expanded hit is
+// a per-call token cost, so it must be delimited and independently budgetable,
+// never smuggled into Hits.
+//
+// Expanded is nil (not empty) whenever expansion is off, finds nothing, or the
+// caller's Sources excluded "graph" — so an absent block is absent, not empty.
+type SearchResult struct {
+	Hits     []Hit `json:"hits"`
+	Expanded []Hit `json:"expanded,omitempty"`
+}
+
 // ReadResult is one record's full content, surfaced through the memory_read
 // tool — the deliberate drill-down for an (id, source) pair a memory_search
 // compact line exposed. A full read spends the caller's context, so it is a
@@ -172,9 +190,11 @@ type SearchFilter struct {
 type Backend interface {
 	// Ingest appends one episodic event and returns its storage id.
 	Ingest(ctx context.Context, eventID, text, source string) (id string, err error)
-	// Search runs one hybrid query under f and returns fused hits. f is
-	// validated at the tool barricade before it arrives here.
-	Search(ctx context.Context, query string, k int, f SearchFilter) ([]Hit, error)
+	// Search runs one hybrid query under f and returns the matched hits and
+	// the graph expansions in separate blocks (see SearchResult): matched hits
+	// are capped at k, expansions are not counted against it. f is validated at
+	// the tool barricade before it arrives here.
+	Search(ctx context.Context, query string, k int, f SearchFilter) (SearchResult, error)
 	// Read fetches one record's full content by the (id, source) pair a
 	// search hit exposed. Authorization is fail-closed server-side: an
 	// unknown, cross-tenant, mismatched, or denied id errors NOT_FOUND.

@@ -269,21 +269,33 @@ func runSearch(ctx context.Context, args []string, env Env, out io.Writer) error
 	defer client.Close()
 	// The CLI is an unfiltered search: a zero SearchFilter is exactly the query
 	// it issued before filters existed.
-	hits, err := client.Search(ctx, query, *k, mcp.SearchFilter{})
+	res, err := client.Search(ctx, query, *k, mcp.SearchFilter{})
 	if err != nil {
 		return err
 	}
-	if len(hits) == 0 {
+	if len(res.Hits) == 0 && len(res.Expanded) == 0 {
 		fmt.Fprintln(out, "no hits")
 		return nil
 	}
+	printHits(out, res.Hits)
+	// Graph expansions print below their own header, never mixed into the
+	// matched hits: they did not match the query, and -k did not ask for them.
+	if len(res.Expanded) > 0 {
+		fmt.Fprintf(out, "\nexpanded (%d graph hit(s) reached from the matches above; not counted against -k)\n", len(res.Expanded))
+		printHits(out, res.Expanded)
+	}
+	return nil
+}
+
+// printHits writes one block of search hits, one hit per line plus its raw
+// fields.
+func printHits(out io.Writer, hits []mcp.Hit) {
 	for _, h := range hits {
 		fmt.Fprintf(out, "%.4f  %-10s  %s\n", h.Score, h.Source, h.ID)
 		if h.Fields != "" {
 			fmt.Fprintf(out, "        %s\n", h.Fields)
 		}
 	}
-	return nil
 }
 
 func runStatus(ctx context.Context, args []string, env Env, out io.Writer) error {

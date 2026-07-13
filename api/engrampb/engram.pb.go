@@ -486,7 +486,7 @@ type Hit struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Score float64                `protobuf:"fixed64,2,opt,name=score,proto3" json:"score,omitempty"`
-	// Source index tier ("episodic" | "semantic").
+	// Source index tier ("episodic" | "semantic" | "graph").
 	Source string `protobuf:"bytes,3,opt,name=source,proto3" json:"source,omitempty"`
 	// Stored document rendered as JSON.
 	FieldsJson    string `protobuf:"bytes,4,opt,name=fields_json,json=fieldsJson,proto3" json:"fields_json,omitempty"`
@@ -552,10 +552,20 @@ func (x *Hit) GetFieldsJson() string {
 	return ""
 }
 
-// SearchResponse is the single fused, ranked list.
+// SearchResponse carries the query's matched hits and, separately, the graph
+// expansions that ride along beside them. The two blocks are never merged:
+// `k` means k for MATCHED hits, and an expansion neither evicts a match nor
+// inflates the count the caller asked for.
 type SearchResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hits          []*Hit                 `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The ranked matched hits: at most k of them, and never a graph expansion.
+	Hits []*Hit `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
+	// Graph expansions reached by traversing edges out of the matched hits
+	// (source == "graph"). Bonus context, NOT counted against k, and empty
+	// whenever expansion is disabled, finds nothing, or "graph" is excluded
+	// from the request's sources. Every expansion is a per-call token cost on
+	// the caller, so it is delimited here rather than smuggled into hits.
+	Expanded      []*Hit `protobuf:"bytes,2,rep,name=expanded,proto3" json:"expanded,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -593,6 +603,13 @@ func (*SearchResponse) Descriptor() ([]byte, []int) {
 func (x *SearchResponse) GetHits() []*Hit {
 	if x != nil {
 		return x.Hits
+	}
+	return nil
+}
+
+func (x *SearchResponse) GetExpanded() []*Hit {
+	if x != nil {
+		return x.Expanded
 	}
 	return nil
 }
@@ -2861,9 +2878,10 @@ const file_engram_proto_rawDesc = "" +
 	"\x05score\x18\x02 \x01(\x01R\x05score\x12\x16\n" +
 	"\x06source\x18\x03 \x01(\tR\x06source\x12\x1f\n" +
 	"\vfields_json\x18\x04 \x01(\tR\n" +
-	"fieldsJson\"4\n" +
+	"fieldsJson\"`\n" +
 	"\x0eSearchResponse\x12\"\n" +
-	"\x04hits\x18\x01 \x03(\v2\x0e.engram.v1.HitR\x04hits\"\x1e\n" +
+	"\x04hits\x18\x01 \x03(\v2\x0e.engram.v1.HitR\x04hits\x12*\n" +
+	"\bexpanded\x18\x02 \x03(\v2\x0e.engram.v1.HitR\bexpanded\"\x1e\n" +
 	"\fAuditRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x9b\x02\n" +
 	"\n" +
@@ -3137,74 +3155,75 @@ var file_engram_proto_depIdxs = []int32{
 	41, // 1: engram.v1.SearchRequest.since:type_name -> google.protobuf.Timestamp
 	41, // 2: engram.v1.SearchRequest.until:type_name -> google.protobuf.Timestamp
 	5,  // 3: engram.v1.SearchResponse.hits:type_name -> engram.v1.Hit
-	41, // 4: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
-	41, // 5: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
-	41, // 6: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
-	41, // 7: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
-	41, // 8: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
-	8,  // 9: engram.v1.AuditResponse.provenance:type_name -> engram.v1.Provenance
-	9,  // 10: engram.v1.AuditResponse.versions:type_name -> engram.v1.FactVersion
-	41, // 11: engram.v1.EpisodicRecord.occurred_at:type_name -> google.protobuf.Timestamp
-	41, // 12: engram.v1.EpisodicRecord.created_at:type_name -> google.protobuf.Timestamp
-	12, // 13: engram.v1.ReadResponse.episodic:type_name -> engram.v1.EpisodicRecord
-	9,  // 14: engram.v1.ReadResponse.fact:type_name -> engram.v1.FactVersion
-	8,  // 15: engram.v1.ReadResponse.provenance:type_name -> engram.v1.Provenance
-	9,  // 16: engram.v1.ReadResponse.versions:type_name -> engram.v1.FactVersion
-	41, // 17: engram.v1.ExportEntity.valid_at:type_name -> google.protobuf.Timestamp
-	41, // 18: engram.v1.ExportEntity.created_at:type_name -> google.protobuf.Timestamp
-	41, // 19: engram.v1.ExportEdge.valid_at:type_name -> google.protobuf.Timestamp
-	41, // 20: engram.v1.ExportEdge.created_at:type_name -> google.protobuf.Timestamp
-	15, // 21: engram.v1.ExportResponse.entities:type_name -> engram.v1.ExportEntity
-	16, // 22: engram.v1.ExportResponse.edges:type_name -> engram.v1.ExportEdge
-	42, // 23: engram.v1.Range.gte:type_name -> google.protobuf.Value
-	42, // 24: engram.v1.Range.lte:type_name -> google.protobuf.Value
-	0,  // 25: engram.v1.Predicate.op:type_name -> engram.v1.PredicateOp
-	42, // 26: engram.v1.Predicate.scalar:type_name -> google.protobuf.Value
-	18, // 27: engram.v1.Predicate.range:type_name -> engram.v1.Range
-	1,  // 28: engram.v1.SortKey.order:type_name -> engram.v1.SortOrder
-	40, // 29: engram.v1.CollectionSpec.mappings:type_name -> engram.v1.CollectionSpec.MappingsEntry
-	22, // 30: engram.v1.CollectionSpec.access:type_name -> engram.v1.AccessPolicy
-	43, // 31: engram.v1.KnowledgeDocument.fields:type_name -> google.protobuf.Struct
-	24, // 32: engram.v1.KnowledgeIngestRequest.docs:type_name -> engram.v1.KnowledgeDocument
-	19, // 33: engram.v1.KnowledgeSearchRequest.filters:type_name -> engram.v1.Predicate
-	20, // 34: engram.v1.KnowledgeSearchRequest.sort:type_name -> engram.v1.SortKey
-	5,  // 35: engram.v1.KnowledgeSearchResponse.hits:type_name -> engram.v1.Hit
-	23, // 36: engram.v1.CollectionInfo.spec:type_name -> engram.v1.CollectionSpec
-	41, // 37: engram.v1.CollectionInfo.newest_harvested_at:type_name -> google.protobuf.Timestamp
-	41, // 38: engram.v1.CollectionInfo.newest_doc_date:type_name -> google.protobuf.Timestamp
-	30, // 39: engram.v1.KnowledgeCollectionsResponse.collections:type_name -> engram.v1.CollectionInfo
-	23, // 40: engram.v1.CreateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
-	23, // 41: engram.v1.UpdateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
-	21, // 42: engram.v1.CollectionSpec.MappingsEntry.value:type_name -> engram.v1.FieldSpec
-	2,  // 43: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
-	4,  // 44: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
-	38, // 45: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
-	7,  // 46: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
-	11, // 47: engram.v1.Engram.Read:input_type -> engram.v1.ReadRequest
-	14, // 48: engram.v1.Engram.Export:input_type -> engram.v1.ExportRequest
-	25, // 49: engram.v1.Engram.KnowledgeIngest:input_type -> engram.v1.KnowledgeIngestRequest
-	27, // 50: engram.v1.Engram.KnowledgeSearch:input_type -> engram.v1.KnowledgeSearchRequest
-	29, // 51: engram.v1.Engram.KnowledgeCollections:input_type -> engram.v1.KnowledgeCollectionsRequest
-	32, // 52: engram.v1.Engram.KnowledgeDelete:input_type -> engram.v1.KnowledgeDeleteRequest
-	34, // 53: engram.v1.Engram.CreateCollection:input_type -> engram.v1.CreateCollectionRequest
-	36, // 54: engram.v1.Engram.UpdateCollection:input_type -> engram.v1.UpdateCollectionRequest
-	3,  // 55: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
-	6,  // 56: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
-	39, // 57: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
-	10, // 58: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
-	13, // 59: engram.v1.Engram.Read:output_type -> engram.v1.ReadResponse
-	17, // 60: engram.v1.Engram.Export:output_type -> engram.v1.ExportResponse
-	26, // 61: engram.v1.Engram.KnowledgeIngest:output_type -> engram.v1.KnowledgeIngestResponse
-	28, // 62: engram.v1.Engram.KnowledgeSearch:output_type -> engram.v1.KnowledgeSearchResponse
-	31, // 63: engram.v1.Engram.KnowledgeCollections:output_type -> engram.v1.KnowledgeCollectionsResponse
-	33, // 64: engram.v1.Engram.KnowledgeDelete:output_type -> engram.v1.KnowledgeDeleteResponse
-	35, // 65: engram.v1.Engram.CreateCollection:output_type -> engram.v1.CreateCollectionResponse
-	37, // 66: engram.v1.Engram.UpdateCollection:output_type -> engram.v1.UpdateCollectionResponse
-	55, // [55:67] is the sub-list for method output_type
-	43, // [43:55] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	5,  // 4: engram.v1.SearchResponse.expanded:type_name -> engram.v1.Hit
+	41, // 5: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
+	41, // 6: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
+	41, // 7: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
+	41, // 8: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
+	41, // 9: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
+	8,  // 10: engram.v1.AuditResponse.provenance:type_name -> engram.v1.Provenance
+	9,  // 11: engram.v1.AuditResponse.versions:type_name -> engram.v1.FactVersion
+	41, // 12: engram.v1.EpisodicRecord.occurred_at:type_name -> google.protobuf.Timestamp
+	41, // 13: engram.v1.EpisodicRecord.created_at:type_name -> google.protobuf.Timestamp
+	12, // 14: engram.v1.ReadResponse.episodic:type_name -> engram.v1.EpisodicRecord
+	9,  // 15: engram.v1.ReadResponse.fact:type_name -> engram.v1.FactVersion
+	8,  // 16: engram.v1.ReadResponse.provenance:type_name -> engram.v1.Provenance
+	9,  // 17: engram.v1.ReadResponse.versions:type_name -> engram.v1.FactVersion
+	41, // 18: engram.v1.ExportEntity.valid_at:type_name -> google.protobuf.Timestamp
+	41, // 19: engram.v1.ExportEntity.created_at:type_name -> google.protobuf.Timestamp
+	41, // 20: engram.v1.ExportEdge.valid_at:type_name -> google.protobuf.Timestamp
+	41, // 21: engram.v1.ExportEdge.created_at:type_name -> google.protobuf.Timestamp
+	15, // 22: engram.v1.ExportResponse.entities:type_name -> engram.v1.ExportEntity
+	16, // 23: engram.v1.ExportResponse.edges:type_name -> engram.v1.ExportEdge
+	42, // 24: engram.v1.Range.gte:type_name -> google.protobuf.Value
+	42, // 25: engram.v1.Range.lte:type_name -> google.protobuf.Value
+	0,  // 26: engram.v1.Predicate.op:type_name -> engram.v1.PredicateOp
+	42, // 27: engram.v1.Predicate.scalar:type_name -> google.protobuf.Value
+	18, // 28: engram.v1.Predicate.range:type_name -> engram.v1.Range
+	1,  // 29: engram.v1.SortKey.order:type_name -> engram.v1.SortOrder
+	40, // 30: engram.v1.CollectionSpec.mappings:type_name -> engram.v1.CollectionSpec.MappingsEntry
+	22, // 31: engram.v1.CollectionSpec.access:type_name -> engram.v1.AccessPolicy
+	43, // 32: engram.v1.KnowledgeDocument.fields:type_name -> google.protobuf.Struct
+	24, // 33: engram.v1.KnowledgeIngestRequest.docs:type_name -> engram.v1.KnowledgeDocument
+	19, // 34: engram.v1.KnowledgeSearchRequest.filters:type_name -> engram.v1.Predicate
+	20, // 35: engram.v1.KnowledgeSearchRequest.sort:type_name -> engram.v1.SortKey
+	5,  // 36: engram.v1.KnowledgeSearchResponse.hits:type_name -> engram.v1.Hit
+	23, // 37: engram.v1.CollectionInfo.spec:type_name -> engram.v1.CollectionSpec
+	41, // 38: engram.v1.CollectionInfo.newest_harvested_at:type_name -> google.protobuf.Timestamp
+	41, // 39: engram.v1.CollectionInfo.newest_doc_date:type_name -> google.protobuf.Timestamp
+	30, // 40: engram.v1.KnowledgeCollectionsResponse.collections:type_name -> engram.v1.CollectionInfo
+	23, // 41: engram.v1.CreateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
+	23, // 42: engram.v1.UpdateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
+	21, // 43: engram.v1.CollectionSpec.MappingsEntry.value:type_name -> engram.v1.FieldSpec
+	2,  // 44: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
+	4,  // 45: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
+	38, // 46: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
+	7,  // 47: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
+	11, // 48: engram.v1.Engram.Read:input_type -> engram.v1.ReadRequest
+	14, // 49: engram.v1.Engram.Export:input_type -> engram.v1.ExportRequest
+	25, // 50: engram.v1.Engram.KnowledgeIngest:input_type -> engram.v1.KnowledgeIngestRequest
+	27, // 51: engram.v1.Engram.KnowledgeSearch:input_type -> engram.v1.KnowledgeSearchRequest
+	29, // 52: engram.v1.Engram.KnowledgeCollections:input_type -> engram.v1.KnowledgeCollectionsRequest
+	32, // 53: engram.v1.Engram.KnowledgeDelete:input_type -> engram.v1.KnowledgeDeleteRequest
+	34, // 54: engram.v1.Engram.CreateCollection:input_type -> engram.v1.CreateCollectionRequest
+	36, // 55: engram.v1.Engram.UpdateCollection:input_type -> engram.v1.UpdateCollectionRequest
+	3,  // 56: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
+	6,  // 57: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
+	39, // 58: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
+	10, // 59: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
+	13, // 60: engram.v1.Engram.Read:output_type -> engram.v1.ReadResponse
+	17, // 61: engram.v1.Engram.Export:output_type -> engram.v1.ExportResponse
+	26, // 62: engram.v1.Engram.KnowledgeIngest:output_type -> engram.v1.KnowledgeIngestResponse
+	28, // 63: engram.v1.Engram.KnowledgeSearch:output_type -> engram.v1.KnowledgeSearchResponse
+	31, // 64: engram.v1.Engram.KnowledgeCollections:output_type -> engram.v1.KnowledgeCollectionsResponse
+	33, // 65: engram.v1.Engram.KnowledgeDelete:output_type -> engram.v1.KnowledgeDeleteResponse
+	35, // 66: engram.v1.Engram.CreateCollection:output_type -> engram.v1.CreateCollectionResponse
+	37, // 67: engram.v1.Engram.UpdateCollection:output_type -> engram.v1.UpdateCollectionResponse
+	56, // [56:68] is the sub-list for method output_type
+	44, // [44:56] is the sub-list for method input_type
+	44, // [44:44] is the sub-list for extension type_name
+	44, // [44:44] is the sub-list for extension extendee
+	0,  // [0:44] is the sub-list for field type_name
 }
 
 func init() { file_engram_proto_init() }

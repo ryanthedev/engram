@@ -20,6 +20,9 @@ type fakeBackend struct {
 	searchCalls int
 	lastFilter  SearchFilter
 	lastK       int
+	// expanded, when set, is returned as the graph-expansion block beside the
+	// matched hits (Phase 6). Zero value = no expansions, the common case.
+	expanded []Hit
 }
 
 func newFakeBackend() *fakeBackend { return &fakeBackend{ingested: map[string]string{}} }
@@ -29,7 +32,7 @@ func (b *fakeBackend) Ingest(_ context.Context, eventID, text, _ string) (string
 	return "ep-" + eventID, nil
 }
 
-func (b *fakeBackend) Search(_ context.Context, query string, k int, f SearchFilter) ([]Hit, error) {
+func (b *fakeBackend) Search(_ context.Context, query string, k int, f SearchFilter) (SearchResult, error) {
 	b.searchCalls++
 	b.lastFilter, b.lastK = f, k
 	var hits []Hit
@@ -38,7 +41,9 @@ func (b *fakeBackend) Search(_ context.Context, query string, k int, f SearchFil
 			hits = append(hits, Hit{ID: "ep-" + id, Score: 1.0, Source: "episodic", Fields: text})
 		}
 	}
-	return hits, nil
+	// No expansions: this fake serves only the episodic tier, so `expanded`
+	// stays absent — the common case (DW-6.3).
+	return SearchResult{Hits: hits, Expanded: b.expanded}, nil
 }
 
 // Read mirrors the server's fail-closed contract: only an exact (id, source)

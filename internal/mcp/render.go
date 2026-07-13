@@ -43,13 +43,17 @@ type renderedHit struct {
 // renderedResult is the rendered memory_search envelope: mirrors
 // searchResult's shape and its omitted/omitted_facets/hint/overflow_path
 // gating (present only when hits were actually left out), but with hits
-// rendered to their compact-line form.
+// rendered to their compact-line form. Expanded mirrors the same gating: the
+// graph expansions that rode along beside the matched hits, present only when
+// there are any (DW-6.3) and never merged into Hits (DW-6.2).
 type renderedResult struct {
-	Hits          []renderedHit     `json:"hits"`
-	Omitted       int               `json:"omitted,omitempty"`
-	OmittedFacets map[string]string `json:"omitted_facets,omitempty"`
-	Hint          string            `json:"hint,omitempty"`
-	OverflowPath  string            `json:"overflow_path,omitempty"`
+	Hits            []renderedHit     `json:"hits"`
+	Omitted         int               `json:"omitted,omitempty"`
+	OmittedFacets   map[string]string `json:"omitted_facets,omitempty"`
+	Hint            string            `json:"hint,omitempty"`
+	OverflowPath    string            `json:"overflow_path,omitempty"`
+	Expanded        []renderedHit     `json:"expanded,omitempty"`
+	ExpandedOmitted int               `json:"expanded_omitted,omitempty"`
 }
 
 // renderSearchResult converts a packed searchResult into its rendered form.
@@ -58,17 +62,28 @@ type renderedResult struct {
 // original Hit slice (and, upstream, whatever engramclient/gRPC decoded)
 // stays byte-identical after this call.
 func renderSearchResult(result searchResult) renderedResult {
-	hits := make([]renderedHit, len(result.Hits))
-	for i, h := range result.Hits {
-		hits[i] = renderHit(h)
-	}
 	return renderedResult{
-		Hits:          hits,
-		Omitted:       result.Omitted,
-		OmittedFacets: result.OmittedFacets,
-		Hint:          result.Hint,
-		OverflowPath:  result.OverflowPath,
+		Hits:            renderHits(result.Hits),
+		Omitted:         result.Omitted,
+		OmittedFacets:   result.OmittedFacets,
+		Hint:            result.Hint,
+		OverflowPath:    result.OverflowPath,
+		Expanded:        renderHits(result.Expanded),
+		ExpandedOmitted: result.ExpandedOmitted,
 	}
+}
+
+// renderHits renders one block of hits, always returning a non-nil slice so an
+// empty matched block still marshals as `"hits": []` (never `null`) exactly as
+// it did before there was a second block. The `expanded` block needs no such
+// care: its omitempty tag drops it whenever it is zero-LENGTH, nil or not
+// (DW-6.3).
+func renderHits(hits []Hit) []renderedHit {
+	out := make([]renderedHit, len(hits))
+	for i, h := range hits {
+		out[i] = renderHit(h)
+	}
+	return out
 }
 
 // renderHit converts one packed Hit into its compact-line result: id+source
@@ -208,17 +223,36 @@ func formatHitLine(h renderedHit) string {
 }
 
 // compactLines renders a renderedResult's full memory_search text-content
-// block: one line per hit (formatHitLine), followed by an omission summary
+// block: one line per matched hit (formatHitLine), then an omission summary
 // line only when hits were actually left out — mirroring buildSearchResult's
 // (budget.go) omitted/hint gating, so the caller still sees why a hit is
 // missing rather than silently losing that signal to the format change.
+//
+// Graph expansions follow BELOW a one-line header, never interleaved with the
+// matched hits (DW-6.2): they did not match the query, they were reached by
+// traversing out of something that did, and an LLM reading these lines must be
+// able to tell the difference at a glance. The header states outright that they
+// are not counted against k — that one line is the entire token cost of making
+// the block unambiguous, and it is emitted only when expansions survived the
+// budget (DW-6.3).
 func compactLines(r renderedResult) string {
-	lines := make([]string, 0, len(r.Hits)+1)
+	lines := make([]string, 0, len(r.Hits)+len(r.Expanded)+2)
 	for _, h := range r.Hits {
 		lines = append(lines, formatHitLine(h))
 	}
 	if r.Omitted > 0 {
 		lines = append(lines, fmt.Sprintf("... %s", r.Hint))
+	}
+	if len(r.Expanded) == 0 {
+		return strings.Join(lines, "\n")
+	}
+	header := fmt.Sprintf("-- expanded: %d graph hit(s) reached from the matches above; context only, not counted against k", len(r.Expanded))
+	if r.ExpandedOmitted > 0 {
+		header += fmt.Sprintf(" (%d more dropped to stay within the response size budget)", r.ExpandedOmitted)
+	}
+	lines = append(lines, header+" --")
+	for _, h := range r.Expanded {
+		lines = append(lines, formatHitLine(h))
 	}
 	return strings.Join(lines, "\n")
 }

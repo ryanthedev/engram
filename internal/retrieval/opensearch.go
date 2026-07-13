@@ -66,6 +66,51 @@ func clampK(k int) int {
 	}
 }
 
+// ExpandedSource is the Hit.Source that marks a hit as a graph EXPANSION
+// rather than a query match: it was reached by traversing edges out of a
+// matched hit, not by matching the query itself. It is the sole discriminator
+// SplitExpanded partitions on.
+const ExpandedSource = "graph"
+
+// SplitExpanded partitions one Search result into the k matched hits the
+// caller asked for and the graph expansions that rode along beside them —
+// the "honest k" contract:
+//
+//	len(matched) <= clampK(k), and no matched hit has Source == ExpandedSource.
+//
+// Post-hooks run AFTER Search's top-k truncation and append hits to the list
+// (see Search), so the returned slice can exceed k. That is deliberate —
+// expansion is bonus context and must never evict a direct match — but it
+// means a caller asking for k=20 can be handed 40 hits with no way to tell
+// which 20 it actually asked for. Splitting here restores that distinction
+// without touching the Retriever interface (eval.NullRetriever implements it
+// too), because the two blocks are fully derivable from Hit.Source.
+//
+// k is normalized with the SAME clamp Search applied to Query.K, so an unset
+// (0) or over-MaxK k yields the identical bound the retriever actually used;
+// re-deriving that rule at the call site is how "len(hits) <= k" becomes a
+// lie for an unset k. The cap is enforced rather than assumed: today only the
+// graph expander appends post-truncation, but a future non-graph post-hook's
+// hits are NOT expansions — they belong in matched — and must not be allowed
+// to inflate k on their way there.
+//
+// Relative order is preserved within each block. expanded is nil (never an
+// empty non-nil slice) when there are no expansions, so a caller can emit the
+// block conditionally on len/nil alone.
+func SplitExpanded(hits []Hit, k int) (matched, expanded []Hit) {
+	for _, h := range hits {
+		if h.Source == ExpandedSource {
+			expanded = append(expanded, h)
+			continue
+		}
+		matched = append(matched, h)
+	}
+	if limit := clampK(k); len(matched) > limit {
+		matched = matched[:limit]
+	}
+	return matched, expanded
+}
+
 // DefaultEmbedTimeout bounds the query-time embedding call: D15's co-located
 // budget is <=50ms inside the overall read SLA.
 const DefaultEmbedTimeout = 50 * time.Millisecond

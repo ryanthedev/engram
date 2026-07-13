@@ -191,15 +191,25 @@ message SearchRequest {
 message Hit {
   string id = 1;
   double score = 2;
-  // Source index tier ("episodic" | "semantic").
+  // Source index tier ("episodic" | "semantic" | "graph").
   string source = 3;
   // Stored document rendered as JSON.
   string fields_json = 4;
 }
 
-// SearchResponse is the single fused, ranked list.
+// SearchResponse carries the query's matched hits and, separately, the graph
+// expansions that ride along beside them. The two blocks are never merged:
+// `k` means k for MATCHED hits, and an expansion neither evicts a match nor
+// inflates the count the caller asked for.
 message SearchResponse {
+  // The ranked matched hits: at most k of them, and never a graph expansion.
   repeated Hit hits = 1;
+  // Graph expansions reached by traversing edges out of the matched hits
+  // (source == "graph"). Bonus context, NOT counted against k, and empty
+  // whenever expansion is disabled, finds nothing, or "graph" is excluded
+  // from the request's sources. Every expansion is a per-call token cost on
+  // the caller, so it is delimited here rather than smuggled into hits.
+  repeated Hit expanded = 2;
 }
 
 // AuditRequest names one fact by its semantic doc id.

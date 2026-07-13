@@ -173,6 +173,31 @@ func (s *Server) Search(ctx context.Context, req *engrampb.SearchRequest) (*engr
 		return nil, status.Errorf(codes.Internal, "search: %v", err)
 	}
 
+	// Honest k: post-hooks (graph expansion) append to the retriever's already
+	// truncated top-k, so the fused list can exceed k. Split it here, at the
+	// boundary that owns the wire shape, into the <= k matched hits the caller
+	// asked for and the expansions that rode along. Deriving the split from
+	// Hit.Source keeps retrieval.Retriever's signature untouched (see
+	// retrieval.SplitExpanded).
+	matched, expanded := retrieval.SplitExpanded(hits, q.K)
+	matchedPB, err := toHitsPB(matched)
+	if err != nil {
+		return nil, err
+	}
+	expandedPB, err := toHitsPB(expanded)
+	if err != nil {
+		return nil, err
+	}
+	return &engrampb.SearchResponse{Hits: matchedPB, Expanded: expandedPB}, nil
+}
+
+// toHitsPB marshals retrieval hits onto the wire. A nil/empty input yields a
+// nil slice, never an empty one, so an absent expansion block stays absent on
+// the wire rather than serializing as a present-but-empty list.
+func toHitsPB(hits []retrieval.Hit) ([]*engrampb.Hit, error) {
+	if len(hits) == 0 {
+		return nil, nil
+	}
 	out := make([]*engrampb.Hit, len(hits))
 	for i, h := range hits {
 		fieldsJSON, err := json.Marshal(h.Fields)
@@ -186,7 +211,7 @@ func (s *Server) Search(ctx context.Context, req *engrampb.SearchRequest) (*engr
 			FieldsJson: string(fieldsJSON),
 		}
 	}
-	return &engrampb.SearchResponse{Hits: out}, nil
+	return out, nil
 }
 
 // Audit implements engrampb.EngramServer: it returns a fact's provenance and

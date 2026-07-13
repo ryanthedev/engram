@@ -221,7 +221,11 @@ func prune(m map[string]any) map[string]any {
 	return m
 }
 
-// Search runs one hybrid query under f and returns fused hits.
+// Search runs one hybrid query under f and returns the matched hits and the
+// graph expansions as two separate blocks (mcp.SearchResult) — the shape the
+// wire already carries. This adapter never re-merges them: `k` means k for
+// matched hits, and the split is the server's, made where Hit.Source is still
+// authoritative.
 //
 // The filter travels FLAT on the wire, field for field: this adapter translates
 // types (time.Time -> Timestamp), never semantics. Compiling the flat fields
@@ -229,7 +233,7 @@ func prune(m map[string]any) map[string]any {
 // tier owns which field. ValidOnly was hardcoded true here until Phase 5; it is
 // now derived server-side from IncludeSuperseded, whose false default preserves
 // exactly that behavior.
-func (c *Client) Search(ctx context.Context, query string, k int, f mcp.SearchFilter) ([]mcp.Hit, error) {
+func (c *Client) Search(ctx context.Context, query string, k int, f mcp.SearchFilter) (mcp.SearchResult, error) {
 	req := &engrampb.SearchRequest{
 		Query:             query,
 		K:                 int32(k),
@@ -249,13 +253,26 @@ func (c *Client) Search(ctx context.Context, query string, k int, f mcp.SearchFi
 	}
 	resp, err := c.api.Search(ctx, req)
 	if err != nil {
-		return nil, err
+		return mcp.SearchResult{}, err
 	}
-	hits := make([]mcp.Hit, 0, len(resp.GetHits()))
-	for _, h := range resp.GetHits() {
+	return mcp.SearchResult{
+		Hits:     toMCPHits(resp.GetHits()),
+		Expanded: toMCPHits(resp.GetExpanded()),
+	}, nil
+}
+
+// toMCPHits decodes one wire hit block. An absent block decodes to nil, not an
+// empty slice, so "no expansions" stays distinguishable from "an empty list of
+// them" all the way to the tool envelope that omits the block.
+func toMCPHits(pb []*engrampb.Hit) []mcp.Hit {
+	if len(pb) == 0 {
+		return nil
+	}
+	hits := make([]mcp.Hit, 0, len(pb))
+	for _, h := range pb {
 		hits = append(hits, mcp.Hit{ID: h.GetId(), Score: h.GetScore(), Source: h.GetSource(), Fields: h.GetFieldsJson()})
 	}
-	return hits, nil
+	return hits
 }
 
 // Status reports server health, the caller's identity, and tier counts.

@@ -274,11 +274,19 @@ func (e *Expander) entityName(ctx context.Context, tenantID, id string, names ma
 func edgeHit(edge Edge, hop int, fromName, toName string) retrieval.Hit {
 	return retrieval.Hit{
 		ID: edge.ID,
-		// Hop-decayed score: expanded hits rank below directly-matched seed
-		// hits if anything downstream re-sorts by score; the retriever
-		// itself does not re-truncate post-hook additions (Phase 4 design).
+		// Hop-decayed score: expansions rank below directly-matched seed hits
+		// if anything downstream re-sorts by score. The retriever still does
+		// not re-truncate post-hook additions, and deliberately so — an
+		// expansion must never evict a direct match. But it no longer inflates
+		// k either: Source == retrieval.ExpandedSource is the discriminator
+		// retrieval.SplitExpanded partitions on at the server boundary, so
+		// these hits are returned in their own labeled `expanded` block,
+		// separately budgeted, and the caller's `hits` array stays exactly the
+		// <= k matched hits it asked for. (This is a knowing reversal of the
+		// earlier "Phase 4 design" note that lived here: expansions used to
+		// ride back inside the matched array, so k=20 could return 40.)
 		Score:  1.0 / float64(hop+1),
-		Source: "graph",
+		Source: retrieval.ExpandedSource,
 		Fields: map[string]any{
 			"tenant_id":      edge.TenantID,
 			"team_id":        edge.TeamID,
