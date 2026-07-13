@@ -254,7 +254,7 @@ func TestDW_2_2_Integration_NameKeyedDedup_TwoHopThroughRealStage(t *testing.T) 
 		Subject: "A", Predicate: "works_at", Object: "B", Statement: "A works_at B",
 		TenantID: "t1", OwnerAgentID: "a1", Scope: "private", ValidAt: time.Now().UTC(),
 	}
-	if err := stage.Process(ctx, ev1, []memory.SemanticFact{fact1}); err != nil {
+	if err := stage.Process(ctx, ev1, added(fact1)); err != nil {
 		t.Fatalf("process fact 1 (A works_at B): %v", err)
 	}
 
@@ -263,7 +263,7 @@ func TestDW_2_2_Integration_NameKeyedDedup_TwoHopThroughRealStage(t *testing.T) 
 		Subject: "B", Predicate: "located_in", Object: "C", Statement: "B located_in C",
 		TenantID: "t1", OwnerAgentID: "a1", Scope: "private", ValidAt: time.Now().UTC(),
 	}
-	if err := stage.Process(ctx, ev2, []memory.SemanticFact{fact2}); err != nil {
+	if err := stage.Process(ctx, ev2, added(fact2)); err != nil {
 		t.Fatalf("process fact 2 (B located_in C): %v", err)
 	}
 

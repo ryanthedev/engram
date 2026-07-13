@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ryanthedev/engram/internal/ingest"
 	"github.com/ryanthedev/engram/internal/memory"
 )
 
@@ -42,8 +43,14 @@ func NewStage(store *Store, logger *slog.Logger) *Stage {
 // Process implements worker.Stage. Provenance/scope are taken from the
 // source event (never re-derived from fact content), matching every other
 // stage's convention.
-func (g *Stage) Process(ctx context.Context, ev memory.Episodic, facts []memory.SemanticFact) error {
-	for _, f := range facts {
+//
+// It receives each fact's reconciliation outcome (ingest.FactOutcome), not
+// just the fact. Today it acts only on the landed fact and upserts every
+// triple; reacting to Decision — closing a superseded predecessor's edge — is
+// the graph-lifecycle phase's job.
+func (g *Stage) Process(ctx context.Context, ev memory.Episodic, outcomes []ingest.FactOutcome) error {
+	for _, o := range outcomes {
+		f := o.Fact
 		if f.Subject == "" {
 			continue
 		}

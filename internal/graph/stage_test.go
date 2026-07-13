@@ -6,13 +6,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryanthedev/engram/internal/ingest"
 	"github.com/ryanthedev/engram/internal/memory"
 	"github.com/ryanthedev/engram/internal/worker"
 )
 
 // var _ worker.Stage confirms Stage satisfies the D20 seam at compile time
-// without making the production package depend on internal/worker.
+// without making the production package depend on internal/worker. It is the
+// DW-1.1 assertion: the seam now carries []ingest.FactOutcome, and this fails
+// to compile if Stage.Process drifts from it.
 var _ worker.Stage = (*Stage)(nil)
+
+// added wraps freshly-landed facts as OpAdd outcomes — the shape the worker
+// hands the stage for new knowledge with no predecessor.
+func added(facts ...memory.SemanticFact) []ingest.FactOutcome {
+	out := make([]ingest.FactOutcome, 0, len(facts))
+	for _, f := range facts {
+		out = append(out, ingest.FactOutcome{Fact: f, Decision: ingest.OpAdd})
+	}
+	return out
+}
 
 func newTestStage(t *testing.T) (*Stage, *Store, *MemBackend) {
 	t.Helper()
@@ -34,7 +47,7 @@ func TestStage_UpsertsEntitiesAndEdgeFromOneFact(t *testing.T) {
 	ev := memory.Episodic{EventID: "ev-1", TenantID: "t1", OwnerAgentID: "a1", Scope: "private"}
 	facts := []memory.SemanticFact{fact("service-a", "owns", "billing-db", "service-a owns billing-db")}
 
-	if err := stage.Process(ctx, ev, facts); err != nil {
+	if err := stage.Process(ctx, ev, added(facts...)); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	count, err := store.CountEntities(ctx, "t1")
@@ -65,7 +78,7 @@ func TestStage_RetractionFactYieldsNoEdge(t *testing.T) {
 	ev := memory.Episodic{EventID: "ev-1", TenantID: "t1"}
 	facts := []memory.SemanticFact{fact("service-a", "owns", "", "service-a owns: retracted")}
 
-	if err := stage.Process(ctx, ev, facts); err != nil {
+	if err := stage.Process(ctx, ev, added(facts...)); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	count, _ := store.CountEntities(ctx, "t1")
@@ -88,7 +101,7 @@ func TestStage_SkipsFactsWithNoSubject(t *testing.T) {
 	ev := memory.Episodic{EventID: "ev-1", TenantID: "t1"}
 	facts := []memory.SemanticFact{{Subject: "", Predicate: "p", Object: "o", TenantID: "t1"}}
 
-	if err := stage.Process(ctx, ev, facts); err != nil {
+	if err := stage.Process(ctx, ev, added(facts...)); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	count, _ := store.CountEntities(ctx, "t1")
@@ -107,7 +120,7 @@ func TestStage_ReplayIsIdempotent(t *testing.T) {
 	facts := []memory.SemanticFact{fact("service-a", "owns", "billing-db", "service-a owns billing-db")}
 
 	for i := 0; i < 3; i++ {
-		if err := stage.Process(ctx, ev, facts); err != nil {
+		if err := stage.Process(ctx, ev, added(facts...)); err != nil {
 			t.Fatalf("replay %d: %v", i, err)
 		}
 	}
@@ -133,7 +146,7 @@ func TestStage_MultipleFactsShareEntities(t *testing.T) {
 		fact("A", "works_at", "B", "A works_at B"),
 		fact("B", "located_in", "C", "B located_in C"),
 	}
-	if err := stage.Process(ctx, ev, facts); err != nil {
+	if err := stage.Process(ctx, ev, added(facts...)); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	count, _ := store.CountEntities(ctx, "t1")
