@@ -1,6 +1,7 @@
 # Plan: memory_search filters + graph tier lifecycle
 **Created:** 2026-07-12
-**Status:** in-progress
+**Status:** complete
+**Completed:** 2026-07-13
 **Started:** 2026-07-12
 **Current Phase:** 1
 **Complexity:** complex
@@ -354,3 +355,10 @@ Summary: Each retrieval tier now declares its filterable fields, and predicates 
 - [x] Committed
 Commit: (see git log)
 Summary: `memory_search` now accepts flat named filter params (kind, subject, predicate, object, extractor_version, since, until, include_superseded, sources), validated at the MCP/gRPC barricade and compiled to internal predicates at one site. `since`/`until` use a tier-neutral `time` alias (episodic→occurred_at, semantic→valid_at). `valid_only` removed from the proto in favor of `include_superseded`. Carry-forward resolved: a filtered search excludes sources that declare no filterable fields, rather than letting them return unconstrained hits. Phase 6 still needs the `expanded` block.
+
+### Phase 6: Honest k — separate expanded block (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed
+- [x] Committed
+Commit: (see git log)
+Summary: `k` now bounds matched hits only; graph expansions return in a separate `expanded` block via `retrieval.SplitExpanded(hits, k)`, with `expanded_omitted` reporting budget-dropped expansions rather than silently losing them. `retrieval.Retriever`'s signature is untouched. This deliberately reverses the prior "Phase 4 design" decision at `expand.go`, now documented in the corrected comment.
