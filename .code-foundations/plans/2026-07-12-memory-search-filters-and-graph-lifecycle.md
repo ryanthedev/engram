@@ -333,3 +333,10 @@ Summary: `worker.Stage.Process` now receives `[]ingest.FactOutcome{Fact, Decisio
 - [x] Committed
 Commit: (see git log)
 Summary: `graph.Store.CloseEdge` now soft-closes a predecessor edge (sets `InvalidAt`) when its fact is superseded, driven by Phase 1's `FactOutcome.Predecessor`; closing is by exact edge fingerprint (the plan's `(from_entity, predicate)` fallback was rejected as unsafe under entity dedup). Also fixed `UpsertEdge` resurrecting closed edges on replay, and repaired the expander's seed-echo guard to seed with edge fingerprints instead of semantic doc ids. Zombie edges are now prevented going forward — Phase 3 removes the ones already in the store. Known limitation: `CloseEdge` is a read-modify-write with no CAS.
+
+### Phase 3: Graph rebuild command (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed
+- [x] Committed
+Commit: (see git log)
+Summary: `engram-graph-rebuild --tenant <id> --confirm` drops and recreates the graph indices and replays every live semantic fact through the fixed graph stage, clearing the zombie edges Phase 2 could only prevent going forward. Added `store.ScanLiveFacts` (paginated `search_after` scan — none existed). The command is structurally incapable of writing to episodic/semantic (segregated interfaces), and `--confirm` is validated before any network call. The graph branch (1-3) is now complete.

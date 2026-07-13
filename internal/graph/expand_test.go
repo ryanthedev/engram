@@ -202,8 +202,8 @@ func TestDW_6_4_ExpansionACLBlocked(t *testing.T) {
 	// re-authorization), not just Expand in isolation.
 	httpClient := &http.Client{Timeout: 300 * time.Millisecond}
 	retriever := retrieval.NewOpenSearchRetriever(httpClient, "http://127.0.0.1:1", embed.NewFakeEmbedder(8, nil), retrieval.WithACL(aclFilter))
-	retriever.RegisterPostHook(expander)
-	retriever.RegisterTier(&seedTier{hits: []retrieval.Hit{semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}})
+	retriever.RegisterPostHook("graph", expander)
+	retriever.RegisterTier("seed", &seedTier{hits: []retrieval.Hit{semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}})
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
 	hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", K: 10}, retrieval.Filter{Identity: caller})

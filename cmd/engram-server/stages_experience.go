@@ -62,7 +62,7 @@ func wireExperience(ctx context.Context, httpClient *http.Client, osURL string, 
 	// Distillation stage (D20): registered in its own file, no worker-core edits.
 	wk.RegisterStage("experience-distill", experience.NewDistillStage(experience.RuleDistiller{}, store, logger))
 	// Gated retrieval tier (Phase-4 seam): admitted experiences only, ACL-verified.
-	retriever.RegisterTier(experience.NewTier(store, logger))
+	retriever.RegisterTier("experience", experience.NewTier(store, logger))
 
 	// Background utility prune (soft-expire low-Φ, never delete).
 	prune := &experience.PruneJob{Store: store, PhiMax: cfg.prunePhi, RetrievalMax: cfg.pruneRetrieval, Logger: logger}

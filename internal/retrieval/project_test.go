@@ -155,8 +155,8 @@ func TestDW_1_4_HopScoreKeptAndZeroScoreGetsFallback(t *testing.T) {
 	}}
 	hook := &multiAddHook{add: []Hit{graphHit("edge-1", 3)}}
 	m := &MultiRetriever{logger: slog.Default()}
-	m.RegisterTier(tier)
-	m.RegisterPostHook(hook)
+	m.RegisterTier("stub", tier)
+	m.RegisterPostHook("hook", hook)
 
 	hits, err := m.Search(context.Background(), Query{Text: "q", K: 10}, Filter{})
 	if err != nil {
@@ -206,8 +206,8 @@ func TestDW_1_5_ACLUnaffectedByProjection(t *testing.T) {
 	hook := &multiAddHook{add: []Hit{authEdge, unauthEdge}}
 
 	m := &MultiRetriever{acl: f, logger: slog.Default()}
-	m.RegisterTier(tier)
-	m.RegisterPostHook(hook)
+	m.RegisterTier("stub", tier)
+	m.RegisterPostHook("hook", hook)
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
 	hits, err := m.Search(context.Background(), Query{Text: "q", K: 10}, Filter{Identity: caller})

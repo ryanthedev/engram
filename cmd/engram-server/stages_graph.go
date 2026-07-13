@@ -83,7 +83,7 @@ func wireGraph(ctx context.Context, httpClient *http.Client, osURL string, cfg g
 	if err != nil {
 		return nil, fmt.Errorf("building graph expander: %w", err)
 	}
-	retriever.RegisterPostHook(expander)
+	retriever.RegisterPostHook("graph", expander)
 
 	return store, nil
 }
