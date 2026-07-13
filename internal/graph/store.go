@@ -174,14 +174,64 @@ func NewStore(backend Backend, dedup Deduper, embedder embed.Embedder, logger *s
 // re-finds and re-merges into the same entity rather than growing the count
 // (DW-6.1 / DW-6.3).
 func (s *Store) UpsertMention(ctx context.Context, m Mention) (entityID string, dec Decision, err error) {
+	r, err := s.resolveMention(ctx, m)
+	if err != nil {
+		return "", Decision{}, err
+	}
+	if r.dec.Merge {
+		merged := mergeEntity(r.matched, m)
+		if err := s.backend.PutEntity(ctx, merged); err != nil {
+			return "", r.dec, fmt.Errorf("graph: merging entity %s: %w", r.matched.ID, err)
+		}
+		return r.matched.ID, r.dec, nil
+	}
+
+	now := s.now().UTC()
+	e := Entity{
+		ID:           newEntityID(m.TenantID, Fingerprint(m.TenantID, m.Name), m.SourceID),
+		NameKey:      Fingerprint(m.TenantID, m.Name),
+		TenantID:     m.TenantID,
+		TeamID:       m.TeamID,
+		Scope:        m.Scope,
+		OwnerAgentID: m.OwnerAgentID,
+		Name:         m.Name,
+		Embedding:    r.vec,
+		SourceIDs:    []string{m.SourceID},
+		MentionCount: 1,
+		ValidAt:      now,
+		CreatedAt:    now,
+	}
+	if err := s.backend.PutEntity(ctx, e); err != nil {
+		return "", r.dec, fmt.Errorf("graph: creating entity %q: %w", m.Name, err)
+	}
+	return e.ID, r.dec, nil
+}
+
+// resolution is the outcome of the READ-only half of an upsert: the one dedup
+// decision, the entity it matched (zero-valued unless dec.Merge), and the
+// mention's embedding (carried so the create path never re-embeds).
+type resolution struct {
+	dec     Decision
+	matched Entity
+	vec     []float32
+}
+
+// resolveMention performs candidate lookup, the (tenant, scope) merge
+// boundary, and the ONE dedup decision — and writes nothing. It is the shared
+// read half of UpsertMention (which then merges or creates) and of
+// resolveEntityID (which only wants to RECOVER an entity a previous mention
+// already resolved). Keeping it write-free is what lets Stage recompute a
+// superseded predecessor's edge fingerprint without inflating that entity's
+// MentionCount/SourceIDs, which would corrupt the entity-stability metric.
+func (s *Store) resolveMention(ctx context.Context, m Mention) (resolution, error) {
 	if m.TenantID == "" || strings.TrimSpace(m.Name) == "" {
-		return "", Decision{}, fmt.Errorf("graph: mention requires a tenant and a non-empty name")
+		return resolution{}, fmt.Errorf("graph: mention requires a tenant and a non-empty name")
 	}
 	vec := s.embed(ctx, m)
 
 	existing, err := s.backend.CandidateEntities(ctx, m.TenantID, m.Name)
 	if err != nil {
-		return "", Decision{}, fmt.Errorf("graph: fetching candidates for %q: %w", m.Name, err)
+		return resolution{}, fmt.Errorf("graph: fetching candidates for %q: %w", m.Name, err)
 	}
 	candidates := make([]Candidate, 0, len(existing))
 	byID := make(map[string]Entity, len(existing))
@@ -203,42 +253,37 @@ func (s *Store) UpsertMention(ctx context.Context, m Mention) (entityID string, 
 		candidates = append(candidates, Candidate{ID: e.ID, Name: e.Name, Aliases: e.Aliases, Embedding: e.Embedding})
 	}
 
-	dec, err = s.dedup.Decide(ctx, Candidate{Name: m.Name, Context: m.Context, Embedding: vec}, candidates)
+	dec, err := s.dedup.Decide(ctx, Candidate{Name: m.Name, Context: m.Context, Embedding: vec}, candidates)
 	if err != nil {
-		return "", Decision{}, fmt.Errorf("graph: dedup decision for %q: %w", m.Name, err)
+		return resolution{}, fmt.Errorf("graph: dedup decision for %q: %w", m.Name, err)
 	}
 	s.logger.InfoContext(ctx, "graph dedup decision", "name", m.Name, "merge", dec.Merge,
 		"match_id", dec.MatchID, "combined", dec.Combined, "embed_sim", dec.EmbedSim, "lex_sim", dec.LexSim,
 		"used_judge", dec.UsedJudge, "reason", dec.Reason)
 
-	if dec.Merge {
-		matched := byID[dec.MatchID]
-		merged := mergeEntity(matched, m)
-		if err := s.backend.PutEntity(ctx, merged); err != nil {
-			return "", dec, fmt.Errorf("graph: merging entity %s: %w", matched.ID, err)
-		}
-		return matched.ID, dec, nil
-	}
+	return resolution{dec: dec, matched: byID[dec.MatchID], vec: vec}, nil
+}
 
-	now := s.now().UTC()
-	e := Entity{
-		ID:           newEntityID(m.TenantID, Fingerprint(m.TenantID, m.Name), m.SourceID),
-		NameKey:      Fingerprint(m.TenantID, m.Name),
-		TenantID:     m.TenantID,
-		TeamID:       m.TeamID,
-		Scope:        m.Scope,
-		OwnerAgentID: m.OwnerAgentID,
-		Name:         m.Name,
-		Embedding:    vec,
-		SourceIDs:    []string{m.SourceID},
-		MentionCount: 1,
-		ValidAt:      now,
-		CreatedAt:    now,
+// resolveEntityID recovers the entity an ALREADY-UPSERTED mention resolved to,
+// without creating or mutating anything: ok is false when the dedup routine
+// would not merge m into any live entity — i.e. nothing in the graph
+// corresponds to this mention (never graphed, or soft-expired since). Callers
+// treat !ok as "there is nothing here to act on", never as an error.
+//
+// It relies on UpsertMention's documented idempotency (a repeated mention with
+// an identical Context always re-finds the same entity): pass the SAME Name and
+// Context the mention was originally upserted with, and Decide re-selects the
+// same entity — embeddings are a deterministic function of the context text, so
+// the similarity signal is identical to the one that landed it.
+func (s *Store) resolveEntityID(ctx context.Context, m Mention) (string, bool, error) {
+	r, err := s.resolveMention(ctx, m)
+	if err != nil {
+		return "", false, err
 	}
-	if err := s.backend.PutEntity(ctx, e); err != nil {
-		return "", dec, fmt.Errorf("graph: creating entity %q: %w", m.Name, err)
+	if !r.dec.Merge || r.matched.ID == "" {
+		return "", false, nil
 	}
-	return e.ID, dec, nil
+	return r.matched.ID, true, nil
 }
 
 // mergeEntity folds a new mention into an already-resolved entity (the
@@ -261,6 +306,26 @@ func mergeEntity(existing Entity, m Mention) Entity {
 // Idempotent: the same (tenant, from, predicate, to) always lands the same
 // doc, so re-ingesting an identical fact is a no-op on the edge count
 // (DW-6.1/6.3).
+//
+// An upsert NEVER blind-overwrites a close. Since an edge's doc id is a pure
+// function of its triple, a re-asserted relation lands on the very doc a
+// previous supersession may have closed — so the two bi-temporal stamps are
+// carried forward deliberately, not rebuilt:
+//
+//   - A REPLAY (at-least-once redelivery of an event whose fact has since been
+//     superseded) re-upserts the identical triple at the identical valid time.
+//     Dropping InvalidAt here would silently RESURRECT the closed edge and hand
+//     the zombie relation straight back to search — undoing the supersession
+//     that closed it. Its close is preserved instead.
+//   - A genuine RE-ASSERTION ("service-a owns billing-db" is retracted, then
+//     asserted again later) arrives with a strictly NEWER valid time. The
+//     relation is true again, so the edge is revived: InvalidAt cleared,
+//     ValidAt advanced. This mirrors experience.Store's re-proven soft-expire
+//     revival — a closed edge is retired, never tombstoned.
+//
+// Strictly-newer is the discriminator because it is exactly what separates the
+// two: a replay can only ever carry the valid time already recorded.
+// ExpiredAt is likewise preserved — a soft-expire is not undone by a re-mention.
 func (s *Store) UpsertEdge(ctx context.Context, spec EdgeSpec) (string, error) {
 	id := edgeFingerprint(spec.TenantID, spec.FromEntityID, spec.Predicate, spec.ToEntityID)
 	existing, ok, err := s.backend.GetEdge(ctx, spec.TenantID, id)
@@ -275,7 +340,12 @@ func (s *Store) UpsertEdge(ctx context.Context, spec EdgeSpec) (string, error) {
 	}
 	if ok {
 		e.CreatedAt = existing.CreatedAt
-		e.ValidAt = existing.ValidAt
+		e.ExpiredAt = existing.ExpiredAt
+		if spec.ValidAt.After(existing.ValidAt) {
+			e.ValidAt, e.InvalidAt = spec.ValidAt, nil // re-asserted: revive
+		} else {
+			e.ValidAt, e.InvalidAt = existing.ValidAt, existing.InvalidAt // replay: never reopen
+		}
 		if !containsStr(existing.SourceIDs, spec.SourceID) {
 			e.SourceIDs = append(append([]string{}, existing.SourceIDs...), spec.SourceID)
 		} else {
@@ -286,6 +356,47 @@ func (s *Store) UpsertEdge(ctx context.Context, spec EdgeSpec) (string, error) {
 		return "", fmt.Errorf("graph: upserting edge %s: %w", id, err)
 	}
 	return id, nil
+}
+
+// CloseEdge soft-closes the edge with edgeID: it stamps InvalidAt, retiring
+// the relation from every traversal (Backend.Neighbors returns only live
+// edges) while leaving the document intact and its history readable. Nothing
+// is ever hard-deleted — the edge tier mirrors the semantic store's
+// append-only, guarded-close discipline (D3).
+//
+// It is the counterpart of the reconciler closing a superseded semantic fact:
+// Stage calls it when a fact's predecessor was superseded, so the
+// predecessor's edge stops being served next to the correction that replaced
+// it.
+//
+// Idempotent, by three distinct paths — replay must never error or
+// double-close:
+//   - an edgeID no edge exists under (the predecessor asserted no edge, or its
+//     entity was soft-expired) is a silent no-op, not ErrNotFound;
+//   - an already-closed edge keeps its ORIGINAL InvalidAt (the close is not
+//     re-stamped, so a replay cannot drift the closing time forward);
+//   - both skip the write entirely.
+//
+// InvalidAt is stamped from the store clock rather than from the superseding
+// fact's valid time: the edge tier has no as-of-valid-time read path (InvalidAt
+// is consumed only by Edge.Live), so a transaction-time close is sufficient and
+// keeps this an intent-shaped call — the caller names the edge, not the clock.
+func (s *Store) CloseEdge(ctx context.Context, tenantID, edgeID string) error {
+	e, ok, err := s.backend.GetEdge(ctx, tenantID, edgeID)
+	if err != nil {
+		return fmt.Errorf("graph: reading edge %s to close: %w", edgeID, err)
+	}
+	if !ok || e.InvalidAt != nil {
+		return nil
+	}
+	now := s.now().UTC()
+	e.InvalidAt = &now
+	if err := s.backend.PutEdge(ctx, e); err != nil {
+		return fmt.Errorf("graph: closing edge %s: %w", edgeID, err)
+	}
+	s.logger.InfoContext(ctx, "graph edge closed", "edge_id", edgeID, "tenant_id", tenantID,
+		"predicate", e.Predicate, "invalid_at", now)
+	return nil
 }
 
 // GetEntity fetches one entity by id.

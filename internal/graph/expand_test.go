@@ -228,6 +228,90 @@ func TestDW_6_4_ExpansionACLBlocked(t *testing.T) {
 	}
 }
 
+// --- DW-2.3: the seed-echo guard (visited set = fingerprints, not doc ids) ---
+
+// tripleHit is semanticHit plus the predicate — the field the seed-echo guard
+// needs to recompute the hit's own edge fingerprint. (semanticHit omits it,
+// which is exactly why the pre-fix tests above never noticed the guard was
+// inert.)
+func tripleHit(id, subject, predicate, object string) retrieval.Hit {
+	h := semanticHit(id, "t1", "private", "a1", "", subject, object)
+	h.Fields["predicate"] = predicate
+	return h
+}
+
+// TestDW_2_3_SeedEdgeNotReturnedAsExpandedHit: the seed fact "A works_at B"
+// already told the caller about the A->B edge. Expansion must not hand that
+// same edge back as a "discovery" — while still surfacing the genuinely new
+// B->C hop.
+//
+// Before the fix, visitedEdges was seeded with the seed hits' SEMANTIC doc ids
+// ("fact-ab") and compared against graph EDGE fingerprints — disjoint id spaces
+// that can never collide, so the guard never fired once and A->B was always
+// re-served.
+func TestDW_2_3_SeedEdgeNotReturnedAsExpandedHit(t *testing.T) {
+	ctx := context.Background()
+	store, backend := newTestStore(t)
+	aID, bID, _ := seedConnectTheDotsGraph(t, store)
+	abEdgeID := edgeFingerprint("t1", aID, "works_at", bID)
+	if _, ok, err := backend.GetEdge(ctx, "t1", abEdgeID); err != nil || !ok {
+		t.Fatalf("precondition: the A->B edge must exist under its fingerprint (ok=%v err=%v)", ok, err)
+	}
+
+	e, err := NewExpander(store, 2, slog.Default())
+	if err != nil {
+		t.Fatalf("NewExpander: %v", err)
+	}
+	seed := []retrieval.Hit{tripleHit("fact-ab", "A", "works_at", "B")}
+	out, err := e.Expand(ctx, seed, 2)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+
+	var sawC bool
+	for _, h := range out {
+		if h.Source != "graph" {
+			continue
+		}
+		if h.ID == abEdgeID {
+			t.Errorf("the seed fact's OWN edge came back as an expanded hit: %+v", h)
+		}
+		if obj, _ := h.Fields["object"].(string); obj == "C" {
+			sawC = true
+		}
+	}
+	if !sawC {
+		t.Fatalf("the guard suppressed too much: the genuinely new B->C hop is missing; hits=%+v", out)
+	}
+}
+
+// TestExpand_SeedWithoutPredicateStillExpands: a seed hit carrying no predicate
+// (or none at all — the episodic tier has no subject/predicate/object fields)
+// contributes no fingerprint, because it asserted no edge. It must still anchor
+// expansion rather than being treated as suppressing something.
+func TestExpand_SeedWithoutPredicateStillExpands(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(t)
+	seedConnectTheDotsGraph(t, store)
+
+	e, err := NewExpander(store, 2, slog.Default())
+	if err != nil {
+		t.Fatalf("NewExpander: %v", err)
+	}
+	// An episodic-shaped hit (text only, no triple) alongside a predicate-less
+	// semantic hit: the former must contribute nothing and crash nothing.
+	episodic := retrieval.Hit{ID: "ep-1", Source: "episodic", Score: 5, Fields: map[string]any{"tenant_id": "t1", "text": "some raw event"}}
+	seed := []retrieval.Hit{episodic, semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}
+
+	out, err := e.Expand(ctx, seed, 2)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	if len(out) <= len(seed) {
+		t.Fatalf("a predicate-less seed must still anchor expansion, got no added hits: %+v", out)
+	}
+}
+
 // fakeEdgeSource is a minimal acl.EdgeSource for wiring a real acl.Filter in
 // this package's tests without depending on internal/store.
 type fakeEdgeSource struct{ reach map[string]acl.Reach }

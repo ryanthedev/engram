@@ -104,15 +104,12 @@ func (e *Expander) Expand(ctx context.Context, hits []retrieval.Hit, depth int) 
 		return hits, nil // no tenant-bearing seed hit to anchor from
 	}
 
+	// visitedEdges is seeded with the fingerprints of the seed hits' OWN edges,
+	// so a seed fact's edge is never re-served back to the caller as an
+	// "expanded" discovery — see anchorEntities for why fingerprints (not the
+	// hits' doc ids) are the only thing that can populate this set.
 	visitedEntities := map[string]bool{}
-	visitedEdges := map[string]bool{}
-	for _, h := range hits {
-		if id := h.ID; id != "" {
-			visitedEdges[id] = true // never re-add a seed hit as an "expanded" one
-		}
-	}
-
-	frontier := e.anchorEntities(ctx, tenantID, hits)
+	frontier, visitedEdges := e.anchorEntities(ctx, tenantID, hits)
 	for _, id := range frontier {
 		visitedEntities[id] = true
 	}
@@ -173,31 +170,75 @@ func (e *Expander) Expand(ctx context.Context, hits []retrieval.Hit, depth int) 
 // fan out as anchors, deliberately: query-time we lack a hit-specific
 // disambiguating context beyond what the fact itself already gave us, and
 // the bounded fanout/added caps keep the blast radius small either way).
-func (e *Expander) anchorEntities(ctx context.Context, tenantID string, hits []retrieval.Hit) []string {
+//
+// It also returns seedEdges: the fingerprints of the edges the seed hits' OWN
+// triples produced, which Expand uses as its already-visited set so a seed
+// fact's edge is never handed back as an expanded discovery.
+//
+// Those fingerprints are the ONLY thing that can populate that set. A seed
+// hit's h.ID is its SEMANTIC doc id — a content-addressed fact id, from an id
+// space wholly disjoint from the sha256(tenant·from·predicate·to) edge
+// fingerprints Neighbors returns. Seeding the set with doc ids (as this did
+// before) can therefore never match a single edge: the guard was structurally
+// inert, and every seed fact's own edge came back re-labeled as an "expanded"
+// hit. Recomputing the fingerprint from the hit's own triple lands in the same
+// id space the comparison happens in, which is what makes the guard fire at all.
+//
+// A hit with no predicate, or no subject/object (the episodic tier carries
+// neither), contributes no fingerprint — correctly: it asserted no edge, so it
+// has none to suppress.
+func (e *Expander) anchorEntities(ctx context.Context, tenantID string, hits []retrieval.Hit) (anchors []string, seedEdges map[string]bool) {
 	seen := map[string]bool{}
-	var out []string
-	add := func(name string) {
+	byName := map[string][]string{} // one CandidateEntities call per distinct name
+	resolve := func(name string) []string {
 		if name == "" {
-			return
+			return nil
 		}
+		if ids, ok := byName[name]; ok {
+			return ids
+		}
+		var ids []string
 		cands, err := e.store.backend.CandidateEntities(ctx, tenantID, name)
 		if err != nil {
-			return
+			e.logger.WarnContext(ctx, "graph: resolving seed anchor failed; hit contributes no anchor", "name", name, "err", err)
 		}
 		for _, c := range cands {
-			if c.Live() && !seen[c.ID] {
-				seen[c.ID] = true
-				out = append(out, c.ID)
+			if c.Live() {
+				ids = append(ids, c.ID)
 			}
 		}
+		byName[name] = ids
+		return ids
 	}
+
+	seedEdges = map[string]bool{}
 	for _, h := range hits {
 		subj, _ := h.Fields["subject"].(string)
 		obj, _ := h.Fields["object"].(string)
-		add(subj)
-		add(obj)
+		pred, _ := h.Fields["predicate"].(string)
+		subjIDs, objIDs := resolve(subj), resolve(obj)
+
+		for _, id := range append(append([]string{}, subjIDs...), objIDs...) {
+			if !seen[id] {
+				seen[id] = true
+				anchors = append(anchors, id)
+			}
+		}
+		if pred == "" {
+			continue
+		}
+		// Every (subject-entity, object-entity) pair this hit's triple could
+		// have produced — plural because a name may resolve to several homonym
+		// candidates, and we cannot tell query-time which one the fact meant.
+		// Suppressing all of them is the safe direction: at worst the expansion
+		// withholds an edge identical to one the caller already has as a seed.
+		for _, from := range subjIDs {
+			for _, to := range objIDs {
+				seedEdges[edgeFingerprint(tenantID, from, pred, to)] = true
+			}
+		}
 	}
-	return out
+	return anchors, seedEdges
 }
 
 // seedTenantID returns the first non-empty tenant_id carried by hits (every

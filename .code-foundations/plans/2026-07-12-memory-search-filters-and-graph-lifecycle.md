@@ -319,3 +319,10 @@ The reconciler is the single owner of fact lifecycle; the graph is a *derived pr
 ---
 ## Execution Log
 _To be filled during /code-foundations:build_
+
+### Phase 1: Reconciliation-outcome seam (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed
+- [x] Committed
+Commit: ad2cb0c
+Summary: `worker.Stage.Process` now receives `[]ingest.FactOutcome{Fact, Decision, Predecessor}` instead of raw extracted facts, so derived projections can react to supersession. Replay is a fifth `OpKind` (`OpReplayed`). `graph.Stage` and `experience.DistillStage` compile against the new seam but carry no new behavior yet. Gotcha for Phase 2: the late-arrival path reports UPDATE with a non-nil Predecessor but must NOT have its edge closed — detect via `Fact.ValidAt.Before(Predecessor.ValidAt)`.
