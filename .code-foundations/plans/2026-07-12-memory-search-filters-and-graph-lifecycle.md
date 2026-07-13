@@ -340,3 +340,10 @@ Summary: `graph.Store.CloseEdge` now soft-closes a predecessor edge (sets `Inval
 - [x] Committed
 Commit: (see git log)
 Summary: `engram-graph-rebuild --tenant <id> --confirm` drops and recreates the graph indices and replays every live semantic fact through the fixed graph stage, clearing the zombie edges Phase 2 could only prevent going forward. Added `store.ScanLiveFacts` (paginated `search_after` scan — none existed). The command is structurally incapable of writing to episodic/semantic (segregated interfaces), and `--confirm` is validated before any network call. The graph branch (1-3) is now complete.
+
+### Phase 4: Filter core — per-tier field registry + predicate routing (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed (3-sample majority, 3/3 PASS)
+- [x] Committed
+Commit: (see git log)
+Summary: Each retrieval tier now declares its filterable fields, and predicates are routed only to tiers that own them — the tier-zeroing trap is structurally impossible. `retrieval.Filter` gained `Predicates` and `Sources`; registration is name-carrying (`RegisterTier(name, src)` / `RegisterPostHook(name, h)`) since neither interface exposed a name. `extractor_version` is now projected on semantic hits. Byte-identical query body when no filters are passed (goldens captured pre-change, independently re-derived by two reviewers). OPEN QUESTION for Phase 5: registered tier sources (e.g. `experience`) receive NO predicates — with `Sources: nil` and a `kind` filter, experience hits are silently unconstrained. Same shape as the trap this phase killed; needs an explicit decision when the MCP surface lands.

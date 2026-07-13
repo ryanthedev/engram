@@ -136,11 +136,22 @@ func (s *Server) Ingest(ctx context.Context, req *engrampb.IngestRequest) (*engr
 // RRF, D1) scoped by tenancy and validity filters, returning a single fused,
 // ranked hit list.
 func (s *Server) Search(ctx context.Context, req *engrampb.SearchRequest) (*engrampb.SearchResponse, error) {
+	// The flat filter fields are compiled into retrieval's predicate form here,
+	// at the barricade — a malformed filter is rejected before any tier runs.
+	preds, err := compileSearchFilter(req)
+	if err != nil {
+		return nil, err
+	}
 	q := retrieval.Query{Text: req.GetQuery(), K: int(req.GetK())}
 	f := retrieval.Filter{
-		TenantID:  req.GetTenantId(),
-		UserID:    req.GetUserId(),
-		ValidOnly: req.GetValidOnly(),
+		TenantID: req.GetTenantId(),
+		UserID:   req.GetUserId(),
+		// Current-state-only unless the caller explicitly asked for history.
+		// This is the sole producer of ValidOnly, and its default reproduces the
+		// hardcoded true that engramclient used to send.
+		ValidOnly:  !req.GetIncludeSuperseded(),
+		Predicates: preds,
+		Sources:    req.GetSources(),
 	}
 	// The verified Identity fixes the tenancy boundary AND drives ACL scope
 	// enforcement (Phase 4): the retriever compiles f.Identity into the filter
@@ -152,6 +163,13 @@ func (s *Server) Search(ctx context.Context, req *engrampb.SearchRequest) (*engr
 	}
 	hits, err := s.Retriever.Search(ctx, q, f)
 	if err != nil {
+		// A filter the retriever rejects (an unknown source, an unfilterable
+		// source named alongside filters) is the caller's mistake, not a server
+		// fault: report it as InvalidArgument with the retriever's own
+		// vocabulary-naming message. Everything else is Internal.
+		if errors.Is(err, retrieval.ErrInvalidFilter) {
+			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		}
 		return nil, status.Errorf(codes.Internal, "search: %v", err)
 	}
 

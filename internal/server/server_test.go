@@ -158,7 +158,7 @@ func TestSearchMapsQueryFilterAndHits(t *testing.T) {
 	}})
 
 	resp, err := s.Search(context.Background(), &engrampb.SearchRequest{
-		Query: "orders-svc leak", K: 5, TenantId: "t1", UserId: "agent-9", ValidOnly: true,
+		Query: "orders-svc leak", K: 5, TenantId: "t1", UserId: "agent-9",
 	})
 	if err != nil {
 		t.Fatalf("Search: %v", err)

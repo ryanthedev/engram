@@ -266,12 +266,18 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 	if err := m.validatePredicates(f.Predicates, sel); err != nil {
 		return nil, err
 	}
+	if err := m.validateFilterableSources(f.Predicates, sel); err != nil {
+		return nil, err
+	}
 	if q.Text == "" {
 		return nil, nil
 	}
 	q.K = clampK(q.K)
 
-	tiers, tierSrcs, postHooks := m.selectSources(sel)
+	// A filtered search runs only sources that can honor the filter: registered
+	// tier sources and post-hooks declare no filterable fields, so their hits
+	// would ride back unconstrained beside constrained ones (see selectSources).
+	tiers, tierSrcs, postHooks := m.selectSources(sel, len(f.Predicates) > 0)
 
 	var enf acl.Enforcer
 	var aclClause map[string]any

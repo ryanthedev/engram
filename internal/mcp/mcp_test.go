@@ -10,11 +10,16 @@ import (
 	"testing"
 )
 
-// fakeBackend is an in-memory Backend for conformance tests.
+// fakeBackend is an in-memory Backend for conformance tests. searchCalls and
+// lastFilter let a test assert what actually crossed the seam — including that
+// a rejected request crossed it ZERO times (the barricade contract, DW-5.4).
 type fakeBackend struct {
 	knowledgeStubs
-	ingested map[string]string // event_id -> text
-	failNext bool
+	ingested    map[string]string // event_id -> text
+	failNext    bool
+	searchCalls int
+	lastFilter  SearchFilter
+	lastK       int
 }
 
 func newFakeBackend() *fakeBackend { return &fakeBackend{ingested: map[string]string{}} }
@@ -24,7 +29,9 @@ func (b *fakeBackend) Ingest(_ context.Context, eventID, text, _ string) (string
 	return "ep-" + eventID, nil
 }
 
-func (b *fakeBackend) Search(_ context.Context, query string, k int) ([]Hit, error) {
+func (b *fakeBackend) Search(_ context.Context, query string, k int, f SearchFilter) ([]Hit, error) {
+	b.searchCalls++
+	b.lastFilter, b.lastK = f, k
 	var hits []Hit
 	for id, text := range b.ingested {
 		if strings.Contains(text, query) {

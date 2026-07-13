@@ -134,6 +134,18 @@ message IngestResponse {
 }
 
 // SearchRequest is one hybrid retrieval query.
+//
+// The filter fields (6-14) are FLAT and NAMED on purpose: the caller is an LLM,
+// and a generic filters:[{field,op,value}] array costs more tokens to emit and
+// offers more ways to be wrong. The generic predicate form (see Predicate,
+// which knowledge_search uses) stays internal to the retrieval layer — the
+// server compiles these named fields down to it. A flat wire contract also
+// makes "a filter on a field no tier owns" unrepresentable rather than merely
+// rejected.
+//
+// Every filter field is optional; an unset one adds no constraint. A request
+// with none of them set is exactly the request this message carried before they
+// existed.
 message SearchRequest {
   // Query text; embedded for the kNN clause, matched for the BM25 clause.
   string query = 1;
@@ -142,9 +154,37 @@ message SearchRequest {
   // Tenancy scope filters (D16).
   string tenant_id = 3;
   string user_id = 4;
-  // Restrict to currently-valid facts (invalid_at == null AND expired_at ==
-  // null — the bi-temporal current-state filter).
-  bool valid_only = 5;
+
+  // 5 was valid_only, a hardcoded-true bool with exactly one producer. It is
+  // replaced by include_superseded (13), whose default (false) preserves the
+  // same current-state filter — two knobs for one bit is one knob too many.
+  reserved 5;
+  reserved "valid_only";
+
+  // Episodic event kind, exact match (episodic tier only).
+  string kind = 6;
+  // Semantic fact triple, exact match (semantic tier only).
+  string subject = 7;
+  string predicate = 8;
+  string object = 9;
+  // Extraction pipeline version that produced the fact (semantic tier only).
+  string extractor_version = 10;
+  // Inclusive time bounds on when the memory happened: episodic occurred_at,
+  // semantic valid_at. Either bound may be unset (open interval).
+  google.protobuf.Timestamp since = 11;
+  google.protobuf.Timestamp until = 12;
+  // Include superseded and retracted historical fact versions. Default (false)
+  // restricts to currently-valid facts (invalid_at == null AND expired_at ==
+  // null — the bi-temporal current-state filter). It relaxes the VALIDITY
+  // filter only: tenancy and ACL scope are enforced independently and are
+  // never widened by it.
+  bool include_superseded = 13;
+  // Restrict the search to these sources ("episodic", "semantic", plus any
+  // registered source such as "experience" or "graph"). Unset searches every
+  // source; an empty list is an error, not a silent "all". Sources that
+  // declare no filterable fields cannot honor a filter, so they are excluded
+  // from any search that sets one.
+  repeated string sources = 14;
 }
 
 // Hit is one fused result.

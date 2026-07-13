@@ -24,6 +24,7 @@ import (
 	"github.com/ryanthedev/engram/internal/auth"
 	"github.com/ryanthedev/engram/internal/engramclient"
 	"github.com/ryanthedev/engram/internal/experience"
+	"github.com/ryanthedev/engram/internal/mcp"
 	"github.com/ryanthedev/engram/internal/store"
 )
 
@@ -266,7 +267,9 @@ func runSearch(ctx context.Context, args []string, env Env, out io.Writer) error
 		return err
 	}
 	defer client.Close()
-	hits, err := client.Search(ctx, query, *k)
+	// The CLI is an unfiltered search: a zero SearchFilter is exactly the query
+	// it issued before filters existed.
+	hits, err := client.Search(ctx, query, *k, mcp.SearchFilter{})
 	if err != nil {
 		return err
 	}

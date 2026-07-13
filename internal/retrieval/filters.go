@@ -1,11 +1,28 @@
 package retrieval
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
 )
+
+// ErrInvalidFilter marks every filter-validation failure — an unknown field, an
+// unsupported op, a non-scalar value, an unknown or empty source, an
+// unfilterable source named alongside filters. It is the CALLER's error, not the
+// server's: the entry barricades (internal/mcp, internal/server) map it to an
+// invalid-argument response rather than reporting a caller mistake as an
+// internal fault. Infrastructure failures (embedding, HTTP, decoding) never wrap
+// it.
+var ErrInvalidFilter = errors.New("retrieval: invalid filter")
+
+// invalidFilterf formats a validation error wrapping ErrInvalidFilter. Every
+// message names the valid vocabulary, so an LLM caller can self-correct from the
+// error text alone.
+func invalidFilterf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrInvalidFilter, fmt.Sprintf(format, args...))
+}
 
 // MaxPredicates bounds the number of filter predicates one memory search may
 // carry. Predicates arrive from the MCP caller across a process boundary —
@@ -28,9 +45,27 @@ const (
 // type of the field, and the Predicate ops valid on it. Ops is the whole
 // vocabulary for the field — an op outside it is a validation error, never a
 // silently-dropped clause.
+//
+// Target is the physical document field the clause is compiled against; empty
+// means "the same name the predicate uses". A non-empty Target lets one
+// caller-facing field name mean the right thing on each tier — "time" is
+// occurred_at on episodic and valid_at on semantic. Without it, a single
+// caller-facing time filter would have to name one physical field, which the
+// OTHER tier does not declare and would therefore leave unconstrained: the
+// silent-inertness trap this registry exists to prevent, reintroduced through
+// the one filter both tiers must honor.
 type FieldSpec struct {
-	Type string
-	Ops  []string
+	Type   string
+	Ops    []string
+	Target string
+}
+
+// field is the physical document field p compiles against on this tier.
+func (s FieldSpec) field(name string) string {
+	if s.Target != "" {
+		return s.Target
+	}
+	return name
 }
 
 // FilterableFields is one tier's declared filter surface: field name ->
@@ -47,13 +82,26 @@ type FilterableFields map[string]FieldSpec
 func keywordField() FieldSpec { return FieldSpec{Type: fieldTypeKeyword, Ops: []string{"term", "prefix"}} }
 func dateField() FieldSpec    { return FieldSpec{Type: fieldTypeDate, Ops: []string{"range"}} }
 
+// TimeField is the tier-neutral name for "when the memory happened": it
+// compiles to occurred_at on episodic and valid_at on semantic. It is what the
+// caller-facing since/until bounds (internal/mcp, internal/server) become, so
+// ONE pair of bounds constrains every built-in tier by its own event-time field
+// rather than leaving whichever tier lacks the named field unconstrained.
+const TimeField = "time"
+
+// dateAlias declares a date field under an alias that compiles to target.
+func dateAlias(target string) FieldSpec {
+	return FieldSpec{Type: fieldTypeDate, Ops: []string{"range"}, Target: target}
+}
+
 // episodicFilterable declares the episodic tier's filter surface: the event
-// kind plus its two time fields. Every entry is mapped keyword/date in
-// templates/episodic.json.
+// kind, its two time fields, and the tier-neutral TimeField alias. Every entry
+// is mapped keyword/date in templates/episodic.json.
 var episodicFilterable = FilterableFields{
 	"kind":        keywordField(),
 	"occurred_at": dateField(),
 	"created_at":  dateField(),
+	TimeField:     dateAlias("occurred_at"),
 }
 
 // semanticFilterable declares the semantic tier's filter surface: the fact
@@ -70,6 +118,7 @@ var semanticFilterable = FilterableFields{
 	"invalid_at":        dateField(),
 	"created_at":        dateField(),
 	"expired_at":        dateField(),
+	TimeField:           dateAlias("valid_at"),
 }
 
 // names returns the declared field names in sorted order, for self-correcting
@@ -104,14 +153,16 @@ func (ff FilterableFields) clauseFor(p Predicate) (clause any, declared bool, er
 	if err := spec.validate(p); err != nil {
 		return nil, true, err
 	}
-	c, err := filterClause(p.Field, p.Op, p.Value)
+	// The clause is compiled against the tier's PHYSICAL field (spec.field),
+	// which is the predicate's own name unless the tier declared an alias.
+	c, err := filterClause(spec.field(p.Field), p.Op, p.Value)
 	return c, true, err
 }
 
 // validate checks p against this field's declared ops and value rules.
 func (s FieldSpec) validate(p Predicate) error {
 	if !slices.Contains(s.Ops, p.Op) {
-		return fmt.Errorf("retrieval: unsupported filter op %q on %s field %q; valid ops: %s",
+		return invalidFilterf("unsupported filter op %q on %s field %q; valid ops: %s",
 			p.Op, s.Type, p.Field, strings.Join(s.Ops, ", "))
 	}
 	return validatePredicateValue(p)
@@ -127,17 +178,17 @@ func (s FieldSpec) validate(p Predicate) error {
 func validatePredicateValue(p Predicate) error {
 	if p.Op != "range" {
 		if !isScalar(p.Value) {
-			return fmt.Errorf("retrieval: filter value on field %q must be a scalar (string, number or bool), got %T", p.Field, p.Value)
+			return invalidFilterf("filter value on field %q must be a scalar (string, number or bool), got %T", p.Field, p.Value)
 		}
 		return nil
 	}
 	bounds, ok := p.Value.(map[string]any)
 	if !ok {
-		return fmt.Errorf("retrieval: range filter on field %q requires a value of gte/lte bounds, got %T", p.Field, p.Value)
+		return invalidFilterf("range filter on field %q requires a value of gte/lte bounds, got %T", p.Field, p.Value)
 	}
 	for b := range bounds {
 		if b != "gte" && b != "lte" {
-			return fmt.Errorf("retrieval: unknown range bound %q on field %q; valid bounds: gte, lte", b, p.Field)
+			return invalidFilterf("unknown range bound %q on field %q; valid bounds: gte, lte", b, p.Field)
 		}
 	}
 	set := 0
@@ -147,12 +198,12 @@ func validatePredicateValue(p Predicate) error {
 			continue
 		}
 		if !isScalar(v) {
-			return fmt.Errorf("retrieval: range bound %q on field %q must be a scalar, got %T", b, p.Field, v)
+			return invalidFilterf("range bound %q on field %q must be a scalar, got %T", b, p.Field, v)
 		}
 		set++
 	}
 	if set == 0 {
-		return fmt.Errorf("retrieval: range filter on field %q must set at least one of \"gte\"/\"lte\"", p.Field)
+		return invalidFilterf("range filter on field %q must set at least one of \"gte\"/\"lte\"", p.Field)
 	}
 	return nil
 }
@@ -217,7 +268,7 @@ func (m *MultiRetriever) resolveSources(sources []string) (sourceSet, error) {
 	}
 	valid := m.sourceNames()
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("retrieval: sources is empty; omit it to search every source, or name at least one of: %s", fieldListOrNone(valid))
+		return nil, invalidFilterf("sources is empty; omit it to search every source, or name at least one of: %s", fieldListOrNone(valid))
 	}
 	known := make(map[string]struct{}, len(valid))
 	for _, v := range valid {
@@ -226,11 +277,51 @@ func (m *MultiRetriever) resolveSources(sources []string) (sourceSet, error) {
 	set := make(sourceSet, len(sources))
 	for _, s := range sources {
 		if _, ok := known[s]; !ok {
-			return nil, fmt.Errorf("retrieval: unknown source %q; valid sources: %s", s, fieldListOrNone(valid))
+			return nil, invalidFilterf("unknown source %q; valid sources: %s", s, fieldListOrNone(valid))
 		}
 		set[s] = struct{}{}
 	}
 	return set, nil
+}
+
+// unfilterableSourceNames returns the registered sources that declare no
+// filterable fields, sorted. Today that is every registered tier source
+// ("experience") and every post-hook ("graph"): neither the TierSource nor the
+// PostHook interface carries a FilterableFields declaration, so neither can
+// compile a predicate into the query it issues.
+func (m *MultiRetriever) unfilterableSourceNames() []string {
+	out := make([]string, 0, len(m.tierSrcs)+len(m.postHooks))
+	for _, s := range m.tierSrcs {
+		out = append(out, s.name)
+	}
+	for _, h := range m.postHooks {
+		out = append(out, h.name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// validateFilterableSources rejects a search that EXPLICITLY names a source
+// which cannot honor the filter it also carries.
+//
+// This is the other half of the contract selectSources enforces (see there for
+// the rationale): a filtered search does not run unfilterable sources. When the
+// exclusion is implicit (Sources omitted), dropping them silently is the
+// documented behavior — the result is narrowed, never widened. But when the
+// caller NAMED such a source and also passed a filter, the two requests
+// contradict each other, and silently honoring one of them would be exactly the
+// kind of quiet surprise this package refuses to serve.
+func (m *MultiRetriever) validateFilterableSources(preds []Predicate, sel sourceSet) error {
+	if len(preds) == 0 || sel == nil {
+		return nil
+	}
+	for _, name := range m.unfilterableSourceNames() {
+		if sel.selected(name) {
+			return invalidFilterf("source %q cannot be filtered; drop the filters or the source (unfilterable sources: %s)",
+				name, fieldListOrNone(m.unfilterableSourceNames()))
+		}
+	}
+	return nil
 }
 
 // selectSources partitions the registered sources into the ones this search
@@ -239,12 +330,37 @@ func (m *MultiRetriever) resolveSources(sources []string) (sourceSet, error) {
 // consume its output, so a source excluded here is excluded from every one of
 // them (DW-4.5) rather than from whichever loop someone remembered to gate.
 //
+// filtered reports whether the search carries any Predicate. When it does,
+// sources that declare no filterable fields (registered tier sources and
+// post-hooks) DO NOT RUN. That is a deliberate, documented contract, decided in
+// Phase 5: those sources receive no predicates, so their hits would come back
+// unconstrained while every other source's were narrowed — a caller filtering
+// for kind="conversation" would silently get experience and graph hits of every
+// kind. A source that cannot evaluate the constraint cannot honestly answer the
+// question, so it is excluded rather than allowed to smuggle unfiltered results
+// into a filtered result set. (A built-in tier that merely lacks the ONE field
+// being filtered on is a different case: it stays in, unconstrained by that
+// field — its surface is declared, visible in every error message, and
+// excludable by name. See DW-4.2.)
+//
 // It does not touch the ACL: the returned sources still run under the compiled
 // filter, and their hits are still re-verified. Narrowing sources can only
 // REMOVE results from a search, never admit one the ACL would have denied.
-func (m *MultiRetriever) selectSources(sel sourceSet) ([]*tierRetriever, []namedTierSource, []namedPostHook) {
-	if sel == nil { // nil Sources: every source, no filtering work at all.
+func (m *MultiRetriever) selectSources(sel sourceSet, filtered bool) ([]*tierRetriever, []namedTierSource, []namedPostHook) {
+	if sel == nil && !filtered { // nil Sources, no filter: every source, no work at all.
 		return m.tiers, m.tierSrcs, m.postHooks
+	}
+	if filtered {
+		// Unfilterable sources are out. An explicitly named one already
+		// errored at validateFilterableSources, so reaching here means the
+		// exclusion is the implicit, documented one.
+		tiers := make([]*tierRetriever, 0, len(m.tiers))
+		for _, t := range m.tiers {
+			if sel.selected(t.source) {
+				tiers = append(tiers, t)
+			}
+		}
+		return tiers, nil, nil
 	}
 	tiers := make([]*tierRetriever, 0, len(m.tiers))
 	for _, t := range m.tiers {
@@ -308,7 +424,7 @@ func (m *MultiRetriever) validatePredicates(preds []Predicate, sel sourceSet) er
 		return nil
 	}
 	if len(preds) > MaxPredicates {
-		return fmt.Errorf("retrieval: too many filter predicates (%d); at most %d", len(preds), MaxPredicates)
+		return invalidFilterf("too many filter predicates (%d); at most %d", len(preds), MaxPredicates)
 	}
 	for _, p := range preds {
 		declared := false
@@ -323,7 +439,7 @@ func (m *MultiRetriever) validatePredicates(preds []Predicate, sel sourceSet) er
 			declared = declared || ok
 		}
 		if !declared {
-			return fmt.Errorf("retrieval: unknown or unfilterable field %q for the selected sources; valid filterable fields: %s",
+			return invalidFilterf("unknown or unfilterable field %q for the selected sources; valid filterable fields: %s",
 				p.Field, fieldListOrNone(m.filterableFieldNames(sel)))
 		}
 	}

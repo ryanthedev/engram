@@ -22,7 +22,7 @@ func (b *fixedHitsBackend) Ingest(context.Context, string, string, string) (stri
 	return "", nil
 }
 
-func (b *fixedHitsBackend) Search(_ context.Context, _ string, k int) ([]Hit, error) {
+func (b *fixedHitsBackend) Search(_ context.Context, _ string, k int, _ SearchFilter) ([]Hit, error) {
 	if k <= 0 || k >= len(b.hits) {
 		return b.hits, nil
 	}
@@ -506,7 +506,7 @@ type recordingKBackend struct {
 func (b *recordingKBackend) Ingest(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
-func (b *recordingKBackend) Search(_ context.Context, _ string, k int) ([]Hit, error) {
+func (b *recordingKBackend) Search(_ context.Context, _ string, k int, _ SearchFilter) ([]Hit, error) {
 	b.onSearch(k)
 	return nil, nil
 }

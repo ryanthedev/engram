@@ -190,7 +190,13 @@ Details:
 - **Filters are pushed inside both the BM25 and kNN sub-queries** (never
   post-filtered) — this preserves filtered-kNN recall. Each tier query ANDs the ACL
   clause, a `tenant_id` term, an optional `owner_agent_id` term, and — semantic only —
-  the `valid_only` bi-temporal current-state filter.
+  the bi-temporal current-state filter (`ValidOnly`, derived server-side from the
+  request's `include_superseded`; default `false` keeps today's current-facts-only
+  behavior). `SearchRequest` also carries nine flat filter params — `kind`,
+  `subject`, `predicate`, `object`, `extractor_version`, `since`, `until`,
+  `include_superseded`, `sources` — compiled to predicates at the barricade (see
+  `internal/server/searchfilter.go`); the retired `valid_only` request field
+  (proto field 5) is now reserved.
 - **Fusion is per-tier, not cross-tier.** Each tier fuses its own BM25 + kNN with RRF
   server-side; the two fused lists are then merged by a stable score sort. Cross-tier
   score normalization is a documented non-goal.

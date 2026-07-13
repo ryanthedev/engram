@@ -25,9 +25,12 @@ func TestDW_4_1_TierFilterableFieldRegistry(t *testing.T) {
 		{
 			tier:   "episodic",
 			fields: episodicFilterable,
-			want:   []string{"created_at", "kind", "occurred_at"},
+			want:   []string{"created_at", "kind", "occurred_at", TimeField},
 			wantTypes: map[string]string{
 				"kind": fieldTypeKeyword, "occurred_at": fieldTypeDate, "created_at": fieldTypeDate,
+				// TimeField is the tier-neutral since/until alias (Phase 5): a
+				// date field that compiles to this tier's own event-time field.
+				TimeField: fieldTypeDate,
 			},
 		},
 		{
@@ -35,12 +38,13 @@ func TestDW_4_1_TierFilterableFieldRegistry(t *testing.T) {
 			fields: semanticFilterable,
 			want: []string{
 				"created_at", "expired_at", "extractor_version", "invalid_at",
-				"object", "predicate", "subject", "valid_at",
+				"object", "predicate", "subject", TimeField, "valid_at",
 			},
 			wantTypes: map[string]string{
 				"subject": fieldTypeKeyword, "predicate": fieldTypeKeyword, "object": fieldTypeKeyword,
 				"extractor_version": fieldTypeKeyword, "valid_at": fieldTypeDate, "invalid_at": fieldTypeDate,
 				"created_at": fieldTypeDate, "expired_at": fieldTypeDate,
+				TimeField: fieldTypeDate,
 			},
 		},
 	}
@@ -82,7 +86,11 @@ func TestDW_4_1_TierFilterableFieldRegistry(t *testing.T) {
 
 // TestDW_4_1_DeclaredFieldsExistInIndexTemplates is the assumption guard: every
 // declared filterable field must actually be mapped keyword/date in the index
-// template, with the type the registry claims. Both templates are
+// template, with the type the registry claims. What is checked is the PHYSICAL
+// field a predicate compiles to (spec.field), which for an aliased entry —
+// TimeField -> occurred_at / valid_at — is not the declared name: the alias is
+// caller vocabulary, the target is what lands in the query body. Both templates
+// are
 // "dynamic": "strict", so a registry entry for an unmapped field would not be
 // merely inert — the query would be rejected by OpenSearch outright. This test
 // catches a bad registry entry at unit-test time rather than in production.
@@ -101,13 +109,14 @@ func TestDW_4_1_DeclaredFieldsExistInIndexTemplates(t *testing.T) {
 				t.Error(`template is no longer "dynamic": "strict" — this test's premise (an unmapped filter field is a hard error) has changed; re-check the registry`)
 			}
 			for field, spec := range tc.fields {
-				gotType, ok := mapped[field]
+				physical := spec.field(field)
+				gotType, ok := mapped[physical]
 				if !ok {
-					t.Errorf("declared filterable field %q is not mapped in %s", field, tc.template)
+					t.Errorf("declared filterable field %q compiles to %q, which is not mapped in %s", field, physical, tc.template)
 					continue
 				}
 				if gotType != spec.Type {
-					t.Errorf("field %q declared as %q but mapped as %q in %s", field, spec.Type, gotType, tc.template)
+					t.Errorf("field %q (physical %q) declared as %q but mapped as %q in %s", field, physical, spec.Type, gotType, tc.template)
 				}
 			}
 		})

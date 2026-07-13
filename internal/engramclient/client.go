@@ -221,9 +221,33 @@ func prune(m map[string]any) map[string]any {
 	return m
 }
 
-// Search runs one hybrid query and returns fused hits.
-func (c *Client) Search(ctx context.Context, query string, k int) ([]mcp.Hit, error) {
-	resp, err := c.api.Search(ctx, &engrampb.SearchRequest{Query: query, K: int32(k), ValidOnly: true})
+// Search runs one hybrid query under f and returns fused hits.
+//
+// The filter travels FLAT on the wire, field for field: this adapter translates
+// types (time.Time -> Timestamp), never semantics. Compiling the flat fields
+// into retrieval predicates is the server's job — the one place that knows which
+// tier owns which field. ValidOnly was hardcoded true here until Phase 5; it is
+// now derived server-side from IncludeSuperseded, whose false default preserves
+// exactly that behavior.
+func (c *Client) Search(ctx context.Context, query string, k int, f mcp.SearchFilter) ([]mcp.Hit, error) {
+	req := &engrampb.SearchRequest{
+		Query:             query,
+		K:                 int32(k),
+		Kind:              f.Kind,
+		Subject:           f.Subject,
+		Predicate:         f.Predicate,
+		Object:            f.Object,
+		ExtractorVersion:  f.ExtractorVersion,
+		IncludeSuperseded: f.IncludeSuperseded,
+		Sources:           f.Sources,
+	}
+	if !f.Since.IsZero() {
+		req.Since = timestamppb.New(f.Since)
+	}
+	if !f.Until.IsZero() {
+		req.Until = timestamppb.New(f.Until)
+	}
+	resp, err := c.api.Search(ctx, req)
 	if err != nil {
 		return nil, err
 	}
