@@ -230,6 +230,82 @@ func (s *OpenSearchStore) DuplicateLiveContentKeys(ctx context.Context, limit in
 	return keys, nil
 }
 
+// FactCursor resumes a ScanLiveFacts page. The zero value starts a scan
+// from the beginning; a zero value returned as next means the scan is
+// exhausted. Callers round-trip the value a previous call handed back —
+// they never construct one from scratch except the zero value.
+//
+// Sort key is (created_at, content_key) rather than the OpenSearch doc
+// _id: the _id metadata field carries no doc_values, so sorting on it
+// forces the field into heap-resident fielddata at query time — an
+// operational hazard OpenSearch's own docs warn against, and something no
+// other paginated scan in this codebase does (graph.ScanEntities/ScanEdges
+// sort on a real MAPPED "id" field stored in _source; semantic facts carry
+// no such field, and adding one would mean touching the semantic index
+// template, which is out of this phase's scope). created_at (date) and
+// content_key (keyword) are both already mapped, so no reindex is needed.
+//
+// This is a deliberate, bounded trade, not a hidden gap: (created_at,
+// content_key) is not a guaranteed-unique key — two live facts could in
+// principle share both (identical wall-clock millisecond AND identical
+// triple, itself the DuplicateLiveContentKeys anomaly the repair sweep
+// exists to converge). A tie could in theory skip a page boundary. In
+// practice this is vanishingly unlikely, and the caller (the graph rebuild
+// command) is safely re-runnable from scratch if it ever matters — the
+// graph is derived data.
+type FactCursor struct {
+	CreatedAt  time.Time
+	ContentKey string
+}
+
+// DefaultScanBatchSize is the page size ScanLiveFacts uses when the caller
+// passes size<=0.
+const DefaultScanBatchSize = 500
+
+// ScanLiveFacts returns one page (ascending by created_at, then
+// content_key) of LIVE semantic facts (invalid_at and expired_at both
+// unset — the same liveFilterClauses every other read path in this file
+// uses) for tenantID, resuming strictly after cursor. next is the zero
+// FactCursor when this page was the last one. An empty or not-yet-created
+// semantic index returns an empty page and a zero cursor, never an error —
+// the same isIndexNotFound guard searchFacts already applies everywhere
+// else in this file.
+//
+// This is the graph rebuild command's read path (internal/graph cannot
+// import this package directly — see graph.go's architecture-boundary doc
+// comment — so cmd/engram-graph-rebuild adapts this method to
+// graph.FactScanner).
+func (s *OpenSearchStore) ScanLiveFacts(ctx context.Context, tenantID string, cursor FactCursor, size int) ([]VersionedFact, FactCursor, error) {
+	if size <= 0 {
+		size = DefaultScanBatchSize
+	}
+	query := map[string]any{
+		"size":                size,
+		"seq_no_primary_term": true,
+		"sort": []any{
+			map[string]any{"created_at": "asc"},
+			map[string]any{"content_key": "asc"},
+		},
+		"query": map[string]any{
+			"bool": map[string]any{
+				"filter": append(liveFilterClauses(), map[string]any{"term": map[string]any{"tenant_id": tenantID}}),
+			},
+		},
+	}
+	if !cursor.CreatedAt.IsZero() {
+		query["search_after"] = []any{cursor.CreatedAt.UTC().UnixMilli(), cursor.ContentKey}
+	}
+	facts, err := s.searchFacts(ctx, "scanning live facts", query)
+	if err != nil {
+		return nil, FactCursor{}, err
+	}
+	if len(facts) < size {
+		return facts, FactCursor{}, nil // short page: this tenant's live facts are exhausted
+	}
+	last := facts[len(facts)-1]
+	return facts, FactCursor{CreatedAt: last.Fact.CreatedAt, ContentKey: last.Fact.ContentKey}, nil
+}
+
 // LiveByContentKey returns every live fact carrying key.
 func (s *OpenSearchStore) LiveByContentKey(ctx context.Context, key string) ([]VersionedFact, error) {
 	query := map[string]any{

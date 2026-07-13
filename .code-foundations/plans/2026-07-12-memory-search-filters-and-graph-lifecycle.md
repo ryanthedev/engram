@@ -326,3 +326,10 @@ _To be filled during /code-foundations:build_
 - [x] Committed
 Commit: ad2cb0c
 Summary: `worker.Stage.Process` now receives `[]ingest.FactOutcome{Fact, Decision, Predecessor}` instead of raw extracted facts, so derived projections can react to supersession. Replay is a fifth `OpKind` (`OpReplayed`). `graph.Stage` and `experience.DistillStage` compile against the new seam but carry no new behavior yet. Gotcha for Phase 2: the late-arrival path reports UPDATE with a non-nil Predecessor but must NOT have its edge closed — detect via `Fact.ValidAt.Before(Predecessor.ValidAt)`.
+
+### Phase 2: Graph edge lifecycle + echo dedup (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed
+- [x] Committed
+Commit: (see git log)
+Summary: `graph.Store.CloseEdge` now soft-closes a predecessor edge (sets `InvalidAt`) when its fact is superseded, driven by Phase 1's `FactOutcome.Predecessor`; closing is by exact edge fingerprint (the plan's `(from_entity, predicate)` fallback was rejected as unsafe under entity dedup). Also fixed `UpsertEdge` resurrecting closed edges on replay, and repaired the expander's seed-echo guard to seed with edge fingerprints instead of semantic doc ids. Zombie edges are now prevented going forward — Phase 3 removes the ones already in the store. Known limitation: `CloseEdge` is a read-modify-write with no CAS.
