@@ -210,3 +210,10 @@ Summary: Episodic records are now on the export wire via a separate `EpisodicExp
 - [x] Committed
 Commit: 3f28670
 Summary: `buildVaultModel(episodics, entities, edges) (VaultModel{Events,Concepts}, VaultRefs)` — deterministic model; `Event{EventID,Title,Body,OccurredAt,ConceptIDs}` (deduped by event_id via OccurredAt/Kind/Text, since CreatedAt isn't on the wire), `Concept{EntityID,Name,Aliases,Degree,Claims,RelatedIDs,Ghost}` (Ghost=Degree<2, hubMinDegree=2 constant), `Claim{Statement,ValidAt,EdgeID,SourceEventID}`. Collapse on exact normalized-name equality only. `VaultRefs map[string]noteRef{File,Display,Folder}` is the shared link map. `sanitizeBody`/`quoteBlock` barricade at 100% coverage; control-char wikilink-recombination bypass fixed (scanner tracks emitted-rune state).
+
+### Phase 3: Client — event + concept note rendering (Gate: Standard)
+- [x] BUILD: implementation complete (+ prose-quote correction: renderConcept embeds source-event prose, signature gained `events map[string]Event`)
+- [x] REVIEW: single-sample sonnet, PASS
+- [x] Committed (wave member, cherry-picked)
+Commit: 5010f3f
+Summary: `renderEvent(Event, VaultRefs)` and `renderConcept(Concept, VaultRefs, events map[string]Event)` — pure renderers. Event notes: UTC-foldered path (nil→undated/), sanitized prose, Concepts footer. Concept notes: claims oldest-first (EdgeID tie-break), each Statement + folded `> [!quote]-` callout of the source event's sanitized prose, related + ghost links; degree≥2 only get files. 100% coverage; all untrusted fields sanitized. NOTE for Phase 5: renderConcept needs `VaultModel.Events` as a `map[string]Event`.
