@@ -203,3 +203,10 @@ Validated against the live rtd store (9201): episodic prose is the human signal 
 - [x] Committed
 Commit: 0ae5ffa
 Summary: Episodic records are now on the export wire via a separate `EpisodicExporter` seam (impl `*store.OpenSearchStore`), drained first in the stage machine; `engramclient.ExportPage.Episodics []ExportEpisodic{EventID,Kind,Text string; OccurredAt *time.Time; SourceIDs []string}` exposes them. Byte-budgeted (2 MiB) `search_after` scan, processed+non-dead-lettered+tenant-pinned, per-record `canExport` fail-closed.
+
+### Phase 2: Client — vault model, refs, sanitizer + quoteBlock (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete (+ security fix)
+- [x] REVIEW: 3-sample fable, fail→pass (round 1 found a real bypass; round 2 PASS 3/3)
+- [x] Committed
+Commit: 3f28670
+Summary: `buildVaultModel(episodics, entities, edges) (VaultModel{Events,Concepts}, VaultRefs)` — deterministic model; `Event{EventID,Title,Body,OccurredAt,ConceptIDs}` (deduped by event_id via OccurredAt/Kind/Text, since CreatedAt isn't on the wire), `Concept{EntityID,Name,Aliases,Degree,Claims,RelatedIDs,Ghost}` (Ghost=Degree<2, hubMinDegree=2 constant), `Claim{Statement,ValidAt,EdgeID,SourceEventID}`. Collapse on exact normalized-name equality only. `VaultRefs map[string]noteRef{File,Display,Folder}` is the shared link map. `sanitizeBody`/`quoteBlock` barricade at 100% coverage; control-char wikilink-recombination bypass fixed (scanner tracks emitted-rune state).
