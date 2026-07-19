@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // toolSchema is one MCP tool advertised by tools/list. InputSchema is a JSON
@@ -57,13 +58,33 @@ func toolSchemas() []toolSchema {
 			},
 		},
 		{
-			Name:        ToolSearch,
-			Description: "Hybrid (BM25 + vector) search over Engram memory. Returns fused, ranked hits.",
+			Name: ToolSearch,
+			// Every byte of this description is a per-call token cost on the
+			// caller's context: it says what a caller cannot infer from the
+			// parameter names (which filter narrows which tier, and what the
+			// defaults are) and nothing else.
+			Description: "Hybrid (BM25 + vector) search over Engram memory. Returns fused, ranked hits. All filters are optional; each narrows only the tier that owns it (kind: episodic; subject/predicate/object/extractor_version: semantic) and leaves the other tier unnarrowed.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"query": strProp("Natural-language query (required)."),
-					"k":     map[string]any{"type": "integer", "description": "Max hits to return (default server-chosen)."},
+					"query":             strProp("Natural-language query (required)."),
+					"k":                 map[string]any{"type": "integer", "description": "Max hits to return (default server-chosen)."},
+					"kind":              strProp("Episodic event kind, exact match (e.g. conversation, tool_result)."),
+					"subject":           strProp("Semantic fact subject, exact match."),
+					"predicate":         strProp("Semantic fact predicate, exact match."),
+					"object":            strProp("Semantic fact object, exact match."),
+					"extractor_version": strProp("Semantic extractor version, exact match."),
+					"since":             strProp("Earliest event time, RFC 3339 (episodic occurred_at, semantic valid_at)."),
+					"until":             strProp("Latest event time, RFC 3339."),
+					"include_superseded": map[string]any{
+						"type":        "boolean",
+						"description": "Include superseded/retracted historical facts (default false: current facts only).",
+					},
+					"sources": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Limit to these sources: " + strings.Join(memorySources, ", ") + " (default all). experience and graph cannot be filtered, so any filter above excludes them.",
+					},
 				},
 				"required": []any{"query"},
 			},
@@ -262,30 +283,33 @@ func (s *Server) callIngest(ctx context.Context, raw json.RawMessage) (any, *rpc
 }
 
 func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
-	var args struct {
-		Query string `json:"query"`
-		K     int    `json:"k"`
+	// The barricade: arguments are agent-supplied external input, so they are
+	// validated in full before the backend is touched. A rejected request never
+	// reaches the retriever (DW-5.4), and its error names the valid vocabulary
+	// so the caller can self-correct. Returned as a tool error rather than a
+	// protocol error: the CALL was well-formed JSON-RPC, the arguments were not,
+	// and the agent needs to read the correction.
+	query, k, filter, err := parseSearchArgs(raw)
+	if err != nil {
+		return toolError(err.Error()), nil
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return nil, &rpcError{Code: codeInvalidParams, Message: "invalid memory_search arguments"}
-	}
-	if args.Query == "" {
-		return toolError("memory_search requires a non-empty query"), nil
-	}
-	k := args.K
-	if k <= 0 {
-		k = defaultRequestK // caller didn't ask for a specific count: request generously, pack tightly
-	}
-	hits, err := s.backend.Search(ctx, args.Query, k)
+	res, err := s.backend.Search(ctx, query, k, filter)
 	if err != nil {
 		return toolError(fmt.Sprintf("search failed: %v", err)), nil
 	}
+	// Matched hits are packed (and spilled) FIRST, against the whole budget and
+	// exactly as they were before expansions had a block of their own; only then
+	// do graph expansions get appended into whatever budget is left (DW-6.4).
+	// So an expansion can never evict a match, and is the first thing dropped
+	// under pressure. Zero expansions leaves the block absent entirely (DW-6.3).
+	//
 	// memory_search renders the budget-packed result as compact lines: the
 	// text block is the compact-line form the agent reads; structuredContent
 	// carries the rendered envelope. (knowledge_search keeps the raw
 	// structured JSON — its docs have no memory_read drill-down, so it never
 	// truncates a body to a gist.)
-	result := packAndSpill(hits, memoryFacetFields, ToolSearch)
+	result := packAndSpill(res.Hits, memoryFacetFields, ToolSearch)
+	result = packExpanded(result, res.Expanded, searchByteBudget())
 	rendered := renderSearchResult(result)
 	return toolResultWithText(rendered, compactLines(rendered)), nil
 }

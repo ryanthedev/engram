@@ -204,8 +204,8 @@ func TestDW_6_2_Integration_TwoHopConnectTheDots(t *testing.T) {
 	// dead port — a dead-port timeout would itself blow the 250ms budget
 	// this test measures, independent of the graph work.
 	retriever := retrieval.NewOpenSearchRetriever(httpClient, testutil.OpenSearchURL(), embed.NewFakeEmbedder(store.EmbeddingDim, nil), retrieval.WithACL(aclFilter))
-	retriever.RegisterPostHook(expander)
-	retriever.RegisterTier(&seedTier{hits: []retrieval.Hit{semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}})
+	retriever.RegisterPostHook("graph", expander)
+	retriever.RegisterTier("seed", &seedTier{hits: []retrieval.Hit{semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}})
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
 	hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", K: 10}, retrieval.Filter{Identity: caller})
@@ -254,7 +254,7 @@ func TestDW_2_2_Integration_NameKeyedDedup_TwoHopThroughRealStage(t *testing.T) 
 		Subject: "A", Predicate: "works_at", Object: "B", Statement: "A works_at B",
 		TenantID: "t1", OwnerAgentID: "a1", Scope: "private", ValidAt: time.Now().UTC(),
 	}
-	if err := stage.Process(ctx, ev1, []memory.SemanticFact{fact1}); err != nil {
+	if err := stage.Process(ctx, ev1, added(fact1)); err != nil {
 		t.Fatalf("process fact 1 (A works_at B): %v", err)
 	}
 
@@ -263,7 +263,7 @@ func TestDW_2_2_Integration_NameKeyedDedup_TwoHopThroughRealStage(t *testing.T) 
 		Subject: "B", Predicate: "located_in", Object: "C", Statement: "B located_in C",
 		TenantID: "t1", OwnerAgentID: "a1", Scope: "private", ValidAt: time.Now().UTC(),
 	}
-	if err := stage.Process(ctx, ev2, []memory.SemanticFact{fact2}); err != nil {
+	if err := stage.Process(ctx, ev2, added(fact2)); err != nil {
 		t.Fatalf("process fact 2 (B located_in C): %v", err)
 	}
 
@@ -286,8 +286,8 @@ func TestDW_2_2_Integration_NameKeyedDedup_TwoHopThroughRealStage(t *testing.T) 
 	aclFilter := acl.NewFilter(edges, slog.Default())
 	httpClient := testutil.HTTPClient
 	retriever := retrieval.NewOpenSearchRetriever(httpClient, testutil.OpenSearchURL(), embed.NewFakeEmbedder(store.EmbeddingDim, nil), retrieval.WithACL(aclFilter))
-	retriever.RegisterPostHook(expander)
-	retriever.RegisterTier(&seedTier{hits: []retrieval.Hit{semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}})
+	retriever.RegisterPostHook("graph", expander)
+	retriever.RegisterTier("seed", &seedTier{hits: []retrieval.Hit{semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}})
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
 	hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", K: 10}, retrieval.Filter{Identity: caller})
@@ -373,14 +373,14 @@ func TestDW_6_5_Integration_ExpansionLatencyP95(t *testing.T) {
 	// dead port — a dead-port timeout would itself blow the 250ms budget
 	// this test measures, independent of the graph work.
 	retriever := retrieval.NewOpenSearchRetriever(httpClient, testutil.OpenSearchURL(), embed.NewFakeEmbedder(store.EmbeddingDim, nil), retrieval.WithACL(aclFilter))
-	retriever.RegisterPostHook(expander)
+	retriever.RegisterPostHook("graph", expander)
 	// Each Search call anchors from exactly ONE chain's seed hit — matching
 	// how memory_search returns the handful of hits relevant to ITS OWN
 	// query text, never the whole corpus. The 30-chain graph exists so
 	// dedup/CandidateEntities operate over a realistically populated tenant,
 	// not so one query expands all of it at once.
 	tier := &rotatingSeedTier{perRun: seeds}
-	retriever.RegisterTier(tier)
+	retriever.RegisterTier("seed", tier)
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
 	const runs = 40

@@ -39,12 +39,22 @@ var memoryFacetFields = []string{"subject", "predicate", "kind"}
 // by the caller (see spill.go) only after the full slim result set has been
 // durably spilled to disk (DW-3.1) — it is also the shape spilled to that
 // file, where OverflowPath itself is always zero-value/omitted.
+//
+// Expanded is memory_search's second, subordinate block: the graph expansions
+// that rode along beside the matched hits. It is packed only into whatever
+// budget the matched hits left over (packExpanded), so it can never evict a
+// match, and it is omitted entirely when empty — an absent block, not an empty
+// one (DW-6.3). ExpandedOmitted reports how many expansions the budget dropped
+// so the loss is visible rather than silent. knowledge_search never sets
+// either.
 type searchResult struct {
-	Hits          []Hit             `json:"hits"`
-	Omitted       int               `json:"omitted,omitempty"`
-	OmittedFacets map[string]string `json:"omitted_facets,omitempty"`
-	Hint          string            `json:"hint,omitempty"`
-	OverflowPath  string            `json:"overflow_path,omitempty"`
+	Hits            []Hit             `json:"hits"`
+	Omitted         int               `json:"omitted,omitempty"`
+	OmittedFacets   map[string]string `json:"omitted_facets,omitempty"`
+	Hint            string            `json:"hint,omitempty"`
+	OverflowPath    string            `json:"overflow_path,omitempty"`
+	Expanded        []Hit             `json:"expanded,omitempty"`
+	ExpandedOmitted int               `json:"expanded_omitted,omitempty"`
 }
 
 // searchByteBudget returns the configured memory_search response byte
@@ -93,6 +103,62 @@ func packSearchResult(hits []Hit, budgetBytes int, facetFields []string) searchR
 		packed = packed[:len(packed)-1]
 	}
 	return buildSearchResult(packed, hits[len(packed):], facetFields)
+}
+
+// packExpanded appends as many graph expansions to an ALREADY-PACKED result as
+// the budget it did not spend will hold, and reports the rest as
+// ExpandedOmitted (DW-6.4). It is deliberately the second, subordinate pass:
+//
+//   - Matched hits are packed first, against the whole budget, by
+//     packSearchResult — which never sees Expanded and so can never shrink the
+//     matched page to make room for an expansion. Expansions live strictly on
+//     the leftovers, which makes them structurally the first thing dropped
+//     under pressure and incapable of evicting a direct match.
+//   - Unlike the matched page, expansions have a ZERO floor (no one-hit
+//     minimum): under a tight budget the entire block vanishes. Expansion is
+//     bonus context, and every expanded hit is a token cost on the caller.
+//   - It runs AFTER the caller's spill has attached the real OverflowPath, so
+//     the marshal measured here is the true final response — no headroom
+//     reservation is needed (contrast searchResultFits, which must reserve for
+//     a path that does not exist yet).
+//
+// Dropped expansions are NOT spilled: the spill file is the matched-hit escape
+// hatch (memory_read drills the rest), and an expansion's seed hit is already
+// in the response. They are counted instead, so the omission is visible.
+//
+// Order is preserved: the kept expansions are a prefix of expanded, which
+// arrives hop-ordered (nearest first), so the ones dropped are the furthest.
+//
+// The one thing the budget does not bound is the ExpandedOmitted counter
+// itself: when even zero expansions do not fit, the ~24-byte count is still
+// emitted, because a caller silently missing its expansions is worse than a
+// response 24 bytes over. This is the same best-effort-at-the-floor posture
+// packSearchResult already takes with its unconditional one-hit floor.
+func packExpanded(result searchResult, expanded []Hit, budgetBytes int) searchResult {
+	kept := len(expanded)
+	for kept > 0 && !withExpandedFits(result, expanded, kept, budgetBytes) {
+		kept--
+	}
+	if kept > 0 {
+		result.Expanded = expanded[:kept]
+	}
+	result.ExpandedOmitted = len(expanded) - kept
+	return result
+}
+
+// withExpandedFits reports whether result carrying the first kept of expanded —
+// and the ExpandedOmitted count that choice actually produces — serializes at
+// or under budgetBytes. Like searchResultFits it measures the REAL marshal of
+// the exact value that would be emitted (counter included: an omitted count is
+// itself bytes on the wire), never an estimate, and treats a marshal failure —
+// never expected for these types — as "does not fit", the safe default that
+// keeps the caller shrinking rather than emitting something unverified.
+func withExpandedFits(result searchResult, expanded []Hit, kept, budgetBytes int) bool {
+	candidate := result
+	candidate.Expanded = expanded[:kept]
+	candidate.ExpandedOmitted = len(expanded) - kept
+	b, err := json.Marshal(candidate)
+	return err == nil && len(b) <= budgetBytes
 }
 
 // searchResultFits reports whether the full serialized searchResult built

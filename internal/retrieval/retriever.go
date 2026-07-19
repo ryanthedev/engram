@@ -25,6 +25,10 @@ type Query struct {
 // filter is compiled from Identity and applied inside every query — callers
 // cannot bypass it. A zero Identity through an ACL-enabled Retriever denies
 // all (fail-closed).
+//
+// Predicates and Sources are the caller-facing filter surface. A zero Filter
+// (both nil) searches every source with no field constraints — byte-for-byte
+// the query the Retriever issued before they existed.
 type Filter struct {
 	TenantID string
 	UserID   string
@@ -32,6 +36,21 @@ type Filter struct {
 	ValidOnly bool
 	// Identity is the verified caller; drives ACL enforcement (Phase 4).
 	Identity auth.Identity
+
+	// Predicates narrow the search by field. Each is ROUTED to the tiers that
+	// declare its field (see FilterableFields) and compiled into their query;
+	// tiers that do not declare the field are left unconstrained rather than
+	// zeroed. A predicate naming a field no selected tier declares is a
+	// validation error naming the valid fields — never a silent no-op.
+	Predicates []Predicate
+
+	// Sources restricts the search to the named sources — built-in tiers
+	// ("episodic", "semantic"), registered tier sources, and registered
+	// post-hooks ("graph"). nil means every source. An EMPTY (non-nil) slice
+	// is a validation error, not a silent "all": "search nothing" and "search
+	// everything" must not be the same request. An unknown name is an error
+	// naming the valid sources.
+	Sources []string
 }
 
 // ACLFilter compiles a verified Identity into an authorization decision applied

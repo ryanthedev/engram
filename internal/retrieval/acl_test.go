@@ -29,7 +29,7 @@ func TestDW_4_4_CompilerErrorFailsClosed(t *testing.T) {
 	var buf bytes.Buffer
 	m := &MultiRetriever{acl: errFilter{}, logger: slog.New(slog.NewTextHandler(&buf, nil))}
 	// A tier that would leak if ever consulted — it must not be.
-	m.RegisterTier(&stubTier{hits: []Hit{{ID: "leak", Fields: map[string]any{}}}})
+	m.RegisterTier("stub", &stubTier{hits: []Hit{{ID: "leak", Fields: map[string]any{}}}})
 
 	hits, err := m.Search(context.Background(), Query{Text: "q", K: 10}, Filter{Identity: auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestTierHitsAuthorizedBeforeTruncation(t *testing.T) {
 		hitScored("auth-lo", 1, acl.ScopePrivate, "a1", ""),     // authorized, low score
 	}}
 	m := &MultiRetriever{acl: f, logger: slog.Default()}
-	m.RegisterTier(tier)
+	m.RegisterTier("stub", tier)
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
 	hits, err := m.Search(context.Background(), Query{Text: "q", K: 1}, Filter{Identity: caller})
@@ -129,8 +129,8 @@ func TestPostHookAdditionsReauthorizedWithoutLosingTopK(t *testing.T) {
 		hitScored("hook-auth", 2, acl.ScopeTeam, "a1", "teamX"), // authorized
 	}}
 	m := &MultiRetriever{acl: f, logger: slog.Default()}
-	m.RegisterTier(tier)
-	m.RegisterPostHook(hook)
+	m.RegisterTier("stub", tier)
+	m.RegisterPostHook("hook", hook)
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
 	hits, err := m.Search(context.Background(), Query{Text: "q", K: 10}, Filter{Identity: caller})
@@ -184,8 +184,8 @@ func TestRegisteredSeamsReceiveIdentityAndAreACLFiltered(t *testing.T) {
 	hook := &stubHook{add: hitWith("expanded-leak", acl.ScopeOrg, "a9", "")} // denied (unreachable agent)
 
 	m := &MultiRetriever{acl: f, logger: slog.Default()}
-	m.RegisterTier(tier)
-	m.RegisterPostHook(hook)
+	m.RegisterTier("stub", tier)
+	m.RegisterPostHook("hook", hook)
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
 	hits, err := m.Search(context.Background(), Query{Text: "q", K: 10}, Filter{Identity: caller})

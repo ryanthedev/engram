@@ -39,6 +39,24 @@ type Hit struct {
 	Fields string  `json:"fields_json,omitempty"`
 }
 
+// SearchResult is one memory_search answer in two labeled blocks. Hits are the
+// query's MATCHED hits — at most k of them, and never a graph expansion. Expanded
+// carries the graph expansions reached by traversing out of those matched hits:
+// bonus context that is NOT counted against k, so an expansion can neither evict
+// a match nor inflate the count the caller asked for.
+//
+// They are two fields rather than two positional return values precisely because
+// a caller cannot transpose them by accident — and because every expanded hit is
+// a per-call token cost, so it must be delimited and independently budgetable,
+// never smuggled into Hits.
+//
+// Expanded is nil (not empty) whenever expansion is off, finds nothing, or the
+// caller's Sources excluded "graph" — so an absent block is absent, not empty.
+type SearchResult struct {
+	Hits     []Hit `json:"hits"`
+	Expanded []Hit `json:"expanded,omitempty"`
+}
+
 // ReadResult is one record's full content, surfaced through the memory_read
 // tool — the deliberate drill-down for an (id, source) pair a memory_search
 // compact line exposed. A full read spends the caller's context, so it is a
@@ -129,13 +147,54 @@ type CollectionInfo struct {
 	NewestDocDate     *time.Time `json:"newest_doc_date,omitempty"`
 }
 
+// SearchFilter narrows a memory_search. It is the FLAT, named-parameter filter
+// surface the memory_search tool advertises — deliberately not a generic
+// [{field, op, value}] array, which costs an LLM caller more tokens to emit and
+// gives it more ways to be wrong. The generic predicate form is the internal
+// representation the server compiles this into; it never reaches the caller.
+//
+// Every field is optional and its zero value means "no constraint", so a zero
+// SearchFilter is exactly the unfiltered search this tool ran before filters
+// existed.
+//
+// Each filter applies only to the tier that owns its field — Kind to episodic,
+// the fact triple and ExtractorVersion to semantic — which is why filtering on
+// one does not zero out the other. Since/Until bound the memory's event time
+// (episodic occurred_at, semantic valid_at) on BOTH tiers. Sources that declare
+// no filterable fields ("experience", "graph") cannot honor any of this, so any
+// filter at all excludes them rather than letting their hits ride back
+// unconstrained.
+type SearchFilter struct {
+	Kind             string
+	Subject          string
+	Predicate        string
+	Object           string
+	ExtractorVersion string
+	// Since/Until are inclusive event-time bounds; a zero time.Time is an open
+	// bound. Validated at the tool barricade: Since must not follow Until.
+	Since time.Time
+	Until time.Time
+	// IncludeSuperseded widens the search to superseded and retracted historical
+	// fact versions. False (the default) keeps today's current-state-only
+	// behavior. It relaxes the VALIDITY filter only — tenancy and ACL scope are
+	// enforced independently and are never widened by it.
+	IncludeSuperseded bool
+	// Sources restricts the search to the named tiers; nil searches every
+	// source. An empty (non-nil) slice is a validation error, not a silent
+	// "all".
+	Sources []string
+}
+
 // Backend is the Engram capability the MCP tools map onto (consumer-defined
 // seam). The gRPC client adapter satisfies it; tests use a fake.
 type Backend interface {
 	// Ingest appends one episodic event and returns its storage id.
 	Ingest(ctx context.Context, eventID, text, source string) (id string, err error)
-	// Search runs one hybrid query and returns fused hits.
-	Search(ctx context.Context, query string, k int) ([]Hit, error)
+	// Search runs one hybrid query under f and returns the matched hits and
+	// the graph expansions in separate blocks (see SearchResult): matched hits
+	// are capped at k, expansions are not counted against it. f is validated at
+	// the tool barricade before it arrives here.
+	Search(ctx context.Context, query string, k int, f SearchFilter) (SearchResult, error)
 	// Read fetches one record's full content by the (id, source) pair a
 	// search hit exposed. Authorization is fail-closed server-side: an
 	// unknown, cross-tenant, mismatched, or denied id errors NOT_FOUND.

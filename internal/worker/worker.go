@@ -112,11 +112,16 @@ type Metrics struct {
 // AT-LEAST-ONCE: it executes before the ledger is marked complete, so a stage
 // error fails the event and the outbox retries it (resuming from the cached
 // extraction). Stages MUST therefore be idempotent.
+// A stage receives the reconciliation OUTCOME of each fact, not just the fact:
+// the reconciler owns fact lifecycle, and a derived projection must be fed its
+// decision rather than re-derive one by re-reading the semantic store. See
+// ingest.FactOutcome for the invariants a stage may rely on.
 type Stage interface {
-	// Process handles one completed event and its landed facts. A non-nil
-	// error re-queues the whole event (idempotent replay), so it must be
-	// reserved for genuinely retryable failures.
-	Process(ctx context.Context, ev memory.Episodic, facts []memory.SemanticFact) error
+	// Process handles one completed event and the outcome of each of its
+	// facts, in the writer's deterministic (valid_at, content_key) order. A
+	// non-nil error re-queues the whole event (idempotent replay), so it must
+	// be reserved for genuinely retryable failures.
+	Process(ctx context.Context, ev memory.Episodic, outcomes []ingest.FactOutcome) error
 }
 
 // namedStage pairs a stage with its registration name for logging.
@@ -150,9 +155,9 @@ func (w *Worker) RegisterStage(name string, s Stage) {
 // runStages executes every registered stage for a completed event. A stage
 // error is returned so the caller fails the event and lets the outbox retry;
 // stages are documented at-least-once and idempotent.
-func (w *Worker) runStages(ctx context.Context, ev memory.Episodic, facts []memory.SemanticFact) error {
+func (w *Worker) runStages(ctx context.Context, ev memory.Episodic, outcomes []ingest.FactOutcome) error {
 	for _, s := range w.stages {
-		if err := s.stage.Process(ctx, ev, facts); err != nil {
+		if err := s.stage.Process(ctx, ev, outcomes); err != nil {
 			return fmt.Errorf("worker: stage %q processing %s: %w", s.name, ev.EventID, err)
 		}
 	}
@@ -310,15 +315,24 @@ func (w *Worker) ProcessEvent(ctx context.Context, ev memory.Episodic) error {
 	for _, id := range state.CompletedActions {
 		done[id] = true
 	}
+	// One outcome per fact, in the sorted order above: the reconciler's
+	// decision is carried to the post-write stages rather than discarded.
+	outcomes := make([]ingest.FactOutcome, 0, len(facts))
 	for _, f := range facts {
 		docID := memory.FactDocID(f.ContentKey, f.ValidAt)
 		if done[docID] {
-			written[docID] = true // resumed: this action already landed
+			// Resumed (D13): this action landed on an earlier attempt, so no
+			// reconciliation runs and the original decision is gone. Report it
+			// explicitly rather than leaving a zero-value outcome behind.
+			written[docID] = true
+			outcomes = append(outcomes, ingest.FactOutcome{Fact: f, Decision: ingest.OpReplayed})
 			continue
 		}
-		if err := w.reconcileFact(ctx, f, docID, written); err != nil {
+		outcome, err := w.reconcileFact(ctx, f, docID, written)
+		if err != nil {
 			return fmt.Errorf("worker: reconciling fact %s for %s: %w", docID, ev.EventID, err)
 		}
+		outcomes = append(outcomes, outcome)
 		done[docID] = true
 		state.CompletedActions = append(state.CompletedActions, docID)
 		if err := w.store.UpdateLedger(ctx, key, state); err != nil {
@@ -329,7 +343,7 @@ func (w *Worker) ProcessEvent(ctx context.Context, ev memory.Episodic) error {
 	// Post-write stages (D20) run before the ledger is marked complete, so a
 	// stage failure re-queues the event rather than silently dropping the
 	// derived work. Phase 3 registers none; P5/P6 register theirs.
-	if err := w.runStages(ctx, ev, facts); err != nil {
+	if err := w.runStages(ctx, ev, outcomes); err != nil {
 		return err
 	}
 
@@ -371,23 +385,32 @@ func (w *Worker) stampFacts(ev memory.Episodic, facts []memory.SemanticFact) {
 // and the guarded-close retry (step 4).
 const maxReconcileAttempts = 3
 
-// reconcileFact runs the decision + write protocol for one stamped fact.
-// Every optimistic loss re-reads and re-decides; nothing is ever overwritten
-// blindly and nothing is ever deleted.
-func (w *Worker) reconcileFact(ctx context.Context, f memory.SemanticFact, docID string, written map[string]bool) error {
+// reconcileFact runs the decision + write protocol for one stamped fact and
+// SURRENDERS the decision it made (ingest.FactOutcome) so the post-write
+// stages can react to supersession — the graph tier is a derived projection of
+// the reconciler's lifecycle, and must be fed that decision rather than
+// re-derive it. Every optimistic loss re-reads and re-decides; nothing is ever
+// overwritten blindly and nothing is ever deleted. The returned outcome
+// reflects the decision that finally settled, and its Fact is the fact as
+// landed. On error the outcome is meaningless and the event is re-queued.
+func (w *Worker) reconcileFact(ctx context.Context, f memory.SemanticFact, docID string, written map[string]bool) (ingest.FactOutcome, error) {
+	fail := func(err error) (ingest.FactOutcome, error) { return ingest.FactOutcome{}, err }
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
 		cands, err := w.candidates(ctx, f, docID, written)
 		if err != nil {
-			return err
+			return fail(err)
 		}
 		op, err := w.reconciler.Reconcile(ctx, f, cands)
 		if err != nil {
-			return fmt.Errorf("reconcile decision: %w", err)
+			return fail(fmt.Errorf("reconcile decision: %w", err))
 		}
 
 		switch op.Kind {
 		case ingest.OpNoop:
-			return nil
+			// Nothing landed and nothing was superseded: the fact is already
+			// known. Still a well-defined outcome, so stages see one entry per
+			// extracted fact.
+			return ingest.FactOutcome{Fact: f, Decision: ingest.OpNoop}, nil
 
 		case ingest.OpAdd:
 			f.Supersedes, f.InvalidAt = "", nil
@@ -396,30 +419,35 @@ func (w *Worker) reconcileFact(ctx context.Context, f memory.SemanticFact, docID
 				w.Metrics.CreateConflicts.Add(1)
 				continue // D10 step 3: re-read, re-reconcile
 			}
-			if err == nil {
-				written[docID] = true
+			if err != nil {
+				return fail(err)
 			}
-			return err
+			written[docID] = true
+			return ingest.FactOutcome{Fact: f, Decision: ingest.OpAdd}, nil
 
 		case ingest.OpUpdate, ingest.OpInvalidate:
 			pred := findCandidate(cands, op.PredecessorID)
 			if pred == nil {
-				return fmt.Errorf("reconciler chose predecessor %s not in the candidate set", op.PredecessorID)
+				return fail(fmt.Errorf("reconciler chose predecessor %s not in the candidate set", op.PredecessorID))
 			}
-			if f.ValidAt.Before(pred.Fact.ValidAt) {
+			predFact := pred.Fact // a copy: the concurrency tokens stay in here
+			if f.ValidAt.Before(predFact.ValidAt) {
 				// Late arrival (D10 step 4): the fact is historical —
 				// neighbor-aware insertion against the chain's TRUE valid-time
 				// neighbors (closed history included), never just the live
-				// head. The live head itself is never touched.
-				err := w.insertHistorical(ctx, f, docID, *pred, written)
+				// head. The live head itself is never touched, so a projection
+				// reading this outcome must NOT act on the supersession; it
+				// recognizes the case by Fact.ValidAt < Predecessor.ValidAt.
+				landed, err := w.insertHistorical(ctx, f, docID, *pred, written)
 				if errors.Is(err, store.ErrConflict) {
 					w.Metrics.CreateConflicts.Add(1)
 					continue
 				}
-				if err == nil {
-					written[docID] = true
+				if err != nil {
+					return fail(err)
 				}
-				return err
+				written[docID] = true
+				return ingest.FactOutcome{Fact: landed, Decision: op.Kind, Predecessor: &predFact}, nil
 			}
 			f.Supersedes, f.InvalidAt = op.PredecessorID, nil
 			err := w.createFact(ctx, docID, f) // step 3: NEW fact first, supersedes durable
@@ -428,16 +456,19 @@ func (w *Worker) reconcileFact(ctx context.Context, f memory.SemanticFact, docID
 				continue
 			}
 			if err != nil {
-				return err
+				return fail(err)
 			}
 			written[docID] = true
-			return w.closePredecessor(ctx, *pred, f.ValidAt) // step 4: guarded close
+			if err := w.closePredecessor(ctx, *pred, f.ValidAt); err != nil { // step 4: guarded close
+				return fail(err)
+			}
+			return ingest.FactOutcome{Fact: f, Decision: op.Kind, Predecessor: &predFact}, nil
 
 		default:
-			return fmt.Errorf("reconciler returned unknown op kind %q", op.Kind)
+			return fail(fmt.Errorf("reconciler returned unknown op kind %q", op.Kind))
 		}
 	}
-	return fmt.Errorf("did not settle after %d attempts: %w", maxReconcileAttempts, store.ErrConflict)
+	return fail(fmt.Errorf("did not settle after %d attempts: %w", maxReconcileAttempts, store.ErrConflict))
 }
 
 // createFact stamps transaction time, best-effort embeds the statement, and
@@ -539,10 +570,14 @@ func (w *Worker) closeBound(ctx context.Context, pred store.VersionedFact, reque
 // be permanent). Trim-first makes every crash window converge: a crash after
 // the trim leaves a valid-time GAP — never two overlapping truths — and the
 // cached ledger extraction fills it on resume.
-func (w *Worker) insertHistorical(ctx context.Context, f memory.SemanticFact, docID string, head store.VersionedFact, written map[string]bool) error {
+//
+// It returns the fact as landed (bounded by its successor's valid_at), so the
+// caller can report it in the reconciliation outcome.
+func (w *Worker) insertHistorical(ctx context.Context, f memory.SemanticFact, docID string, head store.VersionedFact, written map[string]bool) (memory.SemanticFact, error) {
+	fail := func(err error) (memory.SemanticFact, error) { return memory.SemanticFact{}, err }
 	pred, succ, err := w.store.ValidTimeNeighbors(ctx, f, docID)
 	if err != nil {
-		return fmt.Errorf("late arrival %s: reading valid-time neighbors: %w", docID, err)
+		return fail(fmt.Errorf("late arrival %s: reading valid-time neighbors: %w", docID, err))
 	}
 	// Merge realtime reads the neighbor search may lag behind: the reconciler
 	// head and this batch's own writes.
@@ -553,7 +588,7 @@ func (w *Worker) insertHistorical(ctx context.Context, f memory.SemanticFact, do
 		}
 		vf, ok, err := w.store.GetFact(ctx, id)
 		if err != nil {
-			return fmt.Errorf("late arrival %s: realtime neighbor read %s: %w", docID, id, err)
+			return fail(fmt.Errorf("late arrival %s: realtime neighbor read %s: %w", docID, id, err))
 		}
 		if ok {
 			consider = append(consider, vf)
@@ -578,7 +613,7 @@ func (w *Worker) insertHistorical(ctx context.Context, f memory.SemanticFact, do
 		// (f.ValidAt < head.ValidAt is this branch's precondition). Surfaced
 		// loudly rather than indexed unbounded — an unbounded historical
 		// record would shadow the live head.
-		return fmt.Errorf("late arrival %s: no valid-time successor found (head %s)", docID, head.ID)
+		return fail(fmt.Errorf("late arrival %s: no valid-time successor found (head %s)", docID, head.ID))
 	}
 
 	// 1. Trim the CLOSED containing neighbor so intervals never overlap. A
@@ -586,7 +621,7 @@ func (w *Worker) insertHistorical(ctx context.Context, f memory.SemanticFact, do
 	// sweep owns converging that; never close a live fact from this path.
 	if pred != nil && pred.Fact.InvalidAt != nil && pred.Fact.InvalidAt.After(f.ValidAt) {
 		if err := w.trimInterval(ctx, *pred, f.ValidAt); err != nil {
-			return fmt.Errorf("late arrival %s: trimming valid-time predecessor %s: %w", docID, pred.ID, err)
+			return fail(fmt.Errorf("late arrival %s: trimming valid-time predecessor %s: %w", docID, pred.ID, err))
 		}
 	}
 
@@ -594,7 +629,10 @@ func (w *Worker) insertHistorical(ctx context.Context, f memory.SemanticFact, do
 	// must never "complete" a close this path never owed.
 	inv := succ.Fact.ValidAt
 	f.Supersedes, f.InvalidAt = "", &inv
-	return w.createFact(ctx, docID, f)
+	if err := w.createFact(ctx, docID, f); err != nil {
+		return fail(err)
+	}
+	return f, nil
 }
 
 // succBeats reports whether a is the nearer successor than b (earliest wins;

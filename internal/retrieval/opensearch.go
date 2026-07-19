@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -63,6 +64,51 @@ func clampK(k int) int {
 	default:
 		return k
 	}
+}
+
+// ExpandedSource is the Hit.Source that marks a hit as a graph EXPANSION
+// rather than a query match: it was reached by traversing edges out of a
+// matched hit, not by matching the query itself. It is the sole discriminator
+// SplitExpanded partitions on.
+const ExpandedSource = "graph"
+
+// SplitExpanded partitions one Search result into the k matched hits the
+// caller asked for and the graph expansions that rode along beside them —
+// the "honest k" contract:
+//
+//	len(matched) <= clampK(k), and no matched hit has Source == ExpandedSource.
+//
+// Post-hooks run AFTER Search's top-k truncation and append hits to the list
+// (see Search), so the returned slice can exceed k. That is deliberate —
+// expansion is bonus context and must never evict a direct match — but it
+// means a caller asking for k=20 can be handed 40 hits with no way to tell
+// which 20 it actually asked for. Splitting here restores that distinction
+// without touching the Retriever interface (eval.NullRetriever implements it
+// too), because the two blocks are fully derivable from Hit.Source.
+//
+// k is normalized with the SAME clamp Search applied to Query.K, so an unset
+// (0) or over-MaxK k yields the identical bound the retriever actually used;
+// re-deriving that rule at the call site is how "len(hits) <= k" becomes a
+// lie for an unset k. The cap is enforced rather than assumed: today only the
+// graph expander appends post-truncation, but a future non-graph post-hook's
+// hits are NOT expansions — they belong in matched — and must not be allowed
+// to inflate k on their way there.
+//
+// Relative order is preserved within each block. expanded is nil (never an
+// empty non-nil slice) when there are no expansions, so a caller can emit the
+// block conditionally on len/nil alone.
+func SplitExpanded(hits []Hit, k int) (matched, expanded []Hit) {
+	for _, h := range hits {
+		if h.Source == ExpandedSource {
+			expanded = append(expanded, h)
+			continue
+		}
+		matched = append(matched, h)
+	}
+	if limit := clampK(k); len(matched) > limit {
+		matched = matched[:limit]
+	}
+	return matched, expanded
 }
 
 // DefaultEmbedTimeout bounds the query-time embedding call: D15's co-located
@@ -141,14 +187,14 @@ func NewOpenSearchRetriever(client *http.Client, baseURL string, embedder embed.
 		{
 			client: client, baseURL: base, index: cfg.episodicIndex,
 			textField: "text", vectorField: "text_embedding", source: "episodic",
-			supportsValidity: false,
-			embedder:         embedder, embedTimeout: cfg.embedTimeout, mode: cfg.mode, logger: cfg.logger,
+			supportsValidity: false, filterable: episodicFilterable,
+			embedder: embedder, embedTimeout: cfg.embedTimeout, mode: cfg.mode, logger: cfg.logger,
 		},
 		{
 			client: client, baseURL: base, index: cfg.semanticIndex,
 			textField: "statement", vectorField: "fact_embedding", source: "semantic",
-			supportsValidity: true,
-			embedder:         embedder, embedTimeout: cfg.embedTimeout, mode: cfg.mode, logger: cfg.logger,
+			supportsValidity: true, filterable: semanticFilterable,
+			embedder: embedder, embedTimeout: cfg.embedTimeout, mode: cfg.mode, logger: cfg.logger,
 		},
 	}
 	return &MultiRetriever{tiers: tiers, acl: cfg.acl, logger: cfg.logger}
@@ -163,31 +209,82 @@ func NewOpenSearchRetriever(client *http.Client, baseURL string, embedder embed.
 type MultiRetriever struct {
 	tiers     []*tierRetriever
 	acl       ACLFilter
-	tierSrcs  []TierSource
-	postHooks []PostHook
+	tierSrcs  []namedTierSource
+	postHooks []namedPostHook
 	logger    *slog.Logger
+}
+
+// namedTierSource / namedPostHook carry the registration name alongside the
+// registered implementation. The name lives HERE rather than on the TierSource
+// and PostHook interfaces deliberately: a Name() method would force every
+// implementor (internal/experience, internal/graph) to change, for a fact only
+// the registry needs to know.
+type namedTierSource struct {
+	name string
+	src  TierSource
+}
+
+type namedPostHook struct {
+	name string
+	hook PostHook
 }
 
 var _ Retriever = (*MultiRetriever)(nil)
 
-// RegisterTier adds a retrieval tier source (Phase 4 seam; P5 experience tier).
-// Call it at wiring time before serving; not safe to call concurrently with
-// active searches. Registered sources are searched with the caller's Identity
-// and their hits re-verified through the ACL predicate.
-func (m *MultiRetriever) RegisterTier(src TierSource) {
-	m.tierSrcs = append(m.tierSrcs, src)
+// RegisterTier adds a retrieval tier source under name (P5 experience tier).
+// name is the token callers pass in Filter.Sources to select — or skip — this
+// source; it must be non-empty and unique across all registered tiers, tier
+// sources and post-hooks. Call it at wiring time before serving; not safe to
+// call concurrently with active searches. Registered sources are searched with
+// the caller's Identity and their hits re-verified through the ACL predicate.
+func (m *MultiRetriever) RegisterTier(name string, src TierSource) {
+	m.checkSourceName(name)
+	m.tierSrcs = append(m.tierSrcs, namedTierSource{name: name, src: src})
 }
 
-// RegisterPostHook adds a post-fusion hook (Phase 4 seam; P6 graph expansion).
-// Call it at wiring time before serving. Hooks receive the caller's Identity;
-// any hits they add are re-verified through the ACL predicate before return.
-func (m *MultiRetriever) RegisterPostHook(h PostHook) {
-	m.postHooks = append(m.postHooks, h)
+// RegisterPostHook adds a post-fusion hook under name (P6 graph expansion).
+// name shares one namespace with the tiers — a caller asking for "graph" need
+// not know it names a post-hook rather than a tier. Same rules as RegisterTier:
+// non-empty, unique, wiring-time only. Hooks receive the caller's Identity; any
+// hits they add are re-verified through the ACL predicate before return.
+func (m *MultiRetriever) RegisterPostHook(name string, h PostHook) {
+	m.checkSourceName(name)
+	m.postHooks = append(m.postHooks, namedPostHook{name: name, hook: h})
+}
+
+// checkSourceName flags a wiring-time registration bug loudly rather than
+// letting it fail silently later: an empty name makes a source unselectable
+// (Filter.Sources could never name it), and a duplicate name makes selection
+// ambiguous (one name would select two sources). Both are programmer errors at
+// startup, not runtime conditions — but this package never panics, so they are
+// logged at ERROR and the registration proceeds, leaving the source reachable
+// through the default (nil Sources) path rather than dropping it on the floor.
+func (m *MultiRetriever) checkSourceName(name string) {
+	log := m.logger
+	if log == nil {
+		log = slog.Default()
+	}
+	if name == "" {
+		log.Error("retrieval: source registered with an empty name; it cannot be selected via Filter.Sources")
+		return
+	}
+	if slices.Contains(m.sourceNames(), name) {
+		log.Error("retrieval: duplicate source name registered; Filter.Sources selection is ambiguous", "name", name)
+	}
 }
 
 // Search implements Retriever across every configured tier under the ACL. An
-// empty query short-circuits to an empty result (no HTTP calls). With ACL
-// enabled, the filter is compiled ONCE from f.Identity and enforced two ways:
+// empty query short-circuits to an empty result (no HTTP calls).
+//
+// f.Sources and f.Predicates are validated FIRST, before any authorization or
+// HTTP work: an unknown source, an empty (non-nil) source list, an unknown
+// filterable field, a bad op, or a non-scalar filter value returns an error
+// naming the valid vocabulary — no cluster round-trip, no partial search. The
+// surviving sources decide which tiers, tier sources and post-hooks run, and
+// each tier compiles only the predicates it declares (routing, not zeroing).
+//
+// With ACL enabled, the filter is compiled ONCE from f.Identity and enforced
+// two ways:
 // its OpenSearch clause goes inside every built-in tier query (efficient,
 // preserves filtered-kNN recall), and its predicate re-verifies hits that came
 // from registered tier sources or post-hooks. It is fail-closed: an ACL
@@ -198,10 +295,34 @@ func (m *MultiRetriever) RegisterPostHook(h PostHook) {
 // display allowlist (no embeddings, no ACL provenance), and every hit carries
 // a non-zero Score.
 func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, error) {
+	// The filter barricade: caller-supplied Sources/Predicates are external
+	// input (they arrive from the MCP caller across a process boundary), so
+	// they are validated here, once, before anything else runs — including the
+	// empty-text short-circuit below. An invalid filter (unknown source,
+	// unfilterable field, malformed predicate) must error regardless of query
+	// text (DW-4.7); it must never be silently skipped because the query
+	// happened to be empty. Everything downstream — including every tier's
+	// clause compiler — may assume the filter is well-formed and that each
+	// predicate is owned by at least one selected tier.
+	sel, err := m.resolveSources(f.Sources)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.validatePredicates(f.Predicates, sel); err != nil {
+		return nil, err
+	}
+	if err := m.validateFilterableSources(f.Predicates, sel); err != nil {
+		return nil, err
+	}
 	if q.Text == "" {
 		return nil, nil
 	}
 	q.K = clampK(q.K)
+
+	// A filtered search runs only sources that can honor the filter: registered
+	// tier sources and post-hooks declare no filterable fields, so their hits
+	// would ride back unconstrained beside constrained ones (see selectSources).
+	tiers, tierSrcs, postHooks := m.selectSources(sel, len(f.Predicates) > 0)
 
 	var enf acl.Enforcer
 	var aclClause map[string]any
@@ -221,9 +342,9 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 		hits []Hit
 		err  error
 	}
-	results := make([]outcome, len(m.tiers)+len(m.tierSrcs))
+	results := make([]outcome, len(tiers)+len(tierSrcs))
 	var wg sync.WaitGroup
-	for i, tier := range m.tiers {
+	for i, tier := range tiers {
 		wg.Add(1)
 		go func(i int, tier *tierRetriever) {
 			defer wg.Done()
@@ -231,13 +352,13 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 			results[i] = outcome{hits, err}
 		}(i, tier)
 	}
-	for j, src := range m.tierSrcs {
+	for j, src := range tierSrcs {
 		wg.Add(1)
 		go func(i int, src TierSource) {
 			defer wg.Done()
 			hits, err := src.Search(ctx, f.Identity, q)
 			results[i] = outcome{hits, err}
-		}(len(m.tiers)+j, src)
+		}(len(tiers)+j, src.src)
 	}
 	wg.Wait()
 
@@ -274,14 +395,14 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 	// top-k; they may add hits reached through other documents. Re-authorize
 	// their output so an expansion cannot introduce a fact the caller may not
 	// read (defense in depth; the authorized top-k above is unaffected).
-	for _, h := range m.postHooks {
-		expanded, err := h.Apply(ctx, f.Identity, merged)
+	for _, h := range postHooks {
+		expanded, err := h.hook.Apply(ctx, f.Identity, merged)
 		if err != nil {
-			return nil, fmt.Errorf("retrieval: post-hook: %w", err)
+			return nil, fmt.Errorf("retrieval: post-hook %q: %w", h.name, err)
 		}
 		merged = expanded
 	}
-	if m.acl != nil && len(m.postHooks) > 0 {
+	if m.acl != nil && len(postHooks) > 0 {
 		merged = filterAuthorized(merged, enf)
 	}
 
@@ -305,7 +426,10 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 // dropped at the retrieval boundary so it never crosses the gRPC wire.
 var allowedFields = map[string][]string{
 	"episodic": {"text", "kind", "occurred_at", "event_id", "source_ids"},
-	"semantic": {"statement", "subject", "predicate", "object", "valid_at", "source_ids"},
+	// extractor_version is projected because it is filterable: a caller that can
+	// narrow by extractor_version must be able to SEE which version a hit came
+	// from, or the filter is unverifiable from the response alone.
+	"semantic": {"statement", "subject", "predicate", "object", "valid_at", "source_ids", "extractor_version"},
 	"graph":    {"statement", "subject", "predicate", "object", "hop"},
 }
 
@@ -373,10 +497,14 @@ type tierRetriever struct {
 	vectorField      string
 	source           string
 	supportsValidity bool
-	embedder         embed.Embedder
-	embedTimeout     time.Duration
-	mode             SearchMode
-	logger           *slog.Logger
+	// filterable declares which Filter.Predicates fields this tier owns and
+	// how they compile. A predicate on a field absent from this map belongs to
+	// another tier and never touches this tier's query.
+	filterable   FilterableFields
+	embedder     embed.Embedder
+	embedTimeout time.Duration
+	mode         SearchMode
+	logger       *slog.Logger
 }
 
 var _ Retriever = (*tierRetriever)(nil)
@@ -411,7 +539,10 @@ func (t *tierRetriever) search(ctx context.Context, q Query, f Filter, aclClause
 		}
 	}
 
-	filters := t.filterClauses(f, aclClause)
+	filters, err := t.filterClauses(f, aclClause)
+	if err != nil {
+		return nil, err
+	}
 	// Memory tiers never sort (relevance/RRF order only) — nil is the only
 	// value any memory caller ever passes, which is exactly the value
 	// buildQuery treats as "omit the sort key entirely" (DW-5.1).
@@ -461,12 +592,21 @@ func (t *tierRetriever) embed(ctx context.Context, text string) (vec []float32, 
 	return vecs[0], false
 }
 
-// filterClauses builds the tenancy, validity, and ACL filter query clauses,
-// applied inside both the BM25 and kNN sub-queries (never post-filtered —
-// the filtered-kNN recall collapse the Phase-0 spike found only when
-// filtering after the fact, not inside the knn clause). The ACL clause, when
-// present, is the query-time scope barricade (Phase 4).
-func (t *tierRetriever) filterClauses(f Filter, aclClause map[string]any) []any {
+// filterClauses builds the tenancy, validity, ACL and predicate filter query
+// clauses, applied inside both the BM25 and kNN sub-queries (never
+// post-filtered — the filtered-kNN recall collapse the Phase-0 spike found
+// only when filtering after the fact, not inside the knn clause). The ACL
+// clause, when present, is the query-time scope barricade (Phase 4). Caller
+// predicates come LAST, appended only for the fields this tier declares — so a
+// Filter with no predicates yields byte-for-byte the clause list it always did
+// (DW-4.3), and a predicate another tier owns leaves this tier's query
+// unconstrained rather than zeroing it (DW-4.2).
+//
+// An error can only mean an unvalidated predicate reached a tier (Search
+// validates every one of them first). Failing closed here rather than emitting
+// an unchecked clause is deliberate: a filter compiler is not the place to
+// guess.
+func (t *tierRetriever) filterClauses(f Filter, aclClause map[string]any) ([]any, error) {
 	var clauses []any
 	if aclClause != nil {
 		clauses = append(clauses, aclClause)
@@ -493,7 +633,17 @@ func (t *tierRetriever) filterClauses(f Filter, aclClause map[string]any) []any 
 			},
 		})
 	}
-	return clauses
+	for _, p := range f.Predicates {
+		clause, declared, err := t.filterable.clauseFor(p)
+		if err != nil {
+			return nil, err
+		}
+		if !declared {
+			continue // owned by another tier: route, don't fail — and don't zero this one.
+		}
+		clauses = append(clauses, clause)
+	}
+	return clauses, nil
 }
 
 // buildQuery constructs the OpenSearch request body for one tier's search.

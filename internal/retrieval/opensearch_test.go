@@ -92,6 +92,23 @@ func TestMultiRetrieverEmptyQueryShortCircuits(t *testing.T) {
 	}
 }
 
+// TestMultiRetrieverEmptyQueryStillValidatesFilter: the empty-text
+// short-circuit above must never bypass the filter barricade (DW-4.7). An
+// unknown source has to error regardless of query text — otherwise a caller
+// with a typo'd source name and an empty query silently gets zero results
+// instead of the validation error that would tell them what's wrong.
+func TestMultiRetrieverEmptyQueryStillValidatesFilter(t *testing.T) {
+	srv := failingHandler(t)
+	r := retrieval.NewOpenSearchRetriever(srv.Client(), srv.URL, embed.NewFakeEmbedder(4, nil))
+	_, err := r.Search(context.Background(), retrieval.Query{Text: ""}, retrieval.Filter{Sources: []string{"nope"}})
+	if err == nil {
+		t.Fatal("empty query with an unknown source returned no error, want the filter barricade to still run")
+	}
+	if !strings.Contains(err.Error(), "unknown source") {
+		t.Errorf("error does not name the unknown source: %v", err)
+	}
+}
+
 // TestMultiRetrieverZeroResults covers the zero-matches dirty test (DW-1.6):
 // a well-formed query against an empty index returns an empty slice, not an
 // error.

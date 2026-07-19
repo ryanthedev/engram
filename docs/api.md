@@ -21,7 +21,7 @@ identity, never from client-supplied fields.
 | RPC | Purpose | Notes |
 |---|---|---|
 | `Ingest` | Durably append one episodic event; the append is the enqueue for async extraction. | `event_id` required (idempotency, D13); empty → `INVALID_ARGUMENT`. |
-| `Search` | One hybrid query (BM25 + kNN → RRF), tenancy- and validity-filtered. | `valid_only` restricts to currently-valid facts; `k` clamped server-side. |
+| `Search` | One hybrid query (BM25 + kNN → RRF), tenancy-, validity- and filter-scoped. | Flat optional filters (`kind`, `subject`, `predicate`, `object`, `extractor_version`, `since`, `until`, `include_superseded`, `sources`) compile server-side into per-tier predicates; each reaches only the tier that declares its field. `include_superseded` relaxes the current-state filter only — never the ACL. `k` clamped server-side. |
 | `Status` | Server health, resolved identity, coarse per-tier counts. | Backs `engram status` / `memory_status`. |
 | `Audit` | A fact's provenance + full bi-temporal version history. | Unauthorized/unknown id → `NOT_FOUND` (no existence oracle). |
 | `Read` | One record's full content by `(id, source)`. | `source` ∈ `episodic`\|`semantic`; `graph` → `UNIMPLEMENTED`. Fail-closed by id. |
@@ -67,7 +67,7 @@ Address/token resolution: `-addr` → `$ENGRAM_ADDR` → `localhost:7070`; `-tok
 | `engram quarantine list` | `--tenant`* `--url` | `experience.Store.ListQuarantine` |
 | `engram quarantine release <fingerprint>` | `--tenant`* `--url` | `experience.Store.Release` |
 | `engram ingest` | `--event-id`* `--text`* `--source` `--scope` `--team` `-addr` `-token` | gRPC **Ingest** |
-| `engram search <query>` | `-k` (10) `-addr` `-token` | gRPC **Search** (`valid_only=true`) |
+| `engram search <query>` | `-k` (10) `-addr` `-token` | gRPC **Search** (unfiltered: current facts only) |
 | `engram status` | `-addr` `-token` | gRPC **Status** |
 | `engram audit <fact-id>` | `-addr` `-token` | gRPC **Audit** |
 | `engram export <dir>` | `--force` `-addr` `-token` | gRPC **Export** (paginated → Obsidian vault) |
@@ -107,7 +107,7 @@ maps 1:1 to a gRPC RPC via the shared client. Authenticated by `$ENGRAM_TOKEN`.
 | Tool | Args | Returns | RPC |
 |---|---|---|---|
 | `memory_ingest` | `event_id`* `text`* `source` | `{id}` | Ingest |
-| `memory_search` | `query`* `k` | budget-packed ranked hits (spills oversized sets to `overflow_path`) | Search |
+| `memory_search` | `query`* `k` `kind` `subject` `predicate` `object` `extractor_version` `since` `until` `include_superseded` `sources` | budget-packed ranked hits (spills oversized sets to `overflow_path`) | Search |
 | `memory_read` | `id`* `source`* (`episodic`\|`semantic`; `graph` rejected) | full record (episodic text; or fact + provenance + history) | Read |
 | `memory_status` | — | `{healthy, tenant/user/agent, episodic_count, semantic_count, opensearch_version}` | Status |
 | `knowledge_ingest` | `collection`* `source`* `harvest_id`* `docs[]`* | `{indexed}` (harvester/admin) | KnowledgeIngest |

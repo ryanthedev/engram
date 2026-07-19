@@ -16,17 +16,23 @@ import (
 type fixedHitsBackend struct {
 	knowledgeStubs
 	hits []Hit
+	// expanded is the graph-expansion block returned beside hits (Phase 6). It
+	// is NOT sliced to k: expansions are not counted against k.
+	expanded []Hit
 }
 
 func (b *fixedHitsBackend) Ingest(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
 
-func (b *fixedHitsBackend) Search(_ context.Context, _ string, k int) ([]Hit, error) {
-	if k <= 0 || k >= len(b.hits) {
-		return b.hits, nil
+func (b *fixedHitsBackend) Search(_ context.Context, _ string, k int, _ SearchFilter) (SearchResult, error) {
+	hits := b.hits
+	if k > 0 && k < len(hits) {
+		hits = hits[:k]
 	}
-	return b.hits[:k], nil
+	// expanded is the graph-expansion block (Phase 6); nil in every pre-existing
+	// budget test, so those exercise exactly today's matched-only packing.
+	return SearchResult{Hits: hits, Expanded: b.expanded}, nil
 }
 
 func (b *fixedHitsBackend) Status(context.Context) (Status, error) { return Status{}, nil }
@@ -506,9 +512,9 @@ type recordingKBackend struct {
 func (b *recordingKBackend) Ingest(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
-func (b *recordingKBackend) Search(_ context.Context, _ string, k int) ([]Hit, error) {
+func (b *recordingKBackend) Search(_ context.Context, _ string, k int, _ SearchFilter) (SearchResult, error) {
 	b.onSearch(k)
-	return nil, nil
+	return SearchResult{}, nil
 }
 func (b *recordingKBackend) Status(context.Context) (Status, error) { return Status{}, nil }
 

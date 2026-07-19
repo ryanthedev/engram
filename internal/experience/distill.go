@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ryanthedev/engram/internal/ingest"
 	"github.com/ryanthedev/engram/internal/memory"
 )
 
@@ -133,7 +134,10 @@ func NewDistillStage(distiller Distiller, store *Store, logger *slog.Logger) *Di
 // carries a task experience, gates and stores it. Provenance and scope are
 // taken from the source event (never the untrusted directive) so the ACL and
 // audit trail stay honest.
-func (s *DistillStage) Process(ctx context.Context, ev memory.Episodic, _ []memory.SemanticFact) error {
+//
+// The event's fact outcomes are ignored: an experience is distilled from the
+// event text alone, so no reconciliation decision bears on it.
+func (s *DistillStage) Process(ctx context.Context, ev memory.Episodic, _ []ingest.FactOutcome) error {
 	cand, ok := s.distiller.Distill(ev.Text)
 	if !ok {
 		return nil // no experience in this event

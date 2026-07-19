@@ -23,12 +23,16 @@ type Candidate struct {
 	PrimaryTerm int64
 }
 
-// OpKind is the reconciler's four-way decision (D4/D10).
+// OpKind is what happened to one candidate fact (D4/D10). A Reconciler
+// returns exactly one of the four decisions below; the WRITER additionally
+// reports OpReplayed for an action it resumed rather than re-decided, so that
+// every landed fact carries a well-defined outcome (never a zero value).
 type OpKind string
 
-// The four reconciliation outcomes. UPDATE and INVALIDATE both index the new
-// fact first (op_type=create, supersedes set) and then close the predecessor
-// under guard; nothing is ever hard-deleted.
+// The four reconciliation decisions, plus the writer-only OpReplayed. UPDATE
+// and INVALIDATE both index the new fact first (op_type=create, supersedes
+// set) and then close the predecessor under guard; nothing is ever
+// hard-deleted.
 const (
 	// OpNoop discards the candidate fact: it is already known or adds nothing.
 	OpNoop OpKind = "noop"
@@ -40,6 +44,14 @@ const (
 	// OpInvalidate retracts a predecessor without asserting a successor
 	// truth: the new record documents the retraction via supersedes.
 	OpInvalidate OpKind = "invalidate"
+	// OpReplayed marks a fact whose write already landed in an earlier attempt
+	// at the same event (its doc id is in the ledger's CompletedActions, D13):
+	// the writer skipped reconciliation, so the original decision is not
+	// recoverable and no predecessor is known. A Reconciler MUST NEVER return
+	// it — the writer rejects an unknown op kind — and derived projections
+	// MUST treat it as "already accounted for", never re-applying a
+	// supersession side effect.
+	OpReplayed OpKind = "replayed"
 )
 
 // Op is one reconciliation decision. PredecessorID names the candidate being
@@ -50,6 +62,40 @@ type Op struct {
 	Kind OpKind
 	// PredecessorID is the doc _id of the candidate this op supersedes.
 	PredecessorID string
+}
+
+// FactOutcome is what actually happened to one fact on the write path — the
+// reconciler's decision, surrendered to the post-write stages (D20) instead of
+// discarded. The reconciler is the single owner of fact lifecycle; derived
+// projections (the graph tier) are FED that decision rather than re-deriving
+// it by re-reading the semantic store.
+//
+// Invariants, which every stage may rely on:
+//   - Decision is never the zero value. A fact the writer resumed rather than
+//     re-decided reports OpReplayed.
+//   - Predecessor is non-nil for EXACTLY OpUpdate and OpInvalidate — the two
+//     kinds that supersede an existing fact — and nil for OpAdd, OpNoop and
+//     OpReplayed.
+//   - Fact is the fact AS LANDED — Supersedes and InvalidAt carry the values
+//     actually written — not the pre-reconciliation candidate. (System
+//     transaction time is stamped inside the store write and is NOT reflected
+//     here.) For OpNoop nothing was written and Fact is the discarded
+//     candidate; for OpReplayed it is the cached extraction's copy of the fact
+//     that landed on an earlier attempt.
+//   - A late arrival — a superseding fact OLDER than the fact it supersedes
+//     (D10 step 4) — reports OpUpdate/OpInvalidate with a non-nil Predecessor,
+//     yet the predecessor was deliberately NOT closed: the new fact was bounded
+//     at index time instead and the predecessor stays live. A projection that
+//     acts on supersession must exclude it, which is derivable from the outcome
+//     alone: Fact.ValidAt.Before(Predecessor.ValidAt).
+type FactOutcome struct {
+	// Fact is the fact as landed (see invariants above).
+	Fact memory.SemanticFact
+	// Decision is the reconciler's actual Op.Kind for this fact, or OpReplayed.
+	Decision OpKind
+	// Predecessor is the fact this one superseded — a copy, carrying no
+	// optimistic-concurrency tokens (those stay inside the writer).
+	Predecessor *memory.SemanticFact
 }
 
 // Extractor turns a batch of episodic events into candidate semantic facts
