@@ -17,7 +17,6 @@ package cli
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -419,21 +418,11 @@ func buildVaultRefs(events []Event, concepts []Concept) VaultRefs {
 		if _, dup := refs[c.id]; dup {
 			continue // pathological id shared across kinds: first (sorted) wins
 		}
-		name := c.base
-		if c.suffix || baseCount[strings.ToLower(c.base)] > 1 {
-			name = c.base + " (" + idPrefix(c.id, 8) + ")"
-		}
-		// Residual clashes (a literal name crafted to mimic a suffixed one)
-		// extend the id prefix, then a counter — always terminates on an
-		// unused name, deterministically.
-		for n := 8; used[strings.ToLower(name)]; n += 4 {
-			if n < len(c.id) {
-				name = c.base + " (" + idPrefix(c.id, n+4) + ")"
-			} else {
-				name = c.base + " (" + c.id + "-" + strconv.Itoa(n) + ")"
-			}
-		}
-		used[strings.ToLower(name)] = true
+		// uniqueNoteName (export.go) owns suffixing AND the byte budget:
+		// every basename — bare, homonym-suffixed, or residual-clash
+		// extended — stays under NAME_MAX, with the base truncated on a
+		// rune boundary, never the uniqueness-carrying suffix.
+		name := uniqueNoteName(c.base, c.id, c.suffix || baseCount[strings.ToLower(c.base)] > 1, used)
 		display := c.display
 		if display == "" {
 			display = name

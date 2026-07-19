@@ -217,3 +217,10 @@ Summary: `buildVaultModel(episodics, entities, edges) (VaultModel{Events,Concept
 - [x] Committed (wave member, cherry-picked)
 Commit: 5010f3f
 Summary: `renderEvent(Event, VaultRefs)` and `renderConcept(Concept, VaultRefs, events map[string]Event)` — pure renderers. Event notes: UTC-foldered path (nil→undated/), sanitized prose, Concepts footer. Concept notes: claims oldest-first (EdgeID tie-break), each Statement + folded `> [!quote]-` callout of the source event's sanitized prose, related + ghost links; degree≥2 only get files. 100% coverage; all untrusted fields sanitized. NOTE for Phase 5: renderConcept needs `VaultModel.Events` as a `map[string]Event`.
+
+### Phase 4: Client — topic-map clustering + MOC notes (Gate: Standard)
+- [x] BUILD: implementation complete (+ nesting flatten + 100% coverage fixes)
+- [x] REVIEW: single-sample sonnet, fail→pass (round 1 flagged >3 nesting + <100% coverage; round 2 PASS)
+- [x] Committed (wave member, cherry-picked)
+Commit: c8debf8
+Summary: `clusterConcepts(VaultModel) []Cluster` (deterministic connected-components; ≥minMembers → own map, smaller → size-bounded `misc-NN` buckets) and `renderMap(Cluster, VaultRefs)` (title = highest-degree member, sanitizeFilename'd, collision-suffixed with `misc-` reserved; member list + UTC event timeline + cross-cluster out-links). 100% coverage, max nesting 3. Wave-integration test (Phase 3+4) green.

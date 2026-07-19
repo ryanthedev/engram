@@ -295,18 +295,18 @@ func assignClusterFilenames(clusters []*Cluster, conceptByID map[string]Concept,
 
 	used := make(map[string]bool, len(rs))
 	for _, r := range rs {
-		name := r.base
-		if !r.immune && (r.forced || baseCount[strings.ToLower(r.base)] > 1) {
-			name = r.base + " (" + idPrefix(r.cl.Key, 8) + ")"
+		if r.immune {
+			// A misc bucket's canonical tiny name is authoritative: recorded
+			// in used, never suffixed — but it still passes safeNoteName,
+			// the choke point EVERY basename goes through.
+			name := safeNoteName(r.base)
+			used[strings.ToLower(name)] = true
+			r.cl.RelPath = "maps/" + name + ".md"
+			continue
 		}
-		for n := 8; used[strings.ToLower(name)]; n += 4 {
-			if n < len(r.cl.Key) {
-				name = r.base + " (" + idPrefix(r.cl.Key, n+4) + ")"
-			} else {
-				name = r.base + " (" + r.cl.Key + "-" + strconv.Itoa(n) + ")"
-			}
-		}
-		used[strings.ToLower(name)] = true
+		// uniqueNoteName (export.go) owns suffixing AND the byte budget, the
+		// same algorithm buildVaultRefs uses for events and concepts.
+		name := uniqueNoteName(r.base, r.cl.Key, r.forced || baseCount[strings.ToLower(r.base)] > 1, used)
 		r.cl.RelPath = "maps/" + name + ".md"
 	}
 }
