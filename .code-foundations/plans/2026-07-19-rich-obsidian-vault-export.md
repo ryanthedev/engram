@@ -1,8 +1,8 @@
 # Plan: Rich Obsidian Vault Export (dual-primary, memory-only, knowledge-ready)
 **Created:** 2026-07-19
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-19
-**Current Phase:** 1
+**Completed:** 2026-07-19
 **Complexity:** medium
 ---
 ## Context
@@ -224,3 +224,10 @@ Summary: `renderEvent(Event, VaultRefs)` and `renderConcept(Concept, VaultRefs, 
 - [x] Committed (wave member, cherry-picked)
 Commit: c8debf8
 Summary: `clusterConcepts(VaultModel) []Cluster` (deterministic connected-components; ≥minMembers → own map, smaller → size-bounded `misc-NN` buckets) and `renderMap(Cluster, VaultRefs)` (title = highest-degree member, sanitizeFilename'd, collision-suffixed with `misc-` reserved; member list + UTC event timeline + cross-cluster out-links). 100% coverage, max nesting 3. Wave-integration test (Phase 3+4) green.
+
+### Phase 5: Client — vault assembly, CLI wiring, determinism (Gate: Full)
+- [x] BUILD: implementation complete (+3 review-fix rounds: symlink guard, byte-budget, UTF-8 choke point)
+- [x] REVIEW: 3-sample fable, fail→pass (4 rounds; caught & closed a symlink `rm -rf $HOME` bypass and a clobber-then-abort data-loss class via both length and encoding vectors)
+- [x] Committed
+Commit: fbf8378
+Summary: `engram export <dir>` now writes the rich dual-primary vault (events/ + concepts/ + maps/); entity-per-note format removed. `fetchExport` drains episodics; `writeVault` assembles via buildVaultModel + the Phase 3/4 renderers under path confinement, atomic writes, marker/clobber guards, and a re-export-clobbers-edits warning. Symlinked-vault catastrophic-guard bypass fixed (EvalSymlinks); single `safeNoteName` choke point guarantees every basename is valid UTF-8, ≤255 bytes, illegal-char-free regardless of source field. Deterministic. Follow-up (non-blocking): NFC/NFD normalization collision could silently drop one note on APFS — worth an NFC fold in a later pass.
