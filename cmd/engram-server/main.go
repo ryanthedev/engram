@@ -285,8 +285,11 @@ func main() {
 	svc.Episodic = st
 	// The Export RPC pages over the same graph store the worker stage and
 	// expander use — no shadow read path; tenant/ACL are enforced in the
-	// handler on top of the store's own tenant-scoped scan.
+	// handler on top of the store's own tenant-scoped scan. The episodic
+	// stage reads the same store search does, behind its own seam (the graph
+	// store cannot reach the episodic index).
 	svc.Exporter = graphStore
+	svc.EpisodicExporter = st
 	engrampb.RegisterEngramServer(grpcServer, svc)
 
 	go func() {

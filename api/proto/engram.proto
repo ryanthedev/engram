@@ -350,13 +350,36 @@ message ExportEdge {
   google.protobuf.Timestamp created_at = 11;
 }
 
-// ExportResponse is one bounded page: entities first, then edges (a page may
-// carry both when the entity tier exhausts mid-call). An empty next_cursor
-// means the export is complete.
+// ExportEpisodic is one processed, non-dead-lettered episodic record in an
+// export page — the raw event prose the CLI renders into an event note.
+// Internal fields (text_embedding, outbox worker state) are deliberately not
+// exported; tenant_id is omitted because every record is the caller's own
+// tenant by construction.
+message ExportEpisodic {
+  // Client-supplied idempotency identity (D13) — the join key the CLI uses
+  // to resolve entity/edge source_ids back to their source event.
+  string event_id = 1;
+  // Event classification (e.g. "tool_result", "conversation").
+  string kind = 2;
+  // Raw event payload (unbounded — the episodic page is byte-budgeted).
+  string text = 3;
+  // Real-world event time.
+  google.protobuf.Timestamp occurred_at = 4;
+  repeated string source_ids = 5;
+  // Provenance / ACL fields (D6/D16).
+  string scope = 6;
+  string team_id = 7;
+  string owner_agent_id = 8;
+}
+
+// ExportResponse is one bounded page: episodics first, then entities, then
+// edges (a page may span tiers when a tier exhausts mid-call). An empty
+// next_cursor means the export is complete.
 message ExportResponse {
   repeated ExportEntity entities = 1;
   repeated ExportEdge edges = 2;
   string next_cursor = 3;
+  repeated ExportEpisodic episodics = 4;
 }
 
 // PredicateOp is the closed set of generic filter operations a Predicate can

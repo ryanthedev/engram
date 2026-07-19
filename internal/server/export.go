@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,6 +20,8 @@ import (
 	"github.com/ryanthedev/engram/internal/auth"
 	"github.com/ryanthedev/engram/internal/authgrpc"
 	"github.com/ryanthedev/engram/internal/graph"
+	"github.com/ryanthedev/engram/internal/memory"
+	"github.com/ryanthedev/engram/internal/store"
 )
 
 // Exporter is the full-graph read seam the Export RPC pages over
@@ -31,22 +34,41 @@ type Exporter interface {
 	ScanEdges(ctx context.Context, tenantID string, cursor graph.Cursor) ([]graph.Edge, graph.Cursor, error)
 }
 
-// Export wire-cursor stages: the entity tier is drained first, then the edge
-// tier — the graph scan advances the two tiers independently, so the wire
+// EpisodicExporter is the episodic-tier read seam the Export RPC pages over
+// — a SEPARATE seam from the graph-bound Exporter above, because the two
+// tiers live in different subsystems (*store.OpenSearchStore reaches the
+// episodic index; *graph.Store cannot). after is an opaque store-owned
+// search_after token ("" = start, "" back = tier exhausted); the returned
+// page is tenant-scoped, byte-budgeted, and pre-filtered to processed,
+// non-dead-lettered records inside the implementation. An undecodable token
+// surfaces store.ErrBadCursor (wrapped), which the handler rejects as
+// InvalidArgument.
+type EpisodicExporter interface {
+	ScanEpisodic(ctx context.Context, tenantID string, after string) ([]memory.Episodic, string, error)
+}
+
+// Export wire-cursor stages: the episodic tier is drained first, then
+// entities, then edges — each tier advances independently, so the wire
 // cursor records which tier the export is in plus that tier's sub-cursor.
 const (
+	stageEpisodic = "episodic"
 	stageEntities = "entities"
 	stageEdges    = "edges"
 )
 
-// exportCursor is the decoded wire cursor: the stage plus the Phase 1 graph
-// sub-cursor for that stage (round-tripped via graph.Cursor's TextMarshaler).
-// It deliberately carries NO tenancy — the tenant is re-pinned from the
-// verified identity on every call, so a stale or fabricated cursor can only
-// reposition inside the caller's own tenant, never widen it.
+// exportCursor is the decoded wire cursor: the stage plus that stage's
+// sub-cursor — the Phase 1 graph cursor for the entity/edge stages
+// (round-tripped via graph.Cursor's TextMarshaler), the store's opaque
+// string token for the episodic stage. It deliberately carries NO tenancy —
+// the tenant is re-pinned from the verified identity on every call, so a
+// stale or fabricated cursor can only reposition inside the caller's own
+// tenant, never widen it.
 type exportCursor struct {
 	Stage string       `json:"s"`
 	After graph.Cursor `json:"a"`
+	// EpAfter is the episodic stage's search_after token; unused (empty) in
+	// the entity/edge stages.
+	EpAfter string `json:"e,omitempty"`
 }
 
 // encodeExportCursor renders c as the opaque wire token (base64url of JSON).
@@ -61,7 +83,7 @@ func encodeExportCursor(c exportCursor) string {
 // InvalidArgument (opaquely — the error detail never reaches the client).
 func decodeExportCursor(token string) (exportCursor, error) {
 	if token == "" {
-		return exportCursor{Stage: stageEntities}, nil
+		return exportCursor{Stage: stageEpisodic}, nil
 	}
 	b, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
@@ -71,15 +93,16 @@ func decodeExportCursor(token string) (exportCursor, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return exportCursor{}, err
 	}
-	if c.Stage != stageEntities && c.Stage != stageEdges {
+	if c.Stage != stageEpisodic && c.Stage != stageEntities && c.Stage != stageEdges {
 		return exportCursor{}, status.Error(codes.InvalidArgument, "unknown export stage")
 	}
 	return c, nil
 }
 
 // Export implements engrampb.EngramServer: one bounded page of the caller's
-// live graph — entities first, then edges — plus the continuation cursor
-// (empty = exhausted). Security posture (this is the tenant boundary):
+// tenant — episodic records first, then live entities, then edges — plus the
+// continuation cursor (empty = exhausted). Security posture (this is the
+// tenant boundary):
 //   - tenant is pinned from the verified Identity, never from the request
 //     (there is no request tenancy field at all); a missing identity fails
 //     closed with Unauthenticated even for in-process callers that bypass
@@ -87,13 +110,16 @@ func decodeExportCursor(token string) (exportCursor, error) {
 //   - every record passes s.ACL.CanRead (nil ACL skips the scope check per
 //     the ReadAuthorizer contract; production always wires it); a denied
 //     record is omitted, an ACL error aborts the call — never partial trust;
-//   - the page bound is inherited from the Phase 1 scan batch size: at most
-//     one entity page plus one edge page per response (< 2×500 records, and
-//     a full entity page never chains into edges), far under the 4 MB cap.
+//   - the page bound: the episodic page is byte-budgeted inside the scan
+//     (episodic Text is unbounded); the graph tiers inherit the Phase 1 scan
+//     batch size (< 2×500 small records, and a full page never chains) —
+//     each response stays far under the 4 MB cap.
 //
-// When the entity tier exhausts mid-call the handler chains straight into
-// the first edge page, so an empty tenant gets exactly one empty page with
-// a terminal (empty) cursor rather than a pointless extra round trip.
+// When a tier exhausts mid-call the handler chains straight into the next,
+// so an empty tenant gets exactly one empty page with a terminal (empty)
+// cursor rather than wasted round trips. A nil EpisodicExporter behaves as
+// an empty episodic tier (the graph export still runs) — production wiring
+// always sets it; only the graph-bound Exporter gates the RPC.
 func (s *Server) Export(ctx context.Context, req *engrampb.ExportRequest) (*engrampb.ExportResponse, error) {
 	if s.Exporter == nil {
 		return nil, status.Error(codes.Unimplemented, "export is not configured")
@@ -108,6 +134,35 @@ func (s *Server) Export(ctx context.Context, req *engrampb.ExportRequest) (*engr
 	}
 
 	resp := &engrampb.ExportResponse{}
+	if cur.Stage == stageEpisodic {
+		if s.EpisodicExporter != nil {
+			recs, next, err := s.EpisodicExporter.ScanEpisodic(ctx, id.TenantID, cur.EpAfter)
+			if err != nil {
+				if errors.Is(err, store.ErrBadCursor) {
+					// A forged/corrupted sub-cursor is the caller's input error,
+					// rejected as opaquely as decodeExportCursor's own failures.
+					return nil, status.Error(codes.InvalidArgument, "invalid cursor")
+				}
+				return nil, status.Errorf(codes.Internal, "export episodics: %v", err)
+			}
+			for _, r := range recs {
+				allowed, err := s.canExport(ctx, id, acl.Record{
+					TenantID: r.TenantID, TeamID: r.TeamID, Scope: r.Scope, OwnerAgentID: r.OwnerAgentID,
+				})
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "export authorization: %v", err)
+				}
+				if allowed {
+					resp.Episodics = append(resp.Episodics, exportEpisodicProto(r))
+				}
+			}
+			if next != "" {
+				resp.NextCursor = encodeExportCursor(exportCursor{Stage: stageEpisodic, EpAfter: next})
+				return resp, nil
+			}
+		}
+		cur = exportCursor{Stage: stageEntities} // episodic tier exhausted (or unwired): chain into entities
+	}
 	if cur.Stage == stageEntities {
 		entities, next, err := s.Exporter.ScanEntities(ctx, id.TenantID, cur.After)
 		if err != nil {
@@ -160,6 +215,23 @@ func (s *Server) canExport(ctx context.Context, id auth.Identity, rec acl.Record
 		return true, nil
 	}
 	return s.ACL.CanRead(ctx, id, rec)
+}
+
+// exportEpisodicProto maps an episodic record to its export wire form.
+// TextEmbedding and the outbox worker fields (processed_at, lease, attempts,
+// dead-letter state) are internal and never leave the server; tenant_id is
+// implied by the caller's identity.
+func exportEpisodicProto(r memory.Episodic) *engrampb.ExportEpisodic {
+	return &engrampb.ExportEpisodic{
+		EventId:      r.EventID,
+		Kind:         r.Kind,
+		Text:         r.Text,
+		OccurredAt:   timestamppb.New(r.OccurredAt),
+		SourceIds:    r.SourceIDs,
+		Scope:        r.Scope,
+		TeamId:       r.TeamID,
+		OwnerAgentId: r.OwnerAgentID,
+	}
 }
 
 // exportEntityProto maps a graph entity to its export wire form. Embedding
