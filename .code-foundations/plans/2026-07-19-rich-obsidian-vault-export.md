@@ -196,4 +196,10 @@ Validated against the live rtd store (9201): episodic prose is the human signal 
 
 ---
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Server — episodic export stage (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: 3-sample fable, PASS (3/3)
+- [x] Committed
+Commit: 0ae5ffa
+Summary: Episodic records are now on the export wire via a separate `EpisodicExporter` seam (impl `*store.OpenSearchStore`), drained first in the stage machine; `engramclient.ExportPage.Episodics []ExportEpisodic{EventID,Kind,Text string; OccurredAt *time.Time; SourceIDs []string}` exposes them. Byte-budgeted (2 MiB) `search_after` scan, processed+non-dead-lettered+tenant-pinned, per-record `canExport` fail-closed.

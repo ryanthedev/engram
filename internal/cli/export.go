@@ -50,12 +50,8 @@ type vaultStats struct {
 	Dropped  int // edges dropped because an endpoint was not exported
 }
 
-// noteRef is one exported entity's rendered identity: its note filename
-// (without .md) and the inline-safe display name used in H1s and link labels.
-type noteRef struct {
-	File    string
-	Display string
-}
+// noteRef (the rendered identity of one note) is declared in vaultmodel.go,
+// which generalizes this file's ref assignment across events and concepts.
 
 // runExport handles `engram export [--force] <dir>`: parse flags, refuse a
 // foreign target early, dial, drain every Export page, then clobber and
