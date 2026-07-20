@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ryanthedev/engram/internal/acl"
@@ -74,7 +75,7 @@ func Run(ctx context.Context, args []string, env Env, out, errW io.Writer) int {
 const usage = `engram — Engram memory CLI
 
 Usage:
-  engram token create   --tenant T --user U [--agent A] [--ttl 720h] [--url URL]
+  engram token create   --tenant T --user U [--agent A] [--roles R1,R2] [--ttl 720h] [--url URL]
   engram token list     --tenant T --user U [--url URL]
   engram token revoke   <handle> [--url URL]
   engram acl grant      --tenant T --user U (--agent A | --team M | --org) [--url URL]
@@ -135,12 +136,13 @@ func runTokenCreate(ctx context.Context, args []string, env Env, out io.Writer) 
 	tenant := fs.String("tenant", "", "tenant id (required)")
 	user := fs.String("user", "", "user id (required)")
 	agent := fs.String("agent", "", "agent id")
+	roles := fs.String("roles", "", "comma-separated role list (e.g. admin,harvester)")
 	ttl := fs.Duration("ttl", 720*time.Hour, "token lifetime")
 	url := fs.String("url", "", "OpenSearch URL")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	id := auth.Identity{TenantID: *tenant, UserID: *user, AgentID: *agent}
+	id := auth.Identity{TenantID: *tenant, UserID: *user, AgentID: *agent, Roles: parseRoles(*roles)}
 	if !id.Valid() {
 		return errors.New("token create: --tenant and --user are required")
 	}
@@ -151,6 +153,23 @@ func runTokenCreate(ctx context.Context, args []string, env Env, out io.Writer) 
 	// The raw token is shown exactly once — make that explicit to the operator.
 	fmt.Fprintf(out, "token created (handle %s) — copy the raw token now, it is not recoverable:\n%s\n", handle, raw)
 	return nil
+}
+
+// parseRoles turns the raw --roles flag value into a role slice for
+// auth.Identity. An empty or whitespace-only value (including the flag's
+// zero-value default, i.e. omitted) means "no roles" and returns nil, never
+// a single-empty-string slice — matching today's role-less behavior exactly
+// (DW-1.2). Per-entry cleanup (trimming, dropping empty segments, deduping)
+// is deliberately NOT duplicated here: auth.TokenIssuer.Issue always
+// re-normalizes id.Roles via normalizeRoles before persisting (the mint-time
+// half of the claim barricade), so doing it again here would just be the
+// same sanitization rule implemented twice with room to drift.
+func parseRoles(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	return strings.Split(raw, ",")
 }
 
 func runTokenList(ctx context.Context, args []string, env Env, out io.Writer) error {
