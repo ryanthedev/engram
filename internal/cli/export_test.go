@@ -637,3 +637,35 @@ func TestExport_ArgValidation(t *testing.T) {
 		t.Error("export with two positional args succeeded")
 	}
 }
+
+// TestSafeNoteName_NFCFoldPreventsSilentDrop is a trap test for the APFS
+// NFC/NFD filename-collision data-loss class: two note names that differ ONLY
+// in Unicode composition ("é" precomposed vs. "e"+combining-acute) must fold to
+// one byte sequence in safeNoteName, so the uniqueness check catches the clash
+// and suffixes the second instead of writing two "distinct" strings the
+// filesystem silently folds into one file. The equality assertion FAILS without
+// the norm.NFC fold in safeNoteName.
+func TestSafeNoteName_NFCFoldPreventsSilentDrop(t *testing.T) {
+	const nfc = "caf\u00e9 notes"  // \u00e9 = precomposed é (NFC)
+	const nfd = "cafe\u0301 notes" // e + U+0301 combining acute (NFD)
+	if nfc == nfd {
+		t.Fatal("fixture broken: NFC and NFD forms must be distinct byte strings")
+	}
+
+	// The load-bearing property: both compositions normalize to one name.
+	if a, b := safeNoteName(nfc), safeNoteName(nfd); a != b {
+		t.Fatalf("safeNoteName must NFC-fold NFD input: nfc=%q -> %q, nfd -> %q", nfc, a, b)
+	}
+
+	// Behavioral consequence: uniqueNoteName sees the collision and forces a
+	// distinguishing suffix on the second, so no note is silently dropped.
+	used := map[string]bool{}
+	first := uniqueNoteName(nfc, "id-alpha000", false, used)
+	second := uniqueNoteName(nfd, "id-bravo000", false, used)
+	if first == second {
+		t.Fatalf("NFC/NFD names collapsed to one filename %q — silent-drop bug", first)
+	}
+	if second == safeNoteName(nfd) {
+		t.Fatalf("collision not suffixed: second name %q is the bare (unclashed) form", second)
+	}
+}

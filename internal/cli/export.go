@@ -33,6 +33,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ryanthedev/engram/internal/engramclient"
+	"golang.org/x/text/unicode/norm"
 )
 
 // vaultMarker is the ownership sentinel written into every generated vault.
@@ -310,8 +311,16 @@ func fitNoteName(base, suffix string) string {
 // map to one ASCII '-'; everything else is dropped or kept), so a
 // fitNoteName-budgeted input stays budgeted. Callers check uniqueness on
 // this final form, so the guarantee holds for the name actually written.
+//
+// The name is also Unicode NFC-normalized here so that two source names
+// differing only in composition (e.g. "é" as U+00E9 vs. "e"+U+0301) collapse
+// to one byte sequence BEFORE the uniqueness check. Without this, both would
+// pass the check as distinct strings yet resolve to the same file on an
+// NFC/NFD-folding filesystem (APFS), silently dropping one note. NFC composes,
+// so it never lengthens a budgeted name past its budget; truncation below runs
+// after normalization, keeping the byte guarantee intact.
 func safeNoteName(name string) string {
-	name = strings.ToValidUTF8(name, "")
+	name = norm.NFC.String(strings.ToValidUTF8(name, ""))
 	var b strings.Builder
 	for _, r := range name {
 		switch {
