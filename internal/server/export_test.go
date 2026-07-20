@@ -2,7 +2,9 @@ package server_test
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +16,9 @@ import (
 	"github.com/ryanthedev/engram/internal/acl"
 	"github.com/ryanthedev/engram/internal/auth"
 	"github.com/ryanthedev/engram/internal/graph"
+	"github.com/ryanthedev/engram/internal/memory"
 	"github.com/ryanthedev/engram/internal/server"
+	"github.com/ryanthedev/engram/internal/store"
 )
 
 // aclFunc is a per-record ReadAuthorizer fake (audit_test's fakeReadAuthz is
@@ -88,10 +92,56 @@ func seedGraph(t *testing.T, b *graph.MemBackend, tenant string, nEntities, nEdg
 	}
 }
 
-// walkExport pages Export to exhaustion (bounded iterations — a cursor that
-// never empties is itself a failure) and returns every record seen plus the
-// number of pages.
-func walkExport(ctx context.Context, t *testing.T, svc *server.Server) (entities []*engrampb.ExportEntity, edges []*engrampb.ExportEdge, pages int) {
+// fakeEpisodicExporter is a slice-backed server.EpisodicExporter whose
+// resume token is the next slice index; scanErr forces the scan-error path
+// and a non-integer token reports the store's bad-cursor sentinel, exactly
+// as *store.OpenSearchStore does for a forged token.
+type fakeEpisodicExporter struct {
+	recs     []memory.Episodic
+	pageSize int
+	scanErr  error
+}
+
+func (f fakeEpisodicExporter) ScanEpisodic(_ context.Context, _ string, after string) ([]memory.Episodic, string, error) {
+	if f.scanErr != nil {
+		return nil, "", f.scanErr
+	}
+	start := 0
+	if after != "" {
+		n, err := strconv.Atoi(after)
+		if err != nil {
+			return nil, "", fmt.Errorf("fake: %w", store.ErrBadCursor)
+		}
+		start = n
+	}
+	if start >= len(f.recs) {
+		return nil, "", nil
+	}
+	end := min(start+f.pageSize, len(f.recs))
+	next := ""
+	if end < len(f.recs) {
+		next = strconv.Itoa(end)
+	}
+	return f.recs[start:end], next, nil
+}
+
+var _ server.EpisodicExporter = fakeEpisodicExporter{}
+
+// exportEpisodicRec seeds one processed episodic record for the fake.
+func exportEpisodicRec(tenant string, n int) memory.Episodic {
+	return memory.Episodic{
+		EventID: fmt.Sprintf("%s-ev%05d", tenant, n), TenantID: tenant,
+		Scope: acl.ScopeTeam, TeamID: "teamX", OwnerAgentID: "a1",
+		Kind: "conversation", Text: fmt.Sprintf("prose %d", n),
+		SourceIDs:  []string{"src-1"},
+		OccurredAt: time.Unix(500, 0).UTC(), CreatedAt: time.Unix(1000, 0).UTC(),
+	}
+}
+
+// walkExportAll pages Export to exhaustion (bounded iterations — a cursor
+// that never empties is itself a failure) and returns every record seen plus
+// the number of pages.
+func walkExportAll(ctx context.Context, t *testing.T, svc *server.Server) (episodics []*engrampb.ExportEpisodic, entities []*engrampb.ExportEntity, edges []*engrampb.ExportEdge, pages int) {
 	t.Helper()
 	cursor := ""
 	for i := 0; i < 20; i++ {
@@ -99,16 +149,25 @@ func walkExport(ctx context.Context, t *testing.T, svc *server.Server) (entities
 		if err != nil {
 			t.Fatalf("Export page %d: %v", i, err)
 		}
+		episodics = append(episodics, resp.GetEpisodics()...)
 		entities = append(entities, resp.GetEntities()...)
 		edges = append(edges, resp.GetEdges()...)
 		pages++
 		cursor = resp.GetNextCursor()
 		if cursor == "" {
-			return entities, edges, pages
+			return episodics, entities, edges, pages
 		}
 	}
 	t.Fatal("Export never returned an empty next_cursor within 20 pages")
-	return nil, nil, 0
+	return nil, nil, nil, 0
+}
+
+// walkExport is walkExportAll for the graph-only tests that predate the
+// episodic stage.
+func walkExport(ctx context.Context, t *testing.T, svc *server.Server) (entities []*engrampb.ExportEntity, edges []*engrampb.ExportEdge, pages int) {
+	t.Helper()
+	_, entities, edges, pages = walkExportAll(ctx, t, svc)
+	return entities, edges, pages
 }
 
 // TestDW_2_2_ExportPagesToExhaustion: 501 live entities (one past the 500
@@ -494,5 +553,196 @@ func TestDW_2_4_ExportEdgeACLErrorFailsClosed(t *testing.T) {
 	}
 	if resp != nil {
 		t.Fatal("a failed-closed edge ACL check must return no partial page")
+	}
+}
+
+// TestDW_1_2_ExportDrainsEpisodicThenChains: the wire cursor drains the
+// episodic tier first (its own string sub-cursor advancing page by page),
+// then chains into entities and edges when the tier exhausts mid-call —
+// every record of all three tiers exactly once, and the final episodic page
+// (a short one) sharing its response with the whole graph.
+func TestDW_1_2_ExportDrainsEpisodicThenChains(t *testing.T) {
+	b := graph.NewMemBackend()
+	seedGraph(t, b, "t1", 3, 2)
+	recs := make([]memory.Episodic, 5)
+	for i := range recs {
+		recs[i] = exportEpisodicRec("t1", i)
+	}
+	svc := &server.Server{
+		Exporter:         b,
+		EpisodicExporter: fakeEpisodicExporter{recs: recs, pageSize: 2},
+	}
+
+	// Page-by-page staging: the first response is episodic-only (its tier is
+	// not exhausted, so nothing chains yet).
+	first, err := svc.Export(authedCtx("t1", "u1", "a1"), &engrampb.ExportRequest{})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if len(first.GetEpisodics()) != 2 || len(first.GetEntities()) != 0 || len(first.GetEdges()) != 0 || first.GetNextCursor() == "" {
+		t.Fatalf("first page = %d episodics / %d entities / %d edges (cursor %q), want 2/0/0 with continuation",
+			len(first.GetEpisodics()), len(first.GetEntities()), len(first.GetEdges()), first.GetNextCursor())
+	}
+
+	episodics, entities, edges, pages := walkExportAll(authedCtx("t1", "u1", "a1"), t, svc)
+	if len(episodics) != 5 || len(entities) != 3 || len(edges) != 2 {
+		t.Fatalf("walked %d episodics / %d entities / %d edges, want 5 / 3 / 2", len(episodics), len(entities), len(edges))
+	}
+	if pages != 3 {
+		t.Errorf("pages = %d, want 3 (2+2 episodic pages, then the short page chaining into the whole graph)", pages)
+	}
+	seen := map[string]bool{}
+	for i, ep := range episodics {
+		if seen[ep.GetEventId()] {
+			t.Fatalf("episodic %s returned twice", ep.GetEventId())
+		}
+		seen[ep.GetEventId()] = true
+		if want := exportEpisodicRec("t1", i).EventID; ep.GetEventId() != want {
+			t.Fatalf("episodic[%d] = %s, want %s (scan order preserved)", i, ep.GetEventId(), want)
+		}
+	}
+}
+
+// TestDW_1_2_EmptyEpisodicTierChainsSameResponse: an empty (but wired)
+// episodic tier chains straight into the entity stage within the SAME
+// response — an empty tenant costs one round trip, not three.
+func TestDW_1_2_EmptyEpisodicTierChainsSameResponse(t *testing.T) {
+	b := graph.NewMemBackend()
+	seedGraph(t, b, "t1", 2, 1)
+	svc := &server.Server{Exporter: b, EpisodicExporter: fakeEpisodicExporter{pageSize: 2}}
+
+	resp, err := svc.Export(authedCtx("t1", "u1", "a1"), &engrampb.ExportRequest{})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if len(resp.GetEpisodics()) != 0 || len(resp.GetEntities()) != 2 || len(resp.GetEdges()) != 1 || resp.GetNextCursor() != "" {
+		t.Fatalf("got %d episodics / %d entities / %d edges (cursor %q), want 0/2/1 in one terminal response",
+			len(resp.GetEpisodics()), len(resp.GetEntities()), len(resp.GetEdges()), resp.GetNextCursor())
+	}
+}
+
+// TestDW_1_2_BadEpisodicSubCursorInvalidArgument: a wire cursor whose stage
+// is valid but whose episodic sub-cursor the store cannot decode (forged or
+// corrupted) is rejected with the same opaque InvalidArgument as any other
+// bad cursor — never Internal, never a silent restart.
+func TestDW_1_2_BadEpisodicSubCursorInvalidArgument(t *testing.T) {
+	svc := &server.Server{
+		Exporter:         graph.NewMemBackend(),
+		EpisodicExporter: fakeEpisodicExporter{recs: []memory.Episodic{exportEpisodicRec("t1", 0)}, pageSize: 1},
+	}
+	forged := base64.RawURLEncoding.EncodeToString([]byte(`{"s":"episodic","e":"%%%forged%%%"}`))
+	_, err := svc.Export(authedCtx("t1", "u1", "a1"), &engrampb.ExportRequest{Cursor: forged})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument", status.Code(err))
+	}
+	if msg := status.Convert(err).Message(); msg != "invalid cursor" {
+		t.Errorf("message = %q, want the opaque \"invalid cursor\"", msg)
+	}
+}
+
+// TestDW_1_3_EpisodicACLDeniedOmitted: an episodic record the ACL denies is
+// silently skipped — the page continues, the call succeeds, and nothing
+// distinguishes "denied" from "absent".
+func TestDW_1_3_EpisodicACLDeniedOmitted(t *testing.T) {
+	recs := []memory.Episodic{exportEpisodicRec("t1", 0), exportEpisodicRec("t1", 1), exportEpisodicRec("t1", 2)}
+	recs[1].OwnerAgentID = "deny-me"
+	svc := &server.Server{
+		Exporter:         graph.NewMemBackend(),
+		EpisodicExporter: fakeEpisodicExporter{recs: recs, pageSize: 10},
+		ACL: aclFunc(func(_ auth.Identity, r acl.Record) (bool, error) {
+			return r.OwnerAgentID != "deny-me", nil
+		}),
+	}
+	episodics, _, _, _ := walkExportAll(authedCtx("t1", "u1", "a1"), t, svc)
+	if len(episodics) != 2 {
+		t.Fatalf("got %d episodics, want 2 after ACL omission", len(episodics))
+	}
+	for _, ep := range episodics {
+		if ep.GetEventId() == recs[1].EventID {
+			t.Fatal("ACL-denied episodic leaked into the export")
+		}
+	}
+}
+
+// TestDW_1_3_EpisodicACLErrorFailsClosed: an ACL evaluation error on an
+// episodic record aborts the whole call with Internal and no partial page —
+// uncertainty never degrades to disclosure.
+func TestDW_1_3_EpisodicACLErrorFailsClosed(t *testing.T) {
+	svc := &server.Server{
+		Exporter:         graph.NewMemBackend(),
+		EpisodicExporter: fakeEpisodicExporter{recs: []memory.Episodic{exportEpisodicRec("t1", 0)}, pageSize: 10},
+		ACL: aclFunc(func(auth.Identity, acl.Record) (bool, error) {
+			return false, fmt.Errorf("acl backend unreachable")
+		}),
+	}
+	resp, err := svc.Export(authedCtx("t1", "u1", "a1"), &engrampb.ExportRequest{})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal", status.Code(err))
+	}
+	if resp != nil {
+		t.Fatal("a failed-closed episodic ACL check must return no partial page")
+	}
+}
+
+// TestDW_1_3_ExportNoIdentityRejectedWithEpisodic: with the episodic seam
+// wired, a context the barricade never touched still fails closed with
+// Unauthenticated before any tier is scanned.
+func TestDW_1_3_ExportNoIdentityRejectedWithEpisodic(t *testing.T) {
+	svc := &server.Server{
+		Exporter:         graph.NewMemBackend(),
+		EpisodicExporter: fakeEpisodicExporter{recs: []memory.Episodic{exportEpisodicRec("t1", 0)}, pageSize: 10},
+	}
+	_, err := svc.Export(context.Background(), &engrampb.ExportRequest{})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("code = %v, want Unauthenticated", status.Code(err))
+	}
+}
+
+// TestExportEpisodicScanErrorFailsClosed: a store failure on the episodic
+// scan (not a cursor problem) aborts the whole call with Internal — no
+// partial page, mirroring the entity/edge scan-error contract.
+func TestExportEpisodicScanErrorFailsClosed(t *testing.T) {
+	svc := &server.Server{
+		Exporter:         graph.NewMemBackend(),
+		EpisodicExporter: fakeEpisodicExporter{scanErr: fmt.Errorf("episodic index unreachable")},
+	}
+	resp, err := svc.Export(authedCtx("t1", "u1", "a1"), &engrampb.ExportRequest{})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal", status.Code(err))
+	}
+	if resp != nil {
+		t.Fatal("a failed episodic scan must return no partial page")
+	}
+}
+
+// TestDW_1_1_ExportEpisodicFieldMapping: the episodic wire record carries the
+// plan's pinned field set verbatim — event_id, kind, text, occurred_at,
+// source_ids, scope, team_id, owner_agent_id — and nothing internal (the
+// proto message has no embedding or outbox fields to leak).
+func TestDW_1_1_ExportEpisodicFieldMapping(t *testing.T) {
+	when := time.Unix(4321, 0).UTC()
+	processed := when.Add(time.Hour)
+	rec := memory.Episodic{
+		EventID: "ev-map", TenantID: "t1", TeamID: "teamX", Scope: acl.ScopeTeam,
+		OwnerAgentID: "a1", Kind: "tool_result", Text: "the full fat body",
+		SourceIDs: []string{"s1", "s2"}, TextEmbedding: []float32{0.1},
+		OccurredAt: when, CreatedAt: when.Add(time.Minute), ProcessedAt: &processed,
+	}
+	svc := &server.Server{
+		Exporter:         graph.NewMemBackend(),
+		EpisodicExporter: fakeEpisodicExporter{recs: []memory.Episodic{rec}, pageSize: 10},
+	}
+	resp, err := svc.Export(authedCtx("t1", "u1", "a1"), &engrampb.ExportRequest{})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if len(resp.GetEpisodics()) != 1 {
+		t.Fatalf("got %d episodics, want 1", len(resp.GetEpisodics()))
+	}
+	ep := resp.GetEpisodics()[0]
+	if ep.GetEventId() != "ev-map" || ep.GetKind() != "tool_result" || ep.GetText() != "the full fat body" ||
+		!ep.GetOccurredAt().AsTime().Equal(when) || len(ep.GetSourceIds()) != 2 ||
+		ep.GetScope() != acl.ScopeTeam || ep.GetTeamId() != "teamX" || ep.GetOwnerAgentId() != "a1" {
+		t.Errorf("episodic mapping = %+v, fields did not round-trip", ep)
 	}
 }

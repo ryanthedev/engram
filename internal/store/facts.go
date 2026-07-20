@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -459,6 +460,131 @@ func (s *OpenSearchStore) ChainVersions(ctx context.Context, key ChainKey) ([]Ve
 		return facts[i].ID < facts[j].ID
 	})
 	return facts, nil
+}
+
+// ErrBadCursor marks an episodic scan cursor that does not decode — a
+// stale, corrupted, or forged token. The Export handler translates it to the
+// same opaque InvalidArgument its wire-cursor validation uses; it is never a
+// silent restart-from-zero, so a forged token cannot loop an export forever.
+var ErrBadCursor = errors.New("store: undecodable scan cursor")
+
+// EpisodicPageByteBudget bounds one ScanEpisodic page by the total byte size
+// of its records' Text fields. Episodic Text is unbounded, so a count-only
+// bound (DefaultScanBatchSize) could breach gRPC's 4 MB response cap; 2 MiB
+// of prose per page leaves the fixed-size fields and proto framing ample
+// headroom. Exported so tests can pin the bound.
+const EpisodicPageByteBudget = 2 << 20
+
+// episodicAfter is the decoded ScanEpisodic search_after token: the sort-key
+// values of the last record already returned. JSON rather than a delimited
+// string because event_id is client-supplied and may contain any byte.
+type episodicAfter struct {
+	CreatedAtMillis int64  `json:"c"`
+	EventID         string `json:"e"`
+}
+
+// ScanEpisodic returns one page (ascending by created_at, then event_id) of
+// tenantID's successfully-extracted episodic records: processed_at set and
+// not dead-lettered — unprocessed and dead-lettered docs never reach the
+// export wire. It backs the server's EpisodicExporter seam.
+//
+// after is the opaque token a previous call returned ("" starts the scan);
+// nextAfter=="" means the tenant's episodic tier is exhausted. A token that
+// does not decode returns ErrBadCursor (wrapped) — and since the tenant term
+// is pinned from the argument, never the token, a forged token can only
+// reject or reposition inside the caller's own tenant.
+//
+// Pages are bounded two ways: at most DefaultScanBatchSize records, AND at
+// most EpisodicPageByteBudget bytes of Text — the page is cut before the
+// record that would overflow the budget. A page always carries at least one
+// record, so a single over-budget record is returned alone (oversized, but
+// the scan still progresses) rather than wedging the export forever.
+//
+// Sort key is (created_at, event_id) — the same shape, and the same
+// documented non-uniqueness trade, as ScanLiveFacts' (created_at,
+// content_key): a tie needs a replayed-Ingest duplicate appended in the same
+// millisecond, and the caller (a full-vault re-export) is safely re-runnable.
+// An empty or not-yet-created episodic index returns an empty page and no
+// error, mirroring every other read path in this file.
+func (s *OpenSearchStore) ScanEpisodic(ctx context.Context, tenantID string, after string) ([]memory.Episodic, string, error) {
+	query := map[string]any{
+		"size": DefaultScanBatchSize,
+		"sort": []any{
+			map[string]any{"created_at": "asc"},
+			map[string]any{"event_id": "asc"},
+		},
+		"query": map[string]any{
+			"bool": map[string]any{
+				"filter": []any{
+					map[string]any{"term": map[string]any{"tenant_id": tenantID}},
+					map[string]any{"exists": map[string]any{"field": "processed_at"}},
+				},
+				"must_not": []any{map[string]any{"term": map[string]any{"dead_lettered": true}}},
+			},
+		},
+	}
+	if after != "" {
+		var cur episodicAfter
+		if err := json.Unmarshal([]byte(after), &cur); err != nil {
+			return nil, "", fmt.Errorf("store: scanning episodics: %w", ErrBadCursor)
+		}
+		query["search_after"] = []any{cur.CreatedAtMillis, cur.EventID}
+	}
+	recs, err := s.searchEpisodics(ctx, "scanning episodics", query)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Byte budget: cut the page before the record that would overflow it,
+	// but never below one record (the progress guarantee above).
+	kept, bytes := 0, 0
+	for _, r := range recs {
+		if kept > 0 && bytes+len(r.Text) > EpisodicPageByteBudget {
+			break
+		}
+		bytes += len(r.Text)
+		kept++
+	}
+	truncated := kept < len(recs)
+	recs = recs[:kept]
+
+	if !truncated && len(recs) < DefaultScanBatchSize {
+		return recs, "", nil // short, untruncated page: this tenant's tier is exhausted
+	}
+	last := recs[len(recs)-1]
+	token, err := json.Marshal(episodicAfter{CreatedAtMillis: last.CreatedAt.UTC().UnixMilli(), EventID: last.EventID})
+	if err != nil {
+		return nil, "", fmt.Errorf("store: encoding episodic scan cursor: %w", err)
+	}
+	return recs, string(token), nil
+}
+
+// searchEpisodics runs one _search on the episodic index and decodes the
+// hits as episodic records (the episodic mirror of searchFacts).
+func (s *OpenSearchStore) searchEpisodics(ctx context.Context, verb string, query map[string]any) ([]memory.Episodic, error) {
+	body, err := json.Marshal(query)
+	if err != nil {
+		return nil, fmt.Errorf("store: encoding %s query: %w", verb, err)
+	}
+	status, decoded, err := doJSON(ctx, s.client, http.MethodPost, s.baseURL+"/"+s.episodicIndex+"/_search", body)
+	if err != nil {
+		return nil, fmt.Errorf("store: %s: %w", verb, err)
+	}
+	if isIndexNotFound(status, decoded) {
+		return nil, nil // the episodic index does not exist yet: no records, not an error
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("store: %s: unexpected status %d: %v", verb, status, decoded)
+	}
+	var out []memory.Episodic
+	for _, hit := range searchHits(decoded) {
+		var rec memory.Episodic
+		if err := decodeSource(hit, &rec); err != nil {
+			return nil, fmt.Errorf("store: %s: decoding hit: %w", verb, err)
+		}
+		out = append(out, rec)
+	}
+	return out, nil
 }
 
 // liveFilterClauses is the live-fact filter: invalid_at and expired_at both

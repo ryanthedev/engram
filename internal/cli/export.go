@@ -1,17 +1,21 @@
 // export.go implements `engram export <dir>`: it drains the paginated Export
-// RPC (Phase 2, via engramclient's transport-free ExportPage view) and
-// renders the caller's tenant-scoped graph into an Obsidian-openable markdown
-// vault — one note per entity (YAML frontmatter, H1, aliases) with edges as
-// piped wikilink bullets.
+// RPC (episodic records plus the live graph, via engramclient's
+// transport-free ExportPage view) and renders the caller's tenant-scoped
+// memory into a rich Obsidian vault — event notes under events/, concept
+// fact-sheets under concepts/, and topic maps under maps/ (assembled in
+// vault.go from the Phase 2–4 model and renderers).
 //
-// Security model: entity names, aliases, and predicates are UNTRUSTED
-// ingested content that ends up in filesystem paths and link syntax.
-// Sanitization happens once at the rendering barricade (sanitizeFilename /
-// cleanInline), and path confinement is re-verified immediately before every
-// write (confinedNotePath) — defense in depth on the one path that could
-// escape <dir>. The clobber path is guarded twice: a foreign non-empty dir is
-// refused without --force, and even --force never cleans the filesystem root
-// or the user's home directory.
+// Security model: episodic prose, entity names, aliases, and predicates are
+// UNTRUSTED ingested content that ends up in filesystem paths, note bodies,
+// and link syntax. Sanitization happens at the rendering barricades
+// (sanitizeFilename / cleanInline / sanitizeBody / quoteBlock), and path
+// confinement is re-verified immediately before every write
+// (confinedVaultPath in vault.go) — defense in depth on the one path that
+// could escape <dir>. The clobber path is guarded twice: a foreign non-empty
+// dir is refused without --force, and even --force never cleans the
+// filesystem root or the user's home directory. The dir is cleaned only
+// AFTER the fetch succeeds, so a failed export never destroys an existing
+// vault.
 
 package cli
 
@@ -24,12 +28,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
-
-	yaml "go.yaml.in/yaml/v2"
 
 	"github.com/ryanthedev/engram/internal/engramclient"
 )
@@ -39,47 +40,51 @@ import (
 // while foreign directories stay refused by default.
 const vaultMarker = ".engram-vault"
 
-// maxFilenameRunes caps note filenames well under common 255-byte filesystem
-// limits (a rune is up to 4 bytes; the collision suffix and ".md" also fit).
+// maxFilenameRunes caps the slug portion of a note filename for legibility.
+// It is a RUNE cap only — 60 runes can be up to 240 BYTES (emoji are 4 bytes
+// each). The hard NAME_MAX guarantee is enforced separately, in bytes, by
+// fitNoteName/maxNoteBaseBytes when the full basename (date prefix + slug +
+// collision suffix + ".md") is assembled.
 const maxFilenameRunes = 60
 
-// vaultStats summarizes one export for the final printed line.
-type vaultStats struct {
-	Entities int // notes written
-	Edges    int // edge bullets rendered
-	Dropped  int // edges dropped because an endpoint was not exported
-}
+// maxNoteBaseBytes caps every note's full basename ("<name>.md", including
+// any date prefix and collision suffix) in BYTES, safely under the 255-byte
+// NAME_MAX of common filesystems. Overflowing it would be data loss, not
+// just an error: the old vault is already cleaned when notes are written, so
+// a rename failing ENAMETOOLONG would abort an export that can no longer be
+// rolled back.
+const maxNoteBaseBytes = 240
 
-// noteRef is one exported entity's rendered identity: its note filename
-// (without .md) and the inline-safe display name used in H1s and link labels.
-type noteRef struct {
-	File    string
-	Display string
-}
+// maxSuffixIDBytes caps how many id bytes a residual-clash collision suffix
+// may embed; past it, a growing counter (not more id bytes) provides
+// uniqueness, so a pathological id can never push a name over the budget.
+const maxSuffixIDBytes = 24
 
 // runExport handles `engram export [--force] <dir>`: parse flags, refuse a
 // foreign target early, dial, drain every Export page, then clobber and
 // regenerate the vault. The dir is cleaned only AFTER the fetch succeeds, so
-// a failed export never destroys an existing vault.
+// a failed export never destroys an existing vault. Because the regenerate
+// flow clobbers everything, a warning about manual-edit loss prints with
+// every successful export.
 func runExport(ctx context.Context, args []string, env Env, out io.Writer) error {
-	fs := flag.NewFlagSet("export", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	force := fs.Bool("force", false, "clobber a non-empty directory not created by engram export")
-	addr := fs.String("addr", "", "engramd address")
-	token := fs.String("token", "", "bearer token")
-	if err := fs.Parse(args); err != nil {
+	flags := flag.NewFlagSet("export", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	force := flags.Bool("force", false, "clobber a non-empty directory not created by engram export")
+	addr := flags.String("addr", "", "engramd address")
+	token := flags.String("token", "", "bearer token")
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() < 1 {
+	if flags.NArg() < 1 {
 		return errors.New("export: expected a target <dir>")
 	}
-	dir := fs.Arg(0)
+	dir := flags.Arg(0)
 	// flag stops at the first positional; re-parse the tail so
 	// `export <dir> --force` works as well as `export --force <dir>`.
-	if err := fs.Parse(fs.Args()[1:]); err != nil {
+	if err := flags.Parse(flags.Args()[1:]); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
+	if flags.NArg() != 0 {
 		return errors.New("export: expected exactly one <dir>")
 	}
 
@@ -92,41 +97,45 @@ func runExport(ctx context.Context, args []string, env Env, out io.Writer) error
 		return err
 	}
 	defer client.Close()
-	entities, edges, err := fetchExport(ctx, client)
+	episodics, entities, edges, err := fetchExport(ctx, client)
 	if err != nil {
 		return err
 	}
 	if err := prepareVaultDir(dir, *force); err != nil {
 		return err
 	}
-	stats, err := writeVault(dir, entities, edges)
+	stats, err := writeVault(dir, episodics, entities, edges)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "exported %d entities to %s (%d edges, %d dropped)\n",
-		stats.Entities, dir, stats.Edges, stats.Dropped)
+	fmt.Fprintf(out, "warning: re-running export regenerates this vault in place — any manual Obsidian edits in %s will be clobbered\n", dir)
+	fmt.Fprintf(out, "exported %d events, %d concepts, %d maps to %s (%d ghosts, %d dropped)\n",
+		stats.Events, stats.Concepts, stats.Maps, dir, stats.Ghosts, stats.Dropped)
 	return nil
 }
 
-// fetchExport drains the paginated Export RPC, accumulating structured
-// records until NextCursor is empty. It aborts if the server's cursor stops
-// advancing (external input; would otherwise loop forever).
-func fetchExport(ctx context.Context, client *engramclient.Client) ([]engramclient.ExportEntity, []engramclient.ExportEdge, error) {
+// fetchExport drains the paginated Export RPC, accumulating episodic,
+// entity, and edge records until NextCursor is empty. It aborts if the
+// server's cursor stops advancing (external input; would otherwise loop
+// forever).
+func fetchExport(ctx context.Context, client *engramclient.Client) ([]engramclient.ExportEpisodic, []engramclient.ExportEntity, []engramclient.ExportEdge, error) {
+	var episodics []engramclient.ExportEpisodic
 	var entities []engramclient.ExportEntity
 	var edges []engramclient.ExportEdge
 	cursor := ""
 	for {
 		page, err := client.ExportPage(ctx, cursor)
 		if err != nil {
-			return nil, nil, fmt.Errorf("export: fetching page: %w", err)
+			return nil, nil, nil, fmt.Errorf("export: fetching page: %w", err)
 		}
+		episodics = append(episodics, page.Episodics...)
 		entities = append(entities, page.Entities...)
 		edges = append(edges, page.Edges...)
 		if page.NextCursor == "" {
-			return entities, edges, nil
+			return episodics, entities, edges, nil
 		}
 		if page.NextCursor == cursor {
-			return nil, nil, errors.New("export: server cursor did not advance; aborting")
+			return nil, nil, nil, errors.New("export: server cursor did not advance; aborting")
 		}
 		cursor = page.NextCursor
 	}
@@ -173,7 +182,24 @@ func prepareVaultDir(dir string, force bool) error {
 	if err != nil {
 		return fmt.Errorf("export: %w", err)
 	}
+	// Resolve symlinks BEFORE the catastrophic-target check: a vault dir that
+	// is a symlink to / or $HOME would otherwise smuggle the cleaner past the
+	// guard (the comparison would see the link's path, not its target). A
+	// not-yet-created dir has nothing to resolve — and an absent dir cannot
+	// be a catastrophic target, since those always exist.
+	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil {
+		abs = resolved
+	} else if !errors.Is(rerr, fs.ErrNotExist) {
+		return fmt.Errorf("export: resolving %s: %w", dir, rerr)
+	}
 	home, _ := os.UserHomeDir()
+	if home != "" {
+		// Resolve $HOME too, so both sides of the comparison are real paths
+		// (macOS tempdirs, for one, live behind a /var -> /private/var link).
+		if h, herr := filepath.EvalSymlinks(home); herr == nil {
+			home = h
+		}
+	}
 	if isCatastrophicVaultDir(abs, home) {
 		return fmt.Errorf("export: refusing to clobber %s", abs)
 	}
@@ -207,79 +233,13 @@ func isCatastrophicVaultDir(abs, home string) bool {
 	return home != "" && abs == filepath.Clean(home)
 }
 
-// vaultFilenames assigns each exported entity a deterministic, collision-free
-// note filename. Case-insensitive homonyms ALL get an id-prefix suffix (not
-// first-wins), so the assignment is independent of input order and stable
-// across re-runs. Entities with an empty id are skipped: they cannot be
-// linked or disambiguated deterministically.
-func vaultFilenames(entities []engramclient.ExportEntity) map[string]noteRef {
-	type cand struct {
-		id, base string
-		suffix   bool
-	}
-	// Pass 1: sanitize and count case-folded homonyms.
-	cands := make([]cand, 0, len(entities))
-	baseCount := make(map[string]int)
-	for _, e := range entities {
-		if e.ID == "" {
-			continue
-		}
-		base := sanitizeFilename(e.Name)
-		empty := base == ""
-		if empty {
-			base = "entity"
-		}
-		cands = append(cands, cand{id: e.ID, base: base, suffix: empty})
-		baseCount[strings.ToLower(base)]++
-	}
-	// Pass 2: assign in sorted-id order (deterministic) with global
-	// uniqueness; extend the id prefix on the (pathological) residual clash.
-	sort.Slice(cands, func(i, j int) bool { return cands[i].id < cands[j].id })
-	refs := make(map[string]noteRef, len(cands))
-	used := make(map[string]bool, len(cands))
-	nameByID := displayNames(entities)
-	for _, c := range cands {
-		name := c.base
-		if c.suffix || baseCount[strings.ToLower(c.base)] > 1 {
-			name = c.base + " (" + idPrefix(c.id, 8) + ")"
-		}
-		// Residual clashes (e.g. a literal name crafted to mimic a suffixed
-		// one) extend the id prefix, then a counter — always terminates on an
-		// unused name, deterministically (sorted-id assignment order).
-		for n := 8; used[strings.ToLower(name)]; n += 4 {
-			if n < len(c.id) {
-				name = c.base + " (" + idPrefix(c.id, n+4) + ")"
-			} else {
-				name = fmt.Sprintf("%s (%s-%d)", c.base, c.id, n)
-			}
-		}
-		used[strings.ToLower(name)] = true
-		display := nameByID[c.id]
-		if display == "" {
-			display = name
-		}
-		refs[c.id] = noteRef{File: name, Display: display}
-	}
-	return refs
-}
-
-// displayNames maps entity id to its inline-cleaned display name.
-func displayNames(entities []engramclient.ExportEntity) map[string]string {
-	out := make(map[string]string, len(entities))
-	for _, e := range entities {
-		if e.ID != "" {
-			out[e.ID] = cleanInline(e.Name)
-		}
-	}
-	return out
-}
-
-// idPrefix returns the first n characters of id (all of it when shorter).
+// idPrefix returns a prefix of id of at most n BYTES, never splitting a
+// UTF-8 rune (all of id when shorter). Ids are CLIENT-SUPPLIED — the server
+// validates only non-emptiness — so a raw byte slice here once produced
+// invalid-UTF-8 basenames that failed the atomic rename after the old vault
+// was already cleaned.
 func idPrefix(id string, n int) string {
-	if n >= len(id) {
-		return id
-	}
-	return id[:n]
+	return truncateBytes(id, n)
 }
 
 // fsIllegal are the runes stripped from filenames: path separators and
@@ -311,6 +271,99 @@ func sanitizeFilename(name string) string {
 	return s
 }
 
+// truncateBytes truncates s to at most n bytes without ever splitting a
+// UTF-8 rune (the cut backs up to the nearest rune start).
+func truncateBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// fitNoteName composes base+suffix so the final basename
+// ("base+suffix.md") fits maxNoteBaseBytes: the BASE is truncated in bytes
+// on a rune boundary — never the uniqueness-carrying suffix — and re-trimmed
+// so truncation cannot leave a trailing dot or space before the suffix or
+// extension.
+func fitNoteName(base, suffix string) string {
+	budget := maxNoteBaseBytes - len(suffix) - len(".md")
+	if budget < 0 {
+		budget = 0
+	}
+	return strings.TrimRight(truncateBytes(base, budget), ". ") + suffix
+}
+
+// safeNoteName is the single final choke point EVERY assembled note basename
+// passes through — events, concepts, maps, their collision-suffixed and misc
+// variants alike — as the last step before the name is used as a path
+// element. Whatever any upstream field contained (title, client-supplied id,
+// suffix material), the result is simultaneously: valid UTF-8 (invalid
+// sequences and partial runes stripped), free of control and
+// filesystem/Obsidian-illegal characters (the sanitizeFilename policy,
+// re-applied to the ASSEMBLED name so id-derived suffixes are covered), free
+// of leading/trailing dots and spaces, and — with ".md" — inside
+// maxNoteBaseBytes. Correctness no longer depends on each source field being
+// independently clean. Sanitization never lengthens the name (illegal runes
+// map to one ASCII '-'; everything else is dropped or kept), so a
+// fitNoteName-budgeted input stays budgeted. Callers check uniqueness on
+// this final form, so the guarantee holds for the name actually written.
+func safeNoteName(name string) string {
+	name = strings.ToValidUTF8(name, "")
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			// drop control chars
+		case strings.ContainsRune(fsIllegal, r):
+			b.WriteRune('-')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	s := strings.Trim(b.String(), ". ")
+	s = strings.TrimRight(truncateBytes(s, maxNoteBaseBytes-len(".md")), ". ")
+	if s == "" {
+		// Unreachable from real callers (bases have non-empty sanitized
+		// fallbacks; suffixes carry parens and digits) — but a path element
+		// must never be empty.
+		return "note"
+	}
+	return s
+}
+
+// uniqueNoteName assigns the deterministic, byte-budgeted, collision-managed
+// name for base: bare when unique, id-prefix-suffixed when suffix is set
+// (forced or homonym), extended on residual clashes — a longer id prefix up
+// to maxSuffixIDBytes, then a growing counter — until unused. Every
+// candidate passes through fitNoteName (byte budget) and then safeNoteName
+// (the final validity choke point) BEFORE the uniqueness check, so no clash
+// can push a basename past the byte budget and no id content can smuggle
+// invalid UTF-8 or illegal characters into a filename. The chosen name is
+// recorded in used (case-insensitively, for case-folding filesystems). This
+// is the single suffixing algorithm shared by buildVaultRefs (events +
+// concepts) and assignClusterFilenames (maps).
+func uniqueNoteName(base, id string, suffix bool, used map[string]bool) string {
+	name := safeNoteName(fitNoteName(base, ""))
+	if suffix {
+		name = safeNoteName(fitNoteName(base, " ("+idPrefix(id, 8)+")"))
+	}
+	for n := 8; used[strings.ToLower(name)]; n += 4 {
+		if n+4 <= maxSuffixIDBytes && n < len(id) {
+			name = safeNoteName(fitNoteName(base, " ("+idPrefix(id, n+4)+")"))
+		} else {
+			// The counter, not more id bytes, guarantees termination and
+			// distinctness from here on (its ASCII digits survive
+			// safeNoteName verbatim); the name stays inside the budget.
+			name = safeNoteName(fitNoteName(base, " ("+idPrefix(id, maxSuffixIDBytes)+"-"+strconv.Itoa(n)+")"))
+		}
+	}
+	used[strings.ToLower(name)] = true
+	return name
+}
+
 // cleanInline makes an untrusted string safe inside markdown link labels and
 // headings: control characters and newlines collapse away, and the [ ] |
 // runes that could forge or break wikilink syntax become '-'.
@@ -329,153 +382,4 @@ func cleanInline(s string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
-}
-
-// renderNote renders one entity's complete note: YAML frontmatter (marshaled
-// with a real YAML encoder — untrusted aliases are never hand-escaped), the
-// H1, and the entity's outgoing edge bullets in deterministic order.
-func renderNote(e engramclient.ExportEntity, outEdges []engramclient.ExportEdge, refs map[string]noteRef) (string, error) {
-	aliases := e.Aliases
-	if aliases == nil {
-		aliases = []string{}
-	}
-	fm := yaml.MapSlice{
-		{Key: "engram_id", Value: e.ID},
-		{Key: "aliases", Value: aliases},
-		{Key: "mention_count", Value: e.MentionCount},
-		{Key: "scope", Value: e.Scope},
-	}
-	if e.TeamID != "" {
-		fm = append(fm, yaml.MapItem{Key: "team_id", Value: e.TeamID})
-	}
-	if e.OwnerAgentID != "" {
-		fm = append(fm, yaml.MapItem{Key: "owner_agent_id", Value: e.OwnerAgentID})
-	}
-	if len(e.SourceIDs) > 0 {
-		fm = append(fm, yaml.MapItem{Key: "source_ids", Value: e.SourceIDs})
-	}
-	if e.ValidAt != nil {
-		fm = append(fm, yaml.MapItem{Key: "valid_at", Value: e.ValidAt.UTC().Format(time.RFC3339)})
-	}
-	if e.CreatedAt != nil {
-		fm = append(fm, yaml.MapItem{Key: "created_at", Value: e.CreatedAt.UTC().Format(time.RFC3339)})
-	}
-	fmBytes, err := yaml.Marshal(fm)
-	if err != nil {
-		return "", fmt.Errorf("export: rendering frontmatter for %s: %w", e.ID, err)
-	}
-
-	self := refs[e.ID]
-	var b strings.Builder
-	b.WriteString("---\n")
-	b.Write(fmBytes)
-	b.WriteString("---\n\n# ")
-	b.WriteString(self.Display)
-	b.WriteString("\n")
-
-	// Edge bullets, sorted for byte-identical re-runs.
-	sorted := append([]engramclient.ExportEdge(nil), outEdges...)
-	sort.Slice(sorted, func(i, j int) bool {
-		a, z := sorted[i], sorted[j]
-		if a.Predicate != z.Predicate {
-			return a.Predicate < z.Predicate
-		}
-		if a.ToEntityID != z.ToEntityID {
-			return a.ToEntityID < z.ToEntityID
-		}
-		return a.ID < z.ID
-	})
-	if len(sorted) > 0 {
-		b.WriteString("\n")
-	}
-	for _, ed := range sorted {
-		target := refs[ed.ToEntityID] // caller guarantees presence (danglers dropped)
-		fmt.Fprintf(&b, "- %s [[%s|%s]]\n", cleanInline(ed.Predicate), target.File, target.Display)
-	}
-	return b.String(), nil
-}
-
-// confinedNotePath joins file onto dir and verifies the result stays strictly
-// inside dir as a single flat path element. sanitizeFilename should make this
-// unreachable; if it ever fires, that is a bug-stop error, never a write.
-func confinedNotePath(dir, file string) (string, error) {
-	// The raw input must already be a flat name: an absolute path or any
-	// separator means a caller bypassed sanitization (bug), even where Join
-	// would happen to neutralize it.
-	if file == "" || filepath.IsAbs(file) || strings.ContainsAny(file, `/\`) {
-		return "", fmt.Errorf("export: refusing to write outside the vault: %q", file)
-	}
-	p := filepath.Join(dir, file)
-	rel, err := filepath.Rel(dir, p)
-	if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) ||
-		strings.ContainsAny(rel, `/\`) {
-		return "", fmt.Errorf("export: refusing to write outside the vault: %q", file)
-	}
-	return p, nil
-}
-
-// writeVault renders the accumulated export into dir (which prepareVaultDir
-// has already made empty and tool-owned): filename map first, then danglers
-// dropped and counted, then one atomically-written note per entity.
-func writeVault(dir string, entities []engramclient.ExportEntity, edges []engramclient.ExportEdge) (vaultStats, error) {
-	refs := vaultFilenames(entities)
-
-	var stats vaultStats
-	byFrom := make(map[string][]engramclient.ExportEdge)
-	for _, ed := range edges {
-		_, fromOK := refs[ed.FromEntityID]
-		_, toOK := refs[ed.ToEntityID]
-		if !fromOK || !toOK {
-			stats.Dropped++ // endpoint not exported (expired, ACL-hidden, or unknown)
-			continue
-		}
-		byFrom[ed.FromEntityID] = append(byFrom[ed.FromEntityID], ed)
-		stats.Edges++
-	}
-
-	sorted := append([]engramclient.ExportEntity(nil), entities...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
-	for _, e := range sorted {
-		ref, ok := refs[e.ID]
-		if !ok {
-			continue // empty-id record: unlinkable, skipped by vaultFilenames
-		}
-		content, err := renderNote(e, byFrom[e.ID], refs)
-		if err != nil {
-			return stats, err
-		}
-		path, err := confinedNotePath(dir, ref.File+".md")
-		if err != nil {
-			return stats, err
-		}
-		if err := writeFileAtomic(dir, path, content); err != nil {
-			return stats, err
-		}
-		stats.Entities++
-	}
-	return stats, nil
-}
-
-// writeFileAtomic writes content to path via a temp file in dir + rename, so
-// a crash mid-export never leaves a half-written note.
-func writeFileAtomic(dir, path, content string) error {
-	tmp, err := os.CreateTemp(dir, ".engram-tmp-*")
-	if err != nil {
-		return fmt.Errorf("export: %w", err)
-	}
-	name := tmp.Name()
-	if _, err := tmp.WriteString(content); err != nil {
-		tmp.Close()
-		os.Remove(name)
-		return fmt.Errorf("export: writing %s: %w", path, err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(name)
-		return fmt.Errorf("export: writing %s: %w", path, err)
-	}
-	if err := os.Rename(name, path); err != nil {
-		os.Remove(name)
-		return fmt.Errorf("export: writing %s: %w", path, err)
-	}
-	return nil
 }

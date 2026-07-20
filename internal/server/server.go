@@ -66,6 +66,11 @@ type Server struct {
 	// Exporter backs the Export RPC (the Phase 1 graph scan); nil disables
 	// exporting (UNIMPLEMENTED). See export.go.
 	Exporter Exporter
+	// EpisodicExporter backs the Export RPC's episodic stage — a separate
+	// seam because the episodic tier lives outside the graph subsystem; nil
+	// behaves as an empty episodic tier (graph export still runs). See
+	// export.go.
+	EpisodicExporter EpisodicExporter
 
 	// Knowledge platform seams (Phase 6, knowledge.go). A nil Registry (or
 	// nil Writer/Reader for the operations needing them) disables the six

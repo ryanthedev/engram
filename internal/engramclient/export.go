@@ -43,9 +43,22 @@ type ExportEdge struct {
 	CreatedAt    *time.Time
 }
 
-// ExportPage is one bounded page of the caller's tenant-scoped graph. An
-// empty NextCursor means the export is complete.
+// ExportEpisodic is one processed, non-dead-lettered episodic record from an
+// export page — the raw event prose the CLI renders into an event note and
+// joins to entities/edges via their SourceIDs → EventID.
+type ExportEpisodic struct {
+	EventID    string
+	Kind       string
+	Text       string
+	OccurredAt *time.Time
+	SourceIDs  []string
+}
+
+// ExportPage is one bounded page of the caller's tenant-scoped memory —
+// episodic records plus the live graph. An empty NextCursor means the export
+// is complete.
 type ExportPage struct {
+	Episodics  []ExportEpisodic
 	Entities   []ExportEntity
 	Edges      []ExportEdge
 	NextCursor string
@@ -59,6 +72,12 @@ func (c *Client) ExportPage(ctx context.Context, cursor string) (ExportPage, err
 		return ExportPage{}, err
 	}
 	page := ExportPage{NextCursor: resp.GetNextCursor()}
+	for _, ep := range resp.GetEpisodics() {
+		page.Episodics = append(page.Episodics, ExportEpisodic{
+			EventID: ep.GetEventId(), Kind: ep.GetKind(), Text: ep.GetText(),
+			OccurredAt: tsPtr(ep.GetOccurredAt()), SourceIDs: ep.GetSourceIds(),
+		})
+	}
 	for _, e := range resp.GetEntities() {
 		page.Entities = append(page.Entities, ExportEntity{
 			ID: e.GetId(), Name: e.GetName(), Aliases: e.GetAliases(),
