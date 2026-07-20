@@ -35,7 +35,9 @@ type vaultStats struct {
 
 // allowedVaultRoots are the only top-level folders the assembler may write
 // into. Any other root in a renderer-produced path is a bug-stop refusal.
-var allowedVaultRoots = map[string]bool{"events": true, "concepts": true, "maps": true}
+// "knowledge" is the Phase 2 knowledge-mapping additive post-pass folder —
+// flat, same depth class as "concepts"/"maps".
+var allowedVaultRoots = map[string]bool{"events": true, "concepts": true, "maps": true, "knowledge": true}
 
 // vaultPathDepth is the exact number of path elements a note under root must
 // have: events are date-bucketed ("events/2026/x.md", "events/undated/x.md" =
@@ -87,7 +89,21 @@ func confinedVaultPath(dir, relPath string) (string, error) {
 // only unresolved links), and one MOC note per topic map — each path
 // re-confined immediately before its atomic write. An empty export writes
 // nothing (marker-only vault) and is not an error.
+//
+// It discards the assembled VaultModel/VaultRefs; writeVaultModel is the
+// identical assembly with those exposed, for the one caller (export.go's
+// Phase 2 knowledge post-pass) that needs to locate concept files afterward
+// without recomputing buildVaultModel a second time. Kept as a thin wrapper
+// — rather than changing this signature — so every existing caller (and
+// vault_test.go's dozen call sites) is untouched.
 func writeVault(dir string, episodics []engramclient.ExportEpisodic, entities []engramclient.ExportEntity, edges []engramclient.ExportEdge) (vaultStats, error) {
+	stats, _, _, err := writeVaultModel(dir, episodics, entities, edges)
+	return stats, err
+}
+
+// writeVaultModel is writeVault's implementation, additionally returning the
+// assembled VaultModel and VaultRefs.
+func writeVaultModel(dir string, episodics []engramclient.ExportEpisodic, entities []engramclient.ExportEntity, edges []engramclient.ExportEdge) (vaultStats, VaultModel, VaultRefs, error) {
 	model, refs := buildVaultModel(episodics, entities, edges)
 	stats := vaultStats{Dropped: countDroppedEdges(entities, edges)}
 
@@ -101,7 +117,7 @@ func writeVault(dir string, episodics []engramclient.ExportEpisodic, entities []
 	for _, ev := range model.Events {
 		relPath, content := renderEvent(ev, refs)
 		if err := writeVaultNote(dir, relPath, content); err != nil {
-			return stats, err
+			return stats, model, refs, err
 		}
 		stats.Events++
 	}
@@ -112,18 +128,18 @@ func writeVault(dir string, episodics []engramclient.ExportEpisodic, entities []
 		}
 		relPath, content := renderConcept(c, refs, eventsByID)
 		if err := writeVaultNote(dir, relPath, content); err != nil {
-			return stats, err
+			return stats, model, refs, err
 		}
 		stats.Concepts++
 	}
 	for _, cl := range clusterConcepts(model) {
 		relPath, content := renderMap(cl, refs)
 		if err := writeVaultNote(dir, relPath, content); err != nil {
-			return stats, err
+			return stats, model, refs, err
 		}
 		stats.Maps++
 	}
-	return stats, nil
+	return stats, model, refs, nil
 }
 
 // countDroppedEdges counts the edges NEITHER of whose endpoints was exported

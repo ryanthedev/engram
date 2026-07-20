@@ -3,7 +3,7 @@
 **Created:** 2026-07-19
 **Status:** in-progress
 **Started:** 2026-07-19 22:29
-**Current Phase:** 2
+**Current Phase:** 3
 **Complexity:** simple
 ---
 ## Context
@@ -126,3 +126,10 @@ _To be filled during /code-foundations:build_
 - [x] Committed
 Commit: see git log (Phase 1/3 trailer)
 Summary: `engram token create` now accepts `--roles a,b` (parseRoles helper in cli.go), binding roles into the minted token's identity via the existing Issue/normalizeRoles path; role-less mint is byte-identical to before. Unblocks minting an admin token for knowledge seeding.
+
+### Phase 2: Knowledge→vault export rendering with memory mapping (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed (3-sample fable, 3/3 PASS)
+- [x] Committed
+Commit: see git log (Phase 2/3 trailer)
+Summary: `engram export` now runs a knowledge post-pass: fetches every readable collection (single empty-query k=100, truncation-warned), renders a deterministic `knowledge/` folder, resolves each doc's `memory_ref` to a `[[concept]]` wikilink via buildVaultRefs (inert marker when unresolved), and appends "Referenced by" backlinks to mapped concept notes — all through the existing sanitizer + confinedVaultPath barricades; knowledge failures fail soft, leaving the memory vault byte-intact.

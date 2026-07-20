@@ -10,6 +10,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,6 +21,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ryanthedev/engram/api/engrampb"
@@ -75,10 +79,19 @@ func richPage() *engrampb.ExportResponse {
 	}
 }
 
-// exportStub serves canned Export pages; the cursor is the page index.
+// exportStub serves canned Export pages, plus (Phase 2) the two knowledge
+// read RPCs a given test wires up: collections/docs default to nil (an
+// UNIMPLEMENTED response via the embedded UnimplementedEngramServer — the
+// "legacy server with no knowledge platform" case, exercised as a soft-fail
+// path by the pre-existing memory-only tests below), or knowledgeErr can
+// force KnowledgeCollections to fail outright (the DW-2.5 fetch-failure
+// case). The cursor is the Export page index.
 type exportStub struct {
 	engrampb.UnimplementedEngramServer
-	pages []*engrampb.ExportResponse
+	pages        []*engrampb.ExportResponse
+	collections  []*engrampb.CollectionInfo
+	docs         map[string][]*engrampb.Hit // collection name -> hits
+	knowledgeErr error
 }
 
 func (s *exportStub) Export(_ context.Context, req *engrampb.ExportRequest) (*engrampb.ExportResponse, error) {
@@ -92,17 +105,74 @@ func (s *exportStub) Export(_ context.Context, req *engrampb.ExportRequest) (*en
 	return s.pages[idx], nil
 }
 
-func startExportServer(t *testing.T, pages []*engrampb.ExportResponse) string {
+func (s *exportStub) KnowledgeCollections(ctx context.Context, req *engrampb.KnowledgeCollectionsRequest) (*engrampb.KnowledgeCollectionsResponse, error) {
+	if s.knowledgeErr != nil {
+		return nil, s.knowledgeErr
+	}
+	if s.collections == nil {
+		return s.UnimplementedEngramServer.KnowledgeCollections(ctx, req)
+	}
+	return &engrampb.KnowledgeCollectionsResponse{Collections: s.collections}, nil
+}
+
+func (s *exportStub) KnowledgeSearch(_ context.Context, req *engrampb.KnowledgeSearchRequest) (*engrampb.KnowledgeSearchResponse, error) {
+	if s.knowledgeErr != nil {
+		return nil, s.knowledgeErr
+	}
+	return &engrampb.KnowledgeSearchResponse{Hits: s.docs[req.GetCollection()]}, nil
+}
+
+// knowledgeCollectionInfo builds one CollectionInfo the stub's
+// KnowledgeCollections may list — TextField fixed to "text" throughout these
+// tests to match knowledgeHit's fixture shape below.
+func knowledgeCollectionInfo(name string, public bool) *engrampb.CollectionInfo {
+	return &engrampb.CollectionInfo{
+		Spec: &engrampb.CollectionSpec{
+			Name:      name,
+			TextField: "text",
+			Access:    &engrampb.AccessPolicy{Public: public},
+		},
+	}
+}
+
+// knowledgeHit builds one raw hit exactly as the real server would encode
+// it: title/text/memory_ref/memory_ref_name as the fields_json row
+// (memory_ref/memory_ref_name omitted from the row when empty, matching how
+// an ingest batch with no such field would look).
+func knowledgeHit(id, title, text, memoryRef, memoryRefName string) *engrampb.Hit {
+	fields := map[string]any{"title": title, "text": text}
+	if memoryRef != "" {
+		fields["memory_ref"] = memoryRef
+	}
+	if memoryRefName != "" {
+		fields["memory_ref_name"] = memoryRefName
+	}
+	b, err := json.Marshal(fields)
+	if err != nil {
+		panic(err) // fixture-only: a map of strings always marshals
+	}
+	return &engrampb.Hit{Id: id, Score: 1, Source: "curated_notes", FieldsJson: string(b)}
+}
+
+// startStub starts srv as an in-process gRPC server and returns its address;
+// startExportServer below is the common-case wrapper every pre-existing
+// memory-vault test uses.
+func startStub(t *testing.T, stub *exportStub) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	srv := grpc.NewServer()
-	engrampb.RegisterEngramServer(srv, &exportStub{pages: pages})
+	engrampb.RegisterEngramServer(srv, stub)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return lis.Addr().String()
+}
+
+func startExportServer(t *testing.T, pages []*engrampb.ExportResponse) string {
+	t.Helper()
+	return startStub(t, &exportStub{pages: pages})
 }
 
 // runExportCLI drives `engram export` through Run; extra args (e.g. --force)
@@ -667,5 +737,348 @@ func TestSafeNoteName_NFCFoldPreventsSilentDrop(t *testing.T) {
 	}
 	if second == safeNoteName(nfd) {
 		t.Fatalf("collision not suffixed: second name %q is the bare (unclashed) form", second)
+	}
+}
+
+// --- Phase 2: knowledge->vault export rendering with memory mapping ---
+//
+// richPage's exported graph has exactly one hub concept: "Alpha" (e-a,
+// degree 2, filename "Alpha" per concepts/Alpha.md) — "Beta" (e-b) and
+// "Gamma" (e-c) are ghosts (degree 1, no file). Every DW-2.x test below
+// maps knowledge docs at e-a (resolves) and/or an id that is absent or a
+// real ghost (never resolves).
+
+// TestDW_2_1_KnowledgeNotesWikilinkToExportedConcepts covers DW-2.1: one
+// knowledge/<name>.md per doc, rendered in deterministic DOC-ID order (not
+// input order — the two docs share a title and are fed id-descending, so a
+// naive input-order render would give the bare name to the wrong doc), each
+// wikilinking a concept filename that actually exists in the vault.
+func TestDW_2_1_KnowledgeNotesWikilinkToExportedConcepts(t *testing.T) {
+	stub := &exportStub{
+		pages:       []*engrampb.ExportResponse{richPage()},
+		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
+		docs: map[string][]*engrampb.Hit{
+			"curated_notes": {
+				knowledgeHit("kd2", "Shared title", "second body", "e-a", ""),
+				knowledgeHit("kd1", "Shared title", "first body", "e-a", ""),
+			},
+		},
+	}
+	addr := startStub(t, stub)
+	dir := filepath.Join(t.TempDir(), "vault")
+	out, errW, code := runExportCLI(t, addr, dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, errW)
+	}
+
+	tree := vaultTree(t, dir)
+	bare, ok := tree["knowledge/Shared title.md"]
+	if !ok {
+		t.Fatalf("missing knowledge/Shared title.md; files = %v", treeKeys(tree))
+	}
+	if !strings.Contains(bare, "first body") {
+		t.Errorf("bare name content = %q, want kd1's body (lower doc id wins the bare name)", bare)
+	}
+	if !strings.Contains(bare, "[[Alpha|Alpha]]") {
+		t.Errorf("kd1 content = %q, want a wikilink to the Alpha concept note", bare)
+	}
+	foundSuffixed := false
+	for _, k := range treeKeys(tree) {
+		if strings.HasPrefix(k, "knowledge/Shared title (") {
+			foundSuffixed = true
+			if !strings.Contains(tree[k], "second body") {
+				t.Errorf("suffixed note content = %q, want kd2's body", tree[k])
+			}
+		}
+	}
+	if !foundSuffixed {
+		t.Errorf("expected a suffixed note for kd2 (the doc-id loser of the homonym); files = %v", treeKeys(tree))
+	}
+	if _, ok := tree["concepts/Alpha.md"]; !ok {
+		t.Fatalf("concept note the wikilink targets does not exist: %v", treeKeys(tree))
+	}
+	if !strings.Contains(out, "2 knowledge docs") {
+		t.Errorf("output = %q, want a knowledge doc count", out)
+	}
+}
+
+// TestDW_2_2_ConceptNoteGetsReferencedByBacklinks covers DW-2.2: a mapped
+// concept note gains a "Referenced by" section; two docs mapping to the same
+// concept both appear, in doc-id order.
+func TestDW_2_2_ConceptNoteGetsReferencedByBacklinks(t *testing.T) {
+	stub := &exportStub{
+		pages:       []*engrampb.ExportResponse{richPage()},
+		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
+		docs: map[string][]*engrampb.Hit{
+			"curated_notes": {
+				knowledgeHit("kd-b", "Note B", "body b", "e-a", ""),
+				knowledgeHit("kd-a", "Note A", "body a", "e-a", ""),
+			},
+		},
+	}
+	addr := startStub(t, stub)
+	dir := filepath.Join(t.TempDir(), "vault")
+	_, errW, code := runExportCLI(t, addr, dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, errW)
+	}
+
+	tree := vaultTree(t, dir)
+	concept, ok := tree["concepts/Alpha.md"]
+	if !ok {
+		t.Fatalf("concept note missing: %v", treeKeys(tree))
+	}
+	if !strings.Contains(concept, "## Referenced by") {
+		t.Fatalf("concept note = %q, want a Referenced by section", concept)
+	}
+	idxA := strings.Index(concept, "[[Note A|Note A]]")
+	idxB := strings.Index(concept, "[[Note B|Note B]]")
+	if idxA == -1 || idxB == -1 {
+		t.Fatalf("concept note = %q, want links to both mapped knowledge notes", concept)
+	}
+	if idxA > idxB {
+		t.Errorf("backlinks not in doc-id order: kd-a's Note A should precede kd-b's Note B")
+	}
+}
+
+// TestDW_2_3_UnresolvedMemoryRefRendersInertMarker covers DW-2.3: a
+// memory_ref that resolves to nothing exported, an id-only unresolved
+// reference, AND a real GHOST entity (in the graph, but no file — the plan
+// treats this identically) all render the same inert marker: no dangling
+// wikilink, no backlink anywhere.
+func TestDW_2_3_UnresolvedMemoryRefRendersInertMarker(t *testing.T) {
+	stub := &exportStub{
+		pages:       []*engrampb.ExportResponse{richPage()},
+		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
+		docs: map[string][]*engrampb.Hit{
+			"curated_notes": {
+				knowledgeHit("kd1", "Named ref", "body", "no-such-entity", "Ghost Concept"),
+				knowledgeHit("kd2", "Bare id ref", "body", "also-missing", ""),
+				knowledgeHit("kd3", "Real ghost ref", "body", "e-b", ""), // e-b = Beta, an exported GHOST (no file)
+			},
+		},
+	}
+	addr := startStub(t, stub)
+	dir := filepath.Join(t.TempDir(), "vault")
+	_, errW, code := runExportCLI(t, addr, dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, errW)
+	}
+
+	tree := vaultTree(t, dir)
+	cases := []struct{ file, wantMarker string }{
+		{"knowledge/Named ref.md", "unresolved: Ghost Concept"},
+		{"knowledge/Bare id ref.md", "unresolved: also-missing"},
+		{"knowledge/Real ghost ref.md", "unresolved: e-b"},
+	}
+	for _, c := range cases {
+		content, ok := tree[c.file]
+		if !ok {
+			t.Fatalf("missing %s: %v", c.file, treeKeys(tree))
+		}
+		if !strings.Contains(content, c.wantMarker) {
+			t.Errorf("%s content = %q, want marker %q", c.file, content, c.wantMarker)
+		}
+		if strings.Contains(content, "[[") {
+			t.Errorf("%s content = %q, want no dangling wikilink for an unresolved ref", c.file, content)
+		}
+	}
+	// Neither Alpha (unreferenced here) nor any other concept note gained a
+	// backlink from an unresolved ref, and Beta/Gamma (ghosts) never had a
+	// file to begin with.
+	for rel, content := range tree {
+		if strings.HasPrefix(rel, "concepts/") && strings.Contains(content, "Referenced by") {
+			t.Errorf("%s unexpectedly gained a backlink from an unresolved ref", rel)
+		}
+	}
+}
+
+// TestDW_2_4_InjectionTrapSanitizedAndConfined covers DW-2.4: hostile
+// title/text/memory_ref_name — control chars, forged "[[" / "]]" wikilink
+// syntax, "../" path traversal, an over-long NFC/NFD-composed title — must
+// be sanitized, byte-budgeted, NFC-folded, and every write confined strictly
+// inside dir. Mirrors vault_test.go's TestDW_5_2_HostileNamesStayConfined
+// canary pattern: a file next to (not inside) the vault dir must survive
+// untouched, and no traversal segment may create a directory outside it.
+func TestDW_2_4_InjectionTrapSanitizedAndConfined(t *testing.T) {
+	root := t.TempDir()
+	canary := filepath.Join(root, "canary.txt")
+	if err := os.WriteFile(canary, []byte("untouched"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "vault")
+
+	hostileTitle := "../../etc/pwn\x00[[Injected]] " + strings.Repeat("x", 300)
+	hostileNFDTitle := "café notes" // NFD: e + combining acute
+	hostileText := "line1\n> [!danger] forged callout\n```\ncode fence break\n---\nfrontmatter break\n[[wikilink inject]]\nobsidian://run"
+	hostileMemoryRefName := "no[[link]]here\nand\x00control"
+
+	stub := &exportStub{
+		pages:       []*engrampb.ExportResponse{richPage()},
+		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
+		docs: map[string][]*engrampb.Hit{
+			"curated_notes": {
+				knowledgeHit("kd1", hostileTitle, hostileText, "missing-entity", hostileMemoryRefName),
+				knowledgeHit("kd2", hostileNFDTitle, "second body", "", ""),
+			},
+		},
+	}
+	addr := startStub(t, stub)
+	_, errW, code := runExportCLI(t, addr, dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, errW)
+	}
+
+	// Every written file must live strictly inside dir; the canary must
+	// survive untouched and no "etc" traversal directory must appear.
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if path == canary {
+			return nil
+		}
+		rel, rerr := filepath.Rel(dir, path)
+		if rerr != nil || strings.HasPrefix(rel, "..") {
+			t.Errorf("file escaped the vault: %s", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(canary); string(b) != "untouched" {
+		t.Errorf("canary outside the vault was modified")
+	}
+	if _, err := os.Stat(filepath.Join(root, "etc")); !os.IsNotExist(err) {
+		t.Errorf("traversal name created a directory outside the vault")
+	}
+
+	tree := vaultTree(t, dir)
+	var knowledgeFiles []string
+	for rel, content := range tree {
+		if !strings.HasPrefix(rel, "knowledge/") {
+			continue
+		}
+		knowledgeFiles = append(knowledgeFiles, rel)
+		// A literal ".." substring is allowed to survive as INERT text (the
+		// same accepted behavior TestSanitizeFilename already pins for
+		// "../../etc/x" -> "-..-etc-x" — '/' is neutralized, not the dots);
+		// what must never survive is an actual path separator, which is the
+		// real traversal primitive.
+		if strings.ContainsAny(rel, `\`) {
+			t.Errorf("unsafe knowledge filename: %q", rel)
+		}
+		if len(filepath.Base(rel)) > maxNoteBaseBytes {
+			t.Errorf("knowledge filename over budget: %q (%d bytes)", rel, len(filepath.Base(rel)))
+		}
+		if strings.Contains(content, "\n> [!danger]") || strings.HasPrefix(content, "> [!danger]") {
+			t.Errorf("unescaped (live) callout forgery survived sanitization: %q", content)
+		}
+		if strings.Contains(content, "\x00") {
+			t.Errorf("control character survived sanitization: %q", content)
+		}
+		if strings.Contains(content, "[[wikilink inject]]") {
+			t.Errorf("forged wikilink survived sanitization unescaped: %q", content)
+		}
+	}
+	if len(knowledgeFiles) != 2 {
+		t.Fatalf("knowledge files = %v, want exactly 2", knowledgeFiles)
+	}
+}
+
+// TestDW_2_5_KnowledgeFetchFailureIsSoftWarning covers DW-2.5: a knowledge
+// fetch failure (KnowledgeCollections RPC error) must leave the
+// already-assembled memory vault byte-intact, print a soft warning, and
+// exit 0 — not abort the export.
+func TestDW_2_5_KnowledgeFetchFailureIsSoftWarning(t *testing.T) {
+	stub := &exportStub{
+		pages:        []*engrampb.ExportResponse{richPage()},
+		knowledgeErr: status.Error(codes.Unavailable, "knowledge backend down"),
+	}
+	addr := startStub(t, stub)
+	dir := filepath.Join(t.TempDir(), "vault")
+	out, errW, code := runExportCLI(t, addr, dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (soft warning, not a hard failure); stderr = %s", code, errW)
+	}
+	if !strings.Contains(out, "warning") || !strings.Contains(out, "knowledge") {
+		t.Errorf("output = %q, want a soft knowledge-fetch warning", out)
+	}
+
+	tree := vaultTree(t, dir)
+	for _, want := range []string{"concepts/Alpha.md", "maps/Alpha.md", vaultMarker} {
+		if _, ok := tree[want]; !ok {
+			t.Errorf("memory vault missing %q after a knowledge fetch failure: %v", want, treeKeys(tree))
+		}
+	}
+	for rel := range tree {
+		if strings.HasPrefix(rel, "knowledge/") {
+			t.Errorf("knowledge file %q written despite a fetch failure", rel)
+		}
+	}
+	if strings.Contains(out, "knowledge docs") {
+		t.Errorf("output = %q, want no knowledge count on a fetch failure", out)
+	}
+}
+
+// TestDW_2_6_ZeroCollectionsNoKnowledgeFolder covers DW-2.6: zero knowledge
+// collections must produce no knowledge/ folder and a memory-only vault
+// byte-identical to a run against a server with no knowledge wiring at all.
+func TestDW_2_6_ZeroCollectionsNoKnowledgeFolder(t *testing.T) {
+	baseAddr := startExportServer(t, []*engrampb.ExportResponse{richPage()})
+	baseDir := filepath.Join(t.TempDir(), "vault")
+	if _, errW, code := runExportCLI(t, baseAddr, baseDir); code != 0 {
+		t.Fatalf("baseline export: exit %d, stderr %s", code, errW)
+	}
+	before := vaultTree(t, baseDir)
+
+	// Same memory data; server now explicitly answers KnowledgeCollections
+	// with zero collections (distinct from the baseline's RPC-unimplemented
+	// case — this is the real "no collections seeded yet" scenario).
+	stub := &exportStub{pages: []*engrampb.ExportResponse{richPage()}, collections: []*engrampb.CollectionInfo{}}
+	addr := startStub(t, stub)
+	dir := filepath.Join(t.TempDir(), "vault")
+	out, errW, code := runExportCLI(t, addr, dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, errW)
+	}
+	after := vaultTree(t, dir)
+	assertTreesEqual(t, before, after, "zero-collection export diverged from the memory-only baseline")
+
+	for rel := range after {
+		if strings.HasPrefix(rel, "knowledge/") {
+			t.Errorf("knowledge folder written despite zero collections: %q", rel)
+		}
+	}
+	if strings.Contains(out, "knowledge docs") {
+		t.Errorf("output = %q, want no knowledge count when there are zero docs", out)
+	}
+}
+
+// TestKnowledgeCollectionTruncationWarning is bonus coverage (past the DW
+// floor) for the Scope-mandated truncation warning: a collection returning
+// exactly k=retrieval.MaxK docs may hold more than was fetched (the RPC has
+// no paging), and the summary must say so.
+func TestKnowledgeCollectionTruncationWarning(t *testing.T) {
+	hits := make([]*engrampb.Hit, 100)
+	for i := range hits {
+		hits[i] = knowledgeHit(fmt.Sprintf("kd%03d", i), fmt.Sprintf("Doc %03d", i), "body", "", "")
+	}
+	stub := &exportStub{
+		pages:       []*engrampb.ExportResponse{{}}, // empty memory export keeps this test focused
+		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
+		docs:        map[string][]*engrampb.Hit{"curated_notes": hits},
+	}
+	addr := startStub(t, stub)
+	dir := filepath.Join(t.TempDir(), "vault")
+	out, errW, code := runExportCLI(t, addr, dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, errW)
+	}
+	if !strings.Contains(out, "warning:") || !strings.Contains(out, "curated_notes") {
+		t.Errorf("output = %q, want a possible-truncation warning naming the collection", out)
+	}
+	if !strings.Contains(out, "100 knowledge docs") {
+		t.Errorf("output = %q, want all 100 docs counted despite the truncation warning", out)
 	}
 }

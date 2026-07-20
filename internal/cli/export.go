@@ -3,19 +3,26 @@
 // transport-free ExportPage view) and renders the caller's tenant-scoped
 // memory into a rich Obsidian vault — event notes under events/, concept
 // fact-sheets under concepts/, and topic maps under maps/ (assembled in
-// vault.go from the Phase 2–4 model and renderers).
+// vault.go from the Phase 2–4 model and renderers). After the memory vault
+// is fully written, an additive knowledge post-pass (vaultknowledge.go)
+// fetches every readable KNOWLEDGE-tier collection and renders a knowledge/
+// folder, resolving each doc's memory_ref keyword field to a memory concept
+// and wikilinking the two tiers together — the one soft foreign key this
+// prototype proves out, since knowledge docs otherwise carry no links.
 //
-// Security model: episodic prose, entity names, aliases, and predicates are
-// UNTRUSTED ingested content that ends up in filesystem paths, note bodies,
-// and link syntax. Sanitization happens at the rendering barricades
-// (sanitizeFilename / cleanInline / sanitizeBody / quoteBlock), and path
-// confinement is re-verified immediately before every write
-// (confinedVaultPath in vault.go) — defense in depth on the one path that
-// could escape <dir>. The clobber path is guarded twice: a foreign non-empty
-// dir is refused without --force, and even --force never cleans the
-// filesystem root or the user's home directory. The dir is cleaned only
-// AFTER the fetch succeeds, so a failed export never destroys an existing
-// vault.
+// Security model: episodic prose, entity names, aliases, predicates, and
+// (Phase 2) knowledge doc title/text/memory_ref are all UNTRUSTED ingested
+// content that ends up in filesystem paths, note bodies, and link syntax.
+// Sanitization happens at the rendering barricades (sanitizeFilename /
+// cleanInline / sanitizeBody / quoteBlock), and path confinement is
+// re-verified immediately before every write (confinedVaultPath in
+// vault.go) — defense in depth on the one path that could escape <dir>. The
+// clobber path is guarded twice: a foreign non-empty dir is refused without
+// --force, and even --force never cleans the filesystem root or the user's
+// home directory. The dir is cleaned only AFTER the fetch succeeds, so a
+// failed export never destroys an existing vault; the knowledge post-pass
+// preserves the same invariant for itself — a knowledge FETCH failure is a
+// caught warning, never a reason to touch the memory vault already written.
 
 package cli
 
@@ -105,13 +112,40 @@ func runExport(ctx context.Context, args []string, env Env, out io.Writer) error
 	if err := prepareVaultDir(dir, *force); err != nil {
 		return err
 	}
-	stats, err := writeVault(dir, episodics, entities, edges)
+	stats, model, refs, err := writeVaultModel(dir, episodics, entities, edges)
 	if err != nil {
 		return err
 	}
+
+	// Knowledge is an additive post-pass over the ALREADY-WRITTEN memory
+	// vault above: fetch (network) must complete in full before render
+	// (disk) starts, so a fetch failure can be reported as a caught warning
+	// without ever risking what writeVaultModel just wrote — the clean-late
+	// invariant this exporter already applies to the memory fetch itself. A
+	// render-time error, by contrast, is a local write failure and is left
+	// to propagate like any other write failure in this command.
+	var kstats knowledgeStats
+	docs, warnings, kerr := fetchKnowledgeDocs(ctx, client)
+	if kerr != nil {
+		fmt.Fprintf(out, "warning: knowledge fetch failed, skipping the knowledge/ folder: %v\n", kerr)
+	} else {
+		for _, w := range warnings {
+			fmt.Fprintf(out, "warning: %s\n", w)
+		}
+		kstats, err = renderKnowledgeVault(dir, docs, model, refs)
+		if err != nil {
+			return err
+		}
+	}
+
 	fmt.Fprintf(out, "warning: re-running export regenerates this vault in place — any manual Obsidian edits in %s will be clobbered\n", dir)
-	fmt.Fprintf(out, "exported %d events, %d concepts, %d maps to %s (%d ghosts, %d dropped)\n",
+	summary := fmt.Sprintf("exported %d events, %d concepts, %d maps to %s (%d ghosts, %d dropped)",
 		stats.Events, stats.Concepts, stats.Maps, dir, stats.Ghosts, stats.Dropped)
+	if kstats.Docs > 0 {
+		summary = fmt.Sprintf("exported %d events, %d concepts, %d maps, %d knowledge docs to %s (%d ghosts, %d dropped)",
+			stats.Events, stats.Concepts, stats.Maps, kstats.Docs, dir, stats.Ghosts, stats.Dropped)
+	}
+	fmt.Fprintln(out, summary)
 	return nil
 }
 
