@@ -133,3 +133,10 @@ Summary: `engram token create` now accepts `--roles a,b` (parseRoles helper in c
 - [x] Committed
 Commit: see git log (Phase 2/3 trailer)
 Summary: `engram export` now runs a knowledge post-pass: fetches every readable collection (single empty-query k=100, truncation-warned), renders a deterministic `knowledge/` folder, resolves each doc's `memory_ref` to a `[[concept]]` wikilink via buildVaultRefs (inert marker when unresolved), and appends "Referenced by" backlinks to mapped concept notes — all through the existing sanitizer + confinedVaultPath barricades; knowledge failures fail soft, leaving the memory vault byte-intact.
+
+### Phase 3: Seed tooling for the mapped collection (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation complete
+- [x] REVIEW: Verification passed (single-sample sonnet, PASS)
+- [x] Committed
+Commit: see git log (Phase 3/3 trailer)
+Summary: New `engram-seed-knowledge` tool (core in internal/cli/seedknowledge.go) idempotently provisions the public `curated_notes` collection (memory_ref keyword/filterable) and ingests a single-source demo-doc set mapped to real rtd entity ids; role-less/PermissionDenied surfaces an actionable `--roles admin` message. Added transport-edge IsAlreadyExists/IsPermissionDenied predicates to engramclient (internal/cli may not import grpc/codes — importlint boundary).

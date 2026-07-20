@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -123,6 +125,20 @@ func (c *Client) UpdateCollection(ctx context.Context, spec mcp.CollectionSpec) 
 	_, err := c.api.UpdateCollection(ctx, &engrampb.UpdateCollectionRequest{Spec: collectionSpecProto(spec)})
 	return err
 }
+
+// IsAlreadyExists reports whether err is the AlreadyExists gRPC status
+// CreateCollection returns when the named collection is already registered
+// -- the caller-facing predicate for tolerating that conflict on a re-run
+// without depending on gRPC directly. internal/cli (and any other business
+// package) sits outside the transport boundary (internal/importlint);
+// engramclient is the one edge allowed to know about gRPC status codes, so
+// that classification belongs here rather than at each caller.
+func IsAlreadyExists(err error) bool { return status.Code(err) == codes.AlreadyExists }
+
+// IsPermissionDenied reports whether err is the PermissionDenied gRPC status
+// a knowledge write or read returns when the caller's token lacks the
+// required role (see internal/knowledgeauth).
+func IsPermissionDenied(err error) bool { return status.Code(err) == codes.PermissionDenied }
 
 // --- mcp DTO <-> proto translation helpers.
 
