@@ -1,9 +1,9 @@
 # Plan: Knowledge Search — Fragments, Drill-down & Paging
 
 **Created:** 2026-07-23
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-07-23
-**Current Phase:** 1
+**Completed:** 2026-07-24
 **Complexity:** medium
 ---
 ## Context
@@ -208,3 +208,17 @@ Summary: Added the KnowledgeHit proto message (id/score/collection/fields_json/f
 - [x] Committed
 Commit: 1ad43ad
 Summary: knowledge_search now returns extracted fragments (markers off by default, per-collection sizing) instead of the whole body — live check: 15 hits fit the 16 KB budget vs 1 before. memory_read gained a fail-closed knowledge drill-down (authz before fetch). Fixed a Phase-1 registry-persistence gap (sizing/tag fields were dropped) and made the budget packer generic. Phase 3 consumes engramclient.KnowledgeSearch(...fullBody) and KnowledgeRetriever.Search returning fragments; vaultknowledge.go currently compiles with fullBody=true as a stopgap. OPS: already-provisioned meta indices (e.g. :9201 e2e stack) need a one-time PUT _mapping for the four new CollectionSpec fields.
+
+### Phase 3: Offset paging & vault export fix (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation complete (sonnet)
+- [x] REVIEW: Verification passed (sonnet) — all 4 DW + edge cases + memory-path regression verified with unit and live-cluster evidence; one non-blocking note (Search at 8 params)
+- [x] Committed
+Commit: 072eca2
+Summary: knowledge_search accepts offset and returns exact total (track_total_hits); MaxResultWindow (10000) clamp rejects offset+k overflow with a self-correcting error before any HTTP call. offset/total threaded through engramclient, the Backend interface, the server handler, and the MCP tool. vaultknowledge now pages until drained — the truncation warning and its stale no-offset comment are gone. All code phases complete; only Phase 4 (docs cleanup) remains.
+
+### Phase 4: Harvester doc cleanup (Gate: Minimal)
+- [x] BUILD: Implemented directly from plan (haiku)
+- [x] REVIEW: SKIPPED — Minimal gate (grep is the gate; DW-4.1 repo-wide grep verified clean by orchestrator)
+- [x] Committed
+Commit: 4d04ab6
+Summary: Scrubbed the live ENGRAM_HARVESTER_TOKEN from docs/harvester.md (repo-wide grep now clean) and corrected the stale sweep-scope section to reflect shipped per-repo scoping (ebfe8d2). DW-4.3 (rotation notice) is delivered to the user in the trust report — the token remains in git history and must be revoked out-of-band.
