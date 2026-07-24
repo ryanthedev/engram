@@ -344,7 +344,7 @@ func TestKnowledgeSearchTranslatesRequestAndHits(t *testing.T) {
 		t.Fatalf("hits = %v", resp.GetHits())
 	}
 	h := resp.GetHits()[0]
-	if h.GetId() != "d1" || h.GetScore() != 3.5 || h.GetSource() != "papers" {
+	if h.GetId() != "d1" || h.GetScore() != 3.5 || h.GetCollection() != "papers" {
 		t.Errorf("hit = %v", h)
 	}
 	var fields map[string]any

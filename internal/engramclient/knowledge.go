@@ -75,9 +75,14 @@ func (c *Client) KnowledgeSearch(ctx context.Context, collection, query string, 
 	if err != nil {
 		return nil, err
 	}
+	// KnowledgeHit's collection maps onto mcp.Hit.Source: knowledge hits ride
+	// the memory Hit DTO until the fragment/paging surface replaces it, and
+	// its Source slot has always carried the collection name on this path.
+	// Fragments and total are not surfaced yet (empty/0 until the server
+	// wires highlight extraction and track_total_hits).
 	hits := make([]mcp.Hit, 0, len(resp.GetHits()))
 	for _, h := range resp.GetHits() {
-		hits = append(hits, mcp.Hit{ID: h.GetId(), Score: h.GetScore(), Source: h.GetSource(), Fields: h.GetFieldsJson()})
+		hits = append(hits, mcp.Hit{ID: h.GetId(), Score: h.GetScore(), Source: h.GetCollection(), Fields: h.GetFieldsJson()})
 	}
 	return hits, nil
 }
@@ -205,9 +210,13 @@ func sortKeyProto(k mcp.SortKey) (*engrampb.SortKey, error) {
 // AccessPolicy; there is no index field to carry (registry-internal).
 func collectionSpecProto(spec mcp.CollectionSpec) *engrampb.CollectionSpec {
 	out := &engrampb.CollectionSpec{
-		Name:      spec.Name,
-		TextField: spec.TextField,
-		Access:    &engrampb.AccessPolicy{Public: spec.Public, Roles: spec.Roles},
+		Name:              spec.Name,
+		TextField:         spec.TextField,
+		Access:            &engrampb.AccessPolicy{Public: spec.Public, Roles: spec.Roles},
+		FragmentSize:      int32(spec.FragmentSize),
+		NumberOfFragments: int32(spec.NumberOfFragments),
+		HighlightPreTag:   spec.HighlightPreTag,
+		HighlightPostTag:  spec.HighlightPostTag,
 	}
 	if len(spec.Mappings) > 0 {
 		out.Mappings = make(map[string]*engrampb.FieldSpec, len(spec.Mappings))
@@ -221,10 +230,14 @@ func collectionSpecProto(spec mcp.CollectionSpec) *engrampb.CollectionSpec {
 // collectionSpecFromProto is collectionSpecProto's inverse.
 func collectionSpecFromProto(p *engrampb.CollectionSpec) mcp.CollectionSpec {
 	spec := mcp.CollectionSpec{
-		Name:      p.GetName(),
-		TextField: p.GetTextField(),
-		Public:    p.GetAccess().GetPublic(),
-		Roles:     p.GetAccess().GetRoles(),
+		Name:              p.GetName(),
+		TextField:         p.GetTextField(),
+		Public:            p.GetAccess().GetPublic(),
+		Roles:             p.GetAccess().GetRoles(),
+		FragmentSize:      int(p.GetFragmentSize()),
+		NumberOfFragments: int(p.GetNumberOfFragments()),
+		HighlightPreTag:   p.GetHighlightPreTag(),
+		HighlightPostTag:  p.GetHighlightPostTag(),
 	}
 	if m := p.GetMappings(); len(m) > 0 {
 		spec.Mappings = make(map[string]mcp.FieldSpec, len(m))

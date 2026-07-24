@@ -2006,10 +2006,20 @@ type CollectionSpec struct {
 	// The full-text field BM25 queries target.
 	TextField string `protobuf:"bytes,2,opt,name=text_field,json=textField,proto3" json:"text_field,omitempty"`
 	// Declared document fields by name.
-	Mappings      map[string]*FieldSpec `protobuf:"bytes,3,rep,name=mappings,proto3" json:"mappings,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Access        *AccessPolicy         `protobuf:"bytes,4,opt,name=access,proto3" json:"access,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Mappings map[string]*FieldSpec `protobuf:"bytes,3,rep,name=mappings,proto3" json:"mappings,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Access   *AccessPolicy         `protobuf:"bytes,4,opt,name=access,proto3" json:"access,omitempty"`
+	// Fragment sizing for search-time highlight extraction. 0 means UNSET —
+	// the server applies its global defaults (240 chars / 3 fragments) —
+	// never a literal zero-size fragment.
+	FragmentSize      int32 `protobuf:"varint,5,opt,name=fragment_size,json=fragmentSize,proto3" json:"fragment_size,omitempty"`
+	NumberOfFragments int32 `protobuf:"varint,6,opt,name=number_of_fragments,json=numberOfFragments,proto3" json:"number_of_fragments,omitempty"`
+	// Marker strings wrapped around the matched terms inside each fragment.
+	// Both empty (the default) means markers OFF: clean extraction. Markers
+	// are a per-collection opt-in; the server never hardcodes a marker pair.
+	HighlightPreTag  string `protobuf:"bytes,7,opt,name=highlight_pre_tag,json=highlightPreTag,proto3" json:"highlight_pre_tag,omitempty"`
+	HighlightPostTag string `protobuf:"bytes,8,opt,name=highlight_post_tag,json=highlightPostTag,proto3" json:"highlight_post_tag,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CollectionSpec) Reset() {
@@ -2068,6 +2078,34 @@ func (x *CollectionSpec) GetAccess() *AccessPolicy {
 		return x.Access
 	}
 	return nil
+}
+
+func (x *CollectionSpec) GetFragmentSize() int32 {
+	if x != nil {
+		return x.FragmentSize
+	}
+	return 0
+}
+
+func (x *CollectionSpec) GetNumberOfFragments() int32 {
+	if x != nil {
+		return x.NumberOfFragments
+	}
+	return 0
+}
+
+func (x *CollectionSpec) GetHighlightPreTag() string {
+	if x != nil {
+		return x.HighlightPreTag
+	}
+	return ""
+}
+
+func (x *CollectionSpec) GetHighlightPostTag() string {
+	if x != nil {
+		return x.HighlightPostTag
+	}
+	return ""
 }
 
 // KnowledgeDocument is one document in an ingest batch. fields carries the
@@ -2279,7 +2317,15 @@ type KnowledgeSearchRequest struct {
 	Filters []*Predicate `protobuf:"bytes,3,rep,name=filters,proto3" json:"filters,omitempty"`
 	Sort    []*SortKey   `protobuf:"bytes,4,rep,name=sort,proto3" json:"sort,omitempty"`
 	// Max results (default: server-chosen; clamped server-side).
-	K             int32 `protobuf:"varint,5,opt,name=k,proto3" json:"k,omitempty"`
+	K int32 `protobuf:"varint,5,opt,name=k,proto3" json:"k,omitempty"`
+	// Paging start: skip this many ranked hits before returning k. 0 (the
+	// proto default) means the first page — "unset" and "page one" are the
+	// same thing, so there is no sentinel to get wrong.
+	Offset int32 `protobuf:"varint,6,opt,name=offset,proto3" json:"offset,omitempty"`
+	// Return each hit's full stored body inline (today's pre-fragment
+	// behavior) instead of extracted fragments. Defaults to false: fragments
+	// are the medium, the body is the drill-down (memory_read by id).
+	FullBody      bool `protobuf:"varint,7,opt,name=full_body,json=fullBody,proto3" json:"full_body,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2349,18 +2395,120 @@ func (x *KnowledgeSearchRequest) GetK() int32 {
 	return 0
 }
 
-// KnowledgeSearchResponse reuses Hit: id, BM25 score, source = collection
-// name, and the stored document as fields_json.
+func (x *KnowledgeSearchRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *KnowledgeSearchRequest) GetFullBody() bool {
+	if x != nil {
+		return x.FullBody
+	}
+	return false
+}
+
+// KnowledgeHit is one knowledge-search result. It is deliberately NOT the
+// memory Hit: knowledge hits carry a real collection name (memory's Hit
+// overloads source as an index-tier tag) and extracted fragments, and a
+// memory hit must never grow a permanently-empty fragments field.
+type KnowledgeHit struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Score float64                `protobuf:"fixed64,2,opt,name=score,proto3" json:"score,omitempty"`
+	// The collection this hit came from.
+	Collection string `protobuf:"bytes,3,opt,name=collection,proto3" json:"collection,omitempty"`
+	// The stored document rendered as JSON (scalars; the full-text body is
+	// included only for full_body searches once fragment extraction lands).
+	FieldsJson string `protobuf:"bytes,4,opt,name=fields_json,json=fieldsJson,proto3" json:"fields_json,omitempty"`
+	// Fragments extracted from the full-text body around the query matches
+	// (empty until server-side highlight extraction is wired, and always
+	// empty for full_body searches, which inline the body instead).
+	Fragments     []string `protobuf:"bytes,5,rep,name=fragments,proto3" json:"fragments,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KnowledgeHit) Reset() {
+	*x = KnowledgeHit{}
+	mi := &file_engram_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KnowledgeHit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KnowledgeHit) ProtoMessage() {}
+
+func (x *KnowledgeHit) ProtoReflect() protoreflect.Message {
+	mi := &file_engram_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KnowledgeHit.ProtoReflect.Descriptor instead.
+func (*KnowledgeHit) Descriptor() ([]byte, []int) {
+	return file_engram_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *KnowledgeHit) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *KnowledgeHit) GetScore() float64 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
+}
+
+func (x *KnowledgeHit) GetCollection() string {
+	if x != nil {
+		return x.Collection
+	}
+	return ""
+}
+
+func (x *KnowledgeHit) GetFieldsJson() string {
+	if x != nil {
+		return x.FieldsJson
+	}
+	return ""
+}
+
+func (x *KnowledgeHit) GetFragments() []string {
+	if x != nil {
+		return x.Fragments
+	}
+	return nil
+}
+
+// KnowledgeSearchResponse carries one page of ranked knowledge hits.
 type KnowledgeSearchResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hits          []*Hit                 `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Hits  []*KnowledgeHit        `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
+	// Exact total number of matches across all pages (0 until offset paging
+	// wires track_total_hits; then never a capped estimate).
+	Total         int64 `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *KnowledgeSearchResponse) Reset() {
 	*x = KnowledgeSearchResponse{}
-	mi := &file_engram_proto_msgTypes[27]
+	mi := &file_engram_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2372,7 +2520,7 @@ func (x *KnowledgeSearchResponse) String() string {
 func (*KnowledgeSearchResponse) ProtoMessage() {}
 
 func (x *KnowledgeSearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[27]
+	mi := &file_engram_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2385,14 +2533,21 @@ func (x *KnowledgeSearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeSearchResponse.ProtoReflect.Descriptor instead.
 func (*KnowledgeSearchResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{27}
+	return file_engram_proto_rawDescGZIP(), []int{28}
 }
 
-func (x *KnowledgeSearchResponse) GetHits() []*Hit {
+func (x *KnowledgeSearchResponse) GetHits() []*KnowledgeHit {
 	if x != nil {
 		return x.Hits
 	}
 	return nil
+}
+
+func (x *KnowledgeSearchResponse) GetTotal() int64 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
 }
 
 // KnowledgeCollectionsRequest is empty; the caller is identified by the
@@ -2405,7 +2560,7 @@ type KnowledgeCollectionsRequest struct {
 
 func (x *KnowledgeCollectionsRequest) Reset() {
 	*x = KnowledgeCollectionsRequest{}
-	mi := &file_engram_proto_msgTypes[28]
+	mi := &file_engram_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2417,7 +2572,7 @@ func (x *KnowledgeCollectionsRequest) String() string {
 func (*KnowledgeCollectionsRequest) ProtoMessage() {}
 
 func (x *KnowledgeCollectionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[28]
+	mi := &file_engram_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2430,7 +2585,7 @@ func (x *KnowledgeCollectionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeCollectionsRequest.ProtoReflect.Descriptor instead.
 func (*KnowledgeCollectionsRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{28}
+	return file_engram_proto_rawDescGZIP(), []int{29}
 }
 
 // CollectionInfo is one listed collection: its spec (so a caller can learn
@@ -2449,7 +2604,7 @@ type CollectionInfo struct {
 
 func (x *CollectionInfo) Reset() {
 	*x = CollectionInfo{}
-	mi := &file_engram_proto_msgTypes[29]
+	mi := &file_engram_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2461,7 +2616,7 @@ func (x *CollectionInfo) String() string {
 func (*CollectionInfo) ProtoMessage() {}
 
 func (x *CollectionInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[29]
+	mi := &file_engram_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2474,7 +2629,7 @@ func (x *CollectionInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CollectionInfo.ProtoReflect.Descriptor instead.
 func (*CollectionInfo) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{29}
+	return file_engram_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *CollectionInfo) GetSpec() *CollectionSpec {
@@ -2515,7 +2670,7 @@ type KnowledgeCollectionsResponse struct {
 
 func (x *KnowledgeCollectionsResponse) Reset() {
 	*x = KnowledgeCollectionsResponse{}
-	mi := &file_engram_proto_msgTypes[30]
+	mi := &file_engram_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2527,7 +2682,7 @@ func (x *KnowledgeCollectionsResponse) String() string {
 func (*KnowledgeCollectionsResponse) ProtoMessage() {}
 
 func (x *KnowledgeCollectionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[30]
+	mi := &file_engram_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2540,7 +2695,7 @@ func (x *KnowledgeCollectionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeCollectionsResponse.ProtoReflect.Descriptor instead.
 func (*KnowledgeCollectionsResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{30}
+	return file_engram_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *KnowledgeCollectionsResponse) GetCollections() []*CollectionInfo {
@@ -2563,7 +2718,7 @@ type KnowledgeDeleteRequest struct {
 
 func (x *KnowledgeDeleteRequest) Reset() {
 	*x = KnowledgeDeleteRequest{}
-	mi := &file_engram_proto_msgTypes[31]
+	mi := &file_engram_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2575,7 +2730,7 @@ func (x *KnowledgeDeleteRequest) String() string {
 func (*KnowledgeDeleteRequest) ProtoMessage() {}
 
 func (x *KnowledgeDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[31]
+	mi := &file_engram_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2588,7 +2743,7 @@ func (x *KnowledgeDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeDeleteRequest.ProtoReflect.Descriptor instead.
 func (*KnowledgeDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{31}
+	return file_engram_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *KnowledgeDeleteRequest) GetCollection() string {
@@ -2623,7 +2778,7 @@ type KnowledgeDeleteResponse struct {
 
 func (x *KnowledgeDeleteResponse) Reset() {
 	*x = KnowledgeDeleteResponse{}
-	mi := &file_engram_proto_msgTypes[32]
+	mi := &file_engram_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2635,7 +2790,7 @@ func (x *KnowledgeDeleteResponse) String() string {
 func (*KnowledgeDeleteResponse) ProtoMessage() {}
 
 func (x *KnowledgeDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[32]
+	mi := &file_engram_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2648,7 +2803,7 @@ func (x *KnowledgeDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeDeleteResponse.ProtoReflect.Descriptor instead.
 func (*KnowledgeDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{32}
+	return file_engram_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *KnowledgeDeleteResponse) GetDeleted() int64 {
@@ -2668,7 +2823,7 @@ type CreateCollectionRequest struct {
 
 func (x *CreateCollectionRequest) Reset() {
 	*x = CreateCollectionRequest{}
-	mi := &file_engram_proto_msgTypes[33]
+	mi := &file_engram_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2680,7 +2835,7 @@ func (x *CreateCollectionRequest) String() string {
 func (*CreateCollectionRequest) ProtoMessage() {}
 
 func (x *CreateCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[33]
+	mi := &file_engram_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2693,7 +2848,7 @@ func (x *CreateCollectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCollectionRequest.ProtoReflect.Descriptor instead.
 func (*CreateCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{33}
+	return file_engram_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CreateCollectionRequest) GetSpec() *CollectionSpec {
@@ -2712,7 +2867,7 @@ type CreateCollectionResponse struct {
 
 func (x *CreateCollectionResponse) Reset() {
 	*x = CreateCollectionResponse{}
-	mi := &file_engram_proto_msgTypes[34]
+	mi := &file_engram_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2724,7 +2879,7 @@ func (x *CreateCollectionResponse) String() string {
 func (*CreateCollectionResponse) ProtoMessage() {}
 
 func (x *CreateCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[34]
+	mi := &file_engram_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2737,7 +2892,7 @@ func (x *CreateCollectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCollectionResponse.ProtoReflect.Descriptor instead.
 func (*CreateCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{34}
+	return file_engram_proto_rawDescGZIP(), []int{35}
 }
 
 // UpdateCollectionRequest replaces the named collection's spec (spec.name
@@ -2751,7 +2906,7 @@ type UpdateCollectionRequest struct {
 
 func (x *UpdateCollectionRequest) Reset() {
 	*x = UpdateCollectionRequest{}
-	mi := &file_engram_proto_msgTypes[35]
+	mi := &file_engram_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2763,7 +2918,7 @@ func (x *UpdateCollectionRequest) String() string {
 func (*UpdateCollectionRequest) ProtoMessage() {}
 
 func (x *UpdateCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[35]
+	mi := &file_engram_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2776,7 +2931,7 @@ func (x *UpdateCollectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateCollectionRequest.ProtoReflect.Descriptor instead.
 func (*UpdateCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{35}
+	return file_engram_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *UpdateCollectionRequest) GetSpec() *CollectionSpec {
@@ -2795,7 +2950,7 @@ type UpdateCollectionResponse struct {
 
 func (x *UpdateCollectionResponse) Reset() {
 	*x = UpdateCollectionResponse{}
-	mi := &file_engram_proto_msgTypes[36]
+	mi := &file_engram_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2807,7 +2962,7 @@ func (x *UpdateCollectionResponse) String() string {
 func (*UpdateCollectionResponse) ProtoMessage() {}
 
 func (x *UpdateCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[36]
+	mi := &file_engram_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2820,7 +2975,7 @@ func (x *UpdateCollectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateCollectionResponse.ProtoReflect.Descriptor instead.
 func (*UpdateCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{36}
+	return file_engram_proto_rawDescGZIP(), []int{37}
 }
 
 // StatusRequest is empty; the caller is identified by the bearer token.
@@ -2832,7 +2987,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_engram_proto_msgTypes[37]
+	mi := &file_engram_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2844,7 +2999,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[37]
+	mi := &file_engram_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2857,7 +3012,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{37}
+	return file_engram_proto_rawDescGZIP(), []int{38}
 }
 
 // StatusResponse reports liveness, the resolved identity, and tier counts.
@@ -2880,7 +3035,7 @@ type StatusResponse struct {
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_engram_proto_msgTypes[38]
+	mi := &file_engram_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2892,7 +3047,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engram_proto_msgTypes[38]
+	mi := &file_engram_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2905,7 +3060,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_engram_proto_rawDescGZIP(), []int{38}
+	return file_engram_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *StatusResponse) GetHealthy() bool {
@@ -3131,13 +3286,17 @@ const file_engram_proto_rawDesc = "" +
 	"\bsortable\x18\x03 \x01(\bR\bsortable\"<\n" +
 	"\fAccessPolicy\x12\x16\n" +
 	"\x06public\x18\x01 \x01(\bR\x06public\x12\x14\n" +
-	"\x05roles\x18\x02 \x03(\tR\x05roles\"\x8c\x02\n" +
+	"\x05roles\x18\x02 \x03(\tR\x05roles\"\xbb\x03\n" +
 	"\x0eCollectionSpec\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
 	"text_field\x18\x02 \x01(\tR\ttextField\x12C\n" +
 	"\bmappings\x18\x03 \x03(\v2'.engram.v1.CollectionSpec.MappingsEntryR\bmappings\x12/\n" +
-	"\x06access\x18\x04 \x01(\v2\x17.engram.v1.AccessPolicyR\x06access\x1aQ\n" +
+	"\x06access\x18\x04 \x01(\v2\x17.engram.v1.AccessPolicyR\x06access\x12#\n" +
+	"\rfragment_size\x18\x05 \x01(\x05R\ffragmentSize\x12.\n" +
+	"\x13number_of_fragments\x18\x06 \x01(\x05R\x11numberOfFragments\x12*\n" +
+	"\x11highlight_pre_tag\x18\a \x01(\tR\x0fhighlightPreTag\x12,\n" +
+	"\x12highlight_post_tag\x18\b \x01(\tR\x10highlightPostTag\x1aQ\n" +
 	"\rMappingsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12*\n" +
 	"\x05value\x18\x02 \x01(\v2\x14.engram.v1.FieldSpecR\x05value:\x028\x01\"\xa5\x01\n" +
@@ -3156,7 +3315,7 @@ const file_engram_proto_rawDesc = "" +
 	"harvest_id\x18\x03 \x01(\tR\tharvestId\x120\n" +
 	"\x04docs\x18\x04 \x03(\v2\x1c.engram.v1.KnowledgeDocumentR\x04docs\"3\n" +
 	"\x17KnowledgeIngestResponse\x12\x18\n" +
-	"\aindexed\x18\x01 \x01(\x05R\aindexed\"\xb4\x01\n" +
+	"\aindexed\x18\x01 \x01(\x05R\aindexed\"\xe9\x01\n" +
 	"\x16KnowledgeSearchRequest\x12\x1e\n" +
 	"\n" +
 	"collection\x18\x01 \x01(\tR\n" +
@@ -3164,9 +3323,21 @@ const file_engram_proto_rawDesc = "" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12.\n" +
 	"\afilters\x18\x03 \x03(\v2\x14.engram.v1.PredicateR\afilters\x12&\n" +
 	"\x04sort\x18\x04 \x03(\v2\x12.engram.v1.SortKeyR\x04sort\x12\f\n" +
-	"\x01k\x18\x05 \x01(\x05R\x01k\"=\n" +
-	"\x17KnowledgeSearchResponse\x12\"\n" +
-	"\x04hits\x18\x01 \x03(\v2\x0e.engram.v1.HitR\x04hits\"\x1d\n" +
+	"\x01k\x18\x05 \x01(\x05R\x01k\x12\x16\n" +
+	"\x06offset\x18\x06 \x01(\x05R\x06offset\x12\x1b\n" +
+	"\tfull_body\x18\a \x01(\bR\bfullBody\"\x93\x01\n" +
+	"\fKnowledgeHit\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05score\x18\x02 \x01(\x01R\x05score\x12\x1e\n" +
+	"\n" +
+	"collection\x18\x03 \x01(\tR\n" +
+	"collection\x12\x1f\n" +
+	"\vfields_json\x18\x04 \x01(\tR\n" +
+	"fieldsJson\x12\x1c\n" +
+	"\tfragments\x18\x05 \x03(\tR\tfragments\"\\\n" +
+	"\x17KnowledgeSearchResponse\x12+\n" +
+	"\x04hits\x18\x01 \x03(\v2\x17.engram.v1.KnowledgeHitR\x04hits\x12\x14\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\x1d\n" +
 	"\x1bKnowledgeCollectionsRequest\"\xe5\x01\n" +
 	"\x0eCollectionInfo\x12-\n" +
 	"\x04spec\x18\x01 \x01(\v2\x19.engram.v1.CollectionSpecR\x04spec\x12\x14\n" +
@@ -3234,7 +3405,7 @@ func file_engram_proto_rawDescGZIP() []byte {
 }
 
 var file_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
+var file_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_engram_proto_goTypes = []any{
 	(PredicateOp)(0),                     // 0: engram.v1.PredicateOp
 	(SortOrder)(0),                       // 1: engram.v1.SortOrder
@@ -3265,94 +3436,95 @@ var file_engram_proto_goTypes = []any{
 	(*KnowledgeIngestRequest)(nil),       // 26: engram.v1.KnowledgeIngestRequest
 	(*KnowledgeIngestResponse)(nil),      // 27: engram.v1.KnowledgeIngestResponse
 	(*KnowledgeSearchRequest)(nil),       // 28: engram.v1.KnowledgeSearchRequest
-	(*KnowledgeSearchResponse)(nil),      // 29: engram.v1.KnowledgeSearchResponse
-	(*KnowledgeCollectionsRequest)(nil),  // 30: engram.v1.KnowledgeCollectionsRequest
-	(*CollectionInfo)(nil),               // 31: engram.v1.CollectionInfo
-	(*KnowledgeCollectionsResponse)(nil), // 32: engram.v1.KnowledgeCollectionsResponse
-	(*KnowledgeDeleteRequest)(nil),       // 33: engram.v1.KnowledgeDeleteRequest
-	(*KnowledgeDeleteResponse)(nil),      // 34: engram.v1.KnowledgeDeleteResponse
-	(*CreateCollectionRequest)(nil),      // 35: engram.v1.CreateCollectionRequest
-	(*CreateCollectionResponse)(nil),     // 36: engram.v1.CreateCollectionResponse
-	(*UpdateCollectionRequest)(nil),      // 37: engram.v1.UpdateCollectionRequest
-	(*UpdateCollectionResponse)(nil),     // 38: engram.v1.UpdateCollectionResponse
-	(*StatusRequest)(nil),                // 39: engram.v1.StatusRequest
-	(*StatusResponse)(nil),               // 40: engram.v1.StatusResponse
-	nil,                                  // 41: engram.v1.CollectionSpec.MappingsEntry
-	(*timestamppb.Timestamp)(nil),        // 42: google.protobuf.Timestamp
-	(*structpb.Value)(nil),               // 43: google.protobuf.Value
-	(*structpb.Struct)(nil),              // 44: google.protobuf.Struct
+	(*KnowledgeHit)(nil),                 // 29: engram.v1.KnowledgeHit
+	(*KnowledgeSearchResponse)(nil),      // 30: engram.v1.KnowledgeSearchResponse
+	(*KnowledgeCollectionsRequest)(nil),  // 31: engram.v1.KnowledgeCollectionsRequest
+	(*CollectionInfo)(nil),               // 32: engram.v1.CollectionInfo
+	(*KnowledgeCollectionsResponse)(nil), // 33: engram.v1.KnowledgeCollectionsResponse
+	(*KnowledgeDeleteRequest)(nil),       // 34: engram.v1.KnowledgeDeleteRequest
+	(*KnowledgeDeleteResponse)(nil),      // 35: engram.v1.KnowledgeDeleteResponse
+	(*CreateCollectionRequest)(nil),      // 36: engram.v1.CreateCollectionRequest
+	(*CreateCollectionResponse)(nil),     // 37: engram.v1.CreateCollectionResponse
+	(*UpdateCollectionRequest)(nil),      // 38: engram.v1.UpdateCollectionRequest
+	(*UpdateCollectionResponse)(nil),     // 39: engram.v1.UpdateCollectionResponse
+	(*StatusRequest)(nil),                // 40: engram.v1.StatusRequest
+	(*StatusResponse)(nil),               // 41: engram.v1.StatusResponse
+	nil,                                  // 42: engram.v1.CollectionSpec.MappingsEntry
+	(*timestamppb.Timestamp)(nil),        // 43: google.protobuf.Timestamp
+	(*structpb.Value)(nil),               // 44: google.protobuf.Value
+	(*structpb.Struct)(nil),              // 45: google.protobuf.Struct
 }
 var file_engram_proto_depIdxs = []int32{
-	42, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
-	42, // 1: engram.v1.SearchRequest.since:type_name -> google.protobuf.Timestamp
-	42, // 2: engram.v1.SearchRequest.until:type_name -> google.protobuf.Timestamp
+	43, // 0: engram.v1.IngestRequest.occurred_at:type_name -> google.protobuf.Timestamp
+	43, // 1: engram.v1.SearchRequest.since:type_name -> google.protobuf.Timestamp
+	43, // 2: engram.v1.SearchRequest.until:type_name -> google.protobuf.Timestamp
 	5,  // 3: engram.v1.SearchResponse.hits:type_name -> engram.v1.Hit
 	5,  // 4: engram.v1.SearchResponse.expanded:type_name -> engram.v1.Hit
-	42, // 5: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
-	42, // 6: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
-	42, // 7: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
-	42, // 8: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
-	42, // 9: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
+	43, // 5: engram.v1.Provenance.created_at:type_name -> google.protobuf.Timestamp
+	43, // 6: engram.v1.FactVersion.valid_at:type_name -> google.protobuf.Timestamp
+	43, // 7: engram.v1.FactVersion.invalid_at:type_name -> google.protobuf.Timestamp
+	43, // 8: engram.v1.FactVersion.created_at:type_name -> google.protobuf.Timestamp
+	43, // 9: engram.v1.FactVersion.expired_at:type_name -> google.protobuf.Timestamp
 	8,  // 10: engram.v1.AuditResponse.provenance:type_name -> engram.v1.Provenance
 	9,  // 11: engram.v1.AuditResponse.versions:type_name -> engram.v1.FactVersion
-	42, // 12: engram.v1.EpisodicRecord.occurred_at:type_name -> google.protobuf.Timestamp
-	42, // 13: engram.v1.EpisodicRecord.created_at:type_name -> google.protobuf.Timestamp
+	43, // 12: engram.v1.EpisodicRecord.occurred_at:type_name -> google.protobuf.Timestamp
+	43, // 13: engram.v1.EpisodicRecord.created_at:type_name -> google.protobuf.Timestamp
 	12, // 14: engram.v1.ReadResponse.episodic:type_name -> engram.v1.EpisodicRecord
 	9,  // 15: engram.v1.ReadResponse.fact:type_name -> engram.v1.FactVersion
 	8,  // 16: engram.v1.ReadResponse.provenance:type_name -> engram.v1.Provenance
 	9,  // 17: engram.v1.ReadResponse.versions:type_name -> engram.v1.FactVersion
-	42, // 18: engram.v1.ExportEntity.valid_at:type_name -> google.protobuf.Timestamp
-	42, // 19: engram.v1.ExportEntity.created_at:type_name -> google.protobuf.Timestamp
-	42, // 20: engram.v1.ExportEdge.valid_at:type_name -> google.protobuf.Timestamp
-	42, // 21: engram.v1.ExportEdge.created_at:type_name -> google.protobuf.Timestamp
-	42, // 22: engram.v1.ExportEpisodic.occurred_at:type_name -> google.protobuf.Timestamp
+	43, // 18: engram.v1.ExportEntity.valid_at:type_name -> google.protobuf.Timestamp
+	43, // 19: engram.v1.ExportEntity.created_at:type_name -> google.protobuf.Timestamp
+	43, // 20: engram.v1.ExportEdge.valid_at:type_name -> google.protobuf.Timestamp
+	43, // 21: engram.v1.ExportEdge.created_at:type_name -> google.protobuf.Timestamp
+	43, // 22: engram.v1.ExportEpisodic.occurred_at:type_name -> google.protobuf.Timestamp
 	15, // 23: engram.v1.ExportResponse.entities:type_name -> engram.v1.ExportEntity
 	16, // 24: engram.v1.ExportResponse.edges:type_name -> engram.v1.ExportEdge
 	17, // 25: engram.v1.ExportResponse.episodics:type_name -> engram.v1.ExportEpisodic
-	43, // 26: engram.v1.Range.gte:type_name -> google.protobuf.Value
-	43, // 27: engram.v1.Range.lte:type_name -> google.protobuf.Value
+	44, // 26: engram.v1.Range.gte:type_name -> google.protobuf.Value
+	44, // 27: engram.v1.Range.lte:type_name -> google.protobuf.Value
 	0,  // 28: engram.v1.Predicate.op:type_name -> engram.v1.PredicateOp
-	43, // 29: engram.v1.Predicate.scalar:type_name -> google.protobuf.Value
+	44, // 29: engram.v1.Predicate.scalar:type_name -> google.protobuf.Value
 	19, // 30: engram.v1.Predicate.range:type_name -> engram.v1.Range
 	1,  // 31: engram.v1.SortKey.order:type_name -> engram.v1.SortOrder
-	41, // 32: engram.v1.CollectionSpec.mappings:type_name -> engram.v1.CollectionSpec.MappingsEntry
+	42, // 32: engram.v1.CollectionSpec.mappings:type_name -> engram.v1.CollectionSpec.MappingsEntry
 	23, // 33: engram.v1.CollectionSpec.access:type_name -> engram.v1.AccessPolicy
-	44, // 34: engram.v1.KnowledgeDocument.fields:type_name -> google.protobuf.Struct
+	45, // 34: engram.v1.KnowledgeDocument.fields:type_name -> google.protobuf.Struct
 	25, // 35: engram.v1.KnowledgeIngestRequest.docs:type_name -> engram.v1.KnowledgeDocument
 	20, // 36: engram.v1.KnowledgeSearchRequest.filters:type_name -> engram.v1.Predicate
 	21, // 37: engram.v1.KnowledgeSearchRequest.sort:type_name -> engram.v1.SortKey
-	5,  // 38: engram.v1.KnowledgeSearchResponse.hits:type_name -> engram.v1.Hit
+	29, // 38: engram.v1.KnowledgeSearchResponse.hits:type_name -> engram.v1.KnowledgeHit
 	24, // 39: engram.v1.CollectionInfo.spec:type_name -> engram.v1.CollectionSpec
-	42, // 40: engram.v1.CollectionInfo.newest_harvested_at:type_name -> google.protobuf.Timestamp
-	42, // 41: engram.v1.CollectionInfo.newest_doc_date:type_name -> google.protobuf.Timestamp
-	31, // 42: engram.v1.KnowledgeCollectionsResponse.collections:type_name -> engram.v1.CollectionInfo
+	43, // 40: engram.v1.CollectionInfo.newest_harvested_at:type_name -> google.protobuf.Timestamp
+	43, // 41: engram.v1.CollectionInfo.newest_doc_date:type_name -> google.protobuf.Timestamp
+	32, // 42: engram.v1.KnowledgeCollectionsResponse.collections:type_name -> engram.v1.CollectionInfo
 	24, // 43: engram.v1.CreateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
 	24, // 44: engram.v1.UpdateCollectionRequest.spec:type_name -> engram.v1.CollectionSpec
 	22, // 45: engram.v1.CollectionSpec.MappingsEntry.value:type_name -> engram.v1.FieldSpec
 	2,  // 46: engram.v1.Engram.Ingest:input_type -> engram.v1.IngestRequest
 	4,  // 47: engram.v1.Engram.Search:input_type -> engram.v1.SearchRequest
-	39, // 48: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
+	40, // 48: engram.v1.Engram.Status:input_type -> engram.v1.StatusRequest
 	7,  // 49: engram.v1.Engram.Audit:input_type -> engram.v1.AuditRequest
 	11, // 50: engram.v1.Engram.Read:input_type -> engram.v1.ReadRequest
 	14, // 51: engram.v1.Engram.Export:input_type -> engram.v1.ExportRequest
 	26, // 52: engram.v1.Engram.KnowledgeIngest:input_type -> engram.v1.KnowledgeIngestRequest
 	28, // 53: engram.v1.Engram.KnowledgeSearch:input_type -> engram.v1.KnowledgeSearchRequest
-	30, // 54: engram.v1.Engram.KnowledgeCollections:input_type -> engram.v1.KnowledgeCollectionsRequest
-	33, // 55: engram.v1.Engram.KnowledgeDelete:input_type -> engram.v1.KnowledgeDeleteRequest
-	35, // 56: engram.v1.Engram.CreateCollection:input_type -> engram.v1.CreateCollectionRequest
-	37, // 57: engram.v1.Engram.UpdateCollection:input_type -> engram.v1.UpdateCollectionRequest
+	31, // 54: engram.v1.Engram.KnowledgeCollections:input_type -> engram.v1.KnowledgeCollectionsRequest
+	34, // 55: engram.v1.Engram.KnowledgeDelete:input_type -> engram.v1.KnowledgeDeleteRequest
+	36, // 56: engram.v1.Engram.CreateCollection:input_type -> engram.v1.CreateCollectionRequest
+	38, // 57: engram.v1.Engram.UpdateCollection:input_type -> engram.v1.UpdateCollectionRequest
 	3,  // 58: engram.v1.Engram.Ingest:output_type -> engram.v1.IngestResponse
 	6,  // 59: engram.v1.Engram.Search:output_type -> engram.v1.SearchResponse
-	40, // 60: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
+	41, // 60: engram.v1.Engram.Status:output_type -> engram.v1.StatusResponse
 	10, // 61: engram.v1.Engram.Audit:output_type -> engram.v1.AuditResponse
 	13, // 62: engram.v1.Engram.Read:output_type -> engram.v1.ReadResponse
 	18, // 63: engram.v1.Engram.Export:output_type -> engram.v1.ExportResponse
 	27, // 64: engram.v1.Engram.KnowledgeIngest:output_type -> engram.v1.KnowledgeIngestResponse
-	29, // 65: engram.v1.Engram.KnowledgeSearch:output_type -> engram.v1.KnowledgeSearchResponse
-	32, // 66: engram.v1.Engram.KnowledgeCollections:output_type -> engram.v1.KnowledgeCollectionsResponse
-	34, // 67: engram.v1.Engram.KnowledgeDelete:output_type -> engram.v1.KnowledgeDeleteResponse
-	36, // 68: engram.v1.Engram.CreateCollection:output_type -> engram.v1.CreateCollectionResponse
-	38, // 69: engram.v1.Engram.UpdateCollection:output_type -> engram.v1.UpdateCollectionResponse
+	30, // 65: engram.v1.Engram.KnowledgeSearch:output_type -> engram.v1.KnowledgeSearchResponse
+	33, // 66: engram.v1.Engram.KnowledgeCollections:output_type -> engram.v1.KnowledgeCollectionsResponse
+	35, // 67: engram.v1.Engram.KnowledgeDelete:output_type -> engram.v1.KnowledgeDeleteResponse
+	37, // 68: engram.v1.Engram.CreateCollection:output_type -> engram.v1.CreateCollectionResponse
+	39, // 69: engram.v1.Engram.UpdateCollection:output_type -> engram.v1.UpdateCollectionResponse
 	58, // [58:70] is the sub-list for method output_type
 	46, // [46:58] is the sub-list for method input_type
 	46, // [46:46] is the sub-list for extension type_name
@@ -3375,7 +3547,7 @@ func file_engram_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engram_proto_rawDesc), len(file_engram_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   40,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

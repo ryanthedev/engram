@@ -546,7 +546,10 @@ func (t *tierRetriever) search(ctx context.Context, q Query, f Filter, aclClause
 	// Memory tiers never sort (relevance/RRF order only) — nil is the only
 	// value any memory caller ever passes, which is exactly the value
 	// buildQuery treats as "omit the sort key entirely" (DW-5.1).
-	body, usePipeline := buildQuery(mode, t.textField, t.vectorField, q.Text, vec, k, filters, nil)
+	body, usePipeline := buildQuery(queryOpts{
+		mode: mode, textField: t.textField, vectorField: t.vectorField,
+		text: q.Text, vec: vec, k: k, filters: filters,
+	})
 
 	url := t.baseURL + "/" + t.index + "/_search"
 	if usePipeline {
@@ -646,6 +649,40 @@ func (t *tierRetriever) filterClauses(f Filter, aclClause map[string]any) ([]any
 	return clauses, nil
 }
 
+// queryOpts carries every input to buildQuery. Its ZERO VALUE is safe: an
+// unset field means "off", so a caller setting only the core search fields
+// (mode..sort) gets byte-for-byte the query the old 8-positional-parameter
+// buildQuery produced — the memory path relies on that (DW-1.3's golden
+// matrix in buildquery_golden_test.go pins it against pre-refactor bytes).
+type queryOpts struct {
+	mode        SearchMode
+	textField   string
+	vectorField string
+	text        string
+	vec         []float32
+	k           int
+	filters     []any
+	sort        []any
+
+	// Knowledge-search seams, declared here so Phases 2–3 extend the query
+	// without another signature change. All are INERT this phase — buildQuery
+	// does not read them yet — and zero-value-off by design: memory callers
+	// leave them unset and must keep producing identical bodies when they are
+	// wired in.
+	//
+	// offset is the paging start ("from", Phase 3); 0 means first page and
+	// emits no "from" key. fragmentSize/numberOfFragments size the highlight
+	// clause (Phase 2), already fallback-resolved by the caller via
+	// knowledge.CollectionSpec.FragmentSizing — 0 here means highlighting off.
+	// highlightPreTag/highlightPostTag wrap fragment matches; both empty means
+	// markers off (the default — never a hardcoded marker pair).
+	offset            int
+	fragmentSize      int
+	numberOfFragments int
+	highlightPreTag   string
+	highlightPostTag  string
+}
+
 // buildQuery constructs the OpenSearch request body for one tier's search.
 // usePipeline reports whether the caller must attach the RRF search_pipeline
 // query param (only hybrid mode with a usable vector fuses two clauses).
@@ -662,41 +699,41 @@ func (t *tierRetriever) filterClauses(f Filter, aclClause map[string]any) ([]any
 // here) falls back to match_all so filters alone can still select documents,
 // rather than a "match" query on an empty string, which OpenSearch analyzes
 // to zero terms and use.
-func buildQuery(mode SearchMode, textField, vectorField, text string, vec []float32, k int, filters []any, sort []any) (body []byte, usePipeline bool) {
+func buildQuery(opts queryOpts) (body []byte, usePipeline bool) {
 	bm25Query := map[string]any{"match_all": map[string]any{}}
-	if text != "" {
-		bm25Query = map[string]any{"match": map[string]any{textField: text}}
+	if opts.text != "" {
+		bm25Query = map[string]any{"match": map[string]any{opts.textField: opts.text}}
 	}
 	var bm25 any = bm25Query
-	if len(filters) > 0 {
-		bm25 = map[string]any{"bool": map[string]any{"must": []any{bm25Query}, "filter": filters}}
+	if len(opts.filters) > 0 {
+		bm25 = map[string]any{"bool": map[string]any{"must": []any{bm25Query}, "filter": opts.filters}}
 	}
 
 	var knn any
-	if vec != nil {
-		inner := map[string]any{"vector": vec, "k": k}
-		if len(filters) > 0 {
-			inner["filter"] = map[string]any{"bool": map[string]any{"filter": filters}}
+	if opts.vec != nil {
+		inner := map[string]any{"vector": opts.vec, "k": opts.k}
+		if len(opts.filters) > 0 {
+			inner["filter"] = map[string]any{"bool": map[string]any{"filter": opts.filters}}
 		}
-		knn = map[string]any{"knn": map[string]any{vectorField: inner}}
+		knn = map[string]any{"knn": map[string]any{opts.vectorField: inner}}
 	}
 
 	var query map[string]any
 	switch {
-	case mode == ModeBM25Only || knn == nil:
-		query = map[string]any{"size": k, "query": bm25}
-	case mode == ModeKNNOnly:
-		query = map[string]any{"size": k, "query": knn}
+	case opts.mode == ModeBM25Only || knn == nil:
+		query = map[string]any{"size": opts.k, "query": bm25}
+	case opts.mode == ModeKNNOnly:
+		query = map[string]any{"size": opts.k, "query": knn}
 	default: // ModeHybrid with a usable vector.
-		query = map[string]any{"size": k, "query": map[string]any{"hybrid": map[string]any{"queries": []any{bm25, knn}}}}
+		query = map[string]any{"size": opts.k, "query": map[string]any{"hybrid": map[string]any{"queries": []any{bm25, knn}}}}
 		usePipeline = true
 	}
 	// Never fetch embedding vectors back: they are query-time inputs, not
 	// results, and dominate response size (~95% of a raw hit). Excluding a
 	// field an index doesn't have is a no-op, so both names apply to both tiers.
 	query["_source"] = map[string]any{"excludes": []string{"text_embedding", "fact_embedding"}}
-	if len(sort) > 0 {
-		query["sort"] = sort
+	if len(opts.sort) > 0 {
+		query["sort"] = opts.sort
 	}
 	body, _ = json.Marshal(query)
 	return body, usePipeline

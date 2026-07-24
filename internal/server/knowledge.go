@@ -174,13 +174,18 @@ func (s *Server) KnowledgeSearch(ctx context.Context, req *engrampb.KnowledgeSea
 		// infrastructure, not caller input.
 		return nil, status.Errorf(codes.Internal, "searching collection %q: %v", spec.Name, err)
 	}
-	out := make([]*engrampb.Hit, len(hits))
+	// h.Source carries the collection name on the knowledge path (parseHits
+	// tags knowledge hits with spec.Name) — it maps onto KnowledgeHit's real
+	// collection field. Fragments stay empty and total 0 until highlight
+	// extraction and track_total_hits are wired; req.offset/full_body are
+	// accepted but inert until then.
+	out := make([]*engrampb.KnowledgeHit, len(hits))
 	for i, h := range hits {
 		fieldsJSON, err := json.Marshal(h.Fields)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "encoding hit %s fields: %v", h.ID, err)
 		}
-		out[i] = &engrampb.Hit{Id: h.ID, Score: h.Score, Source: h.Source, FieldsJson: string(fieldsJSON)}
+		out[i] = &engrampb.KnowledgeHit{Id: h.ID, Score: h.Score, Collection: h.Source, FieldsJson: string(fieldsJSON)}
 	}
 	return &engrampb.KnowledgeSearchResponse{Hits: out}, nil
 }
@@ -395,9 +400,13 @@ func collectionSpecFromProto(p *engrampb.CollectionSpec) (knowledge.CollectionSp
 		return knowledge.CollectionSpec{}, status.Error(codes.InvalidArgument, "spec.name is required")
 	}
 	spec := knowledge.CollectionSpec{
-		Name:      p.GetName(),
-		TextField: p.GetTextField(),
-		Access:    knowledge.AccessPolicy{Public: p.GetAccess().GetPublic(), Roles: p.GetAccess().GetRoles()},
+		Name:              p.GetName(),
+		TextField:         p.GetTextField(),
+		Access:            knowledge.AccessPolicy{Public: p.GetAccess().GetPublic(), Roles: p.GetAccess().GetRoles()},
+		FragmentSize:      int(p.GetFragmentSize()),
+		NumberOfFragments: int(p.GetNumberOfFragments()),
+		HighlightPreTag:   p.GetHighlightPreTag(),
+		HighlightPostTag:  p.GetHighlightPostTag(),
 	}
 	if m := p.GetMappings(); len(m) > 0 {
 		spec.Mappings = make(map[string]knowledge.FieldSpec, len(m))
@@ -411,9 +420,13 @@ func collectionSpecFromProto(p *engrampb.CollectionSpec) (knowledge.CollectionSp
 // collectionSpecProto renders a domain spec for the wire, omitting Index.
 func collectionSpecProto(spec knowledge.CollectionSpec) *engrampb.CollectionSpec {
 	out := &engrampb.CollectionSpec{
-		Name:      spec.Name,
-		TextField: spec.TextField,
-		Access:    &engrampb.AccessPolicy{Public: spec.Access.Public, Roles: spec.Access.Roles},
+		Name:              spec.Name,
+		TextField:         spec.TextField,
+		Access:            &engrampb.AccessPolicy{Public: spec.Access.Public, Roles: spec.Access.Roles},
+		FragmentSize:      int32(spec.FragmentSize),
+		NumberOfFragments: int32(spec.NumberOfFragments),
+		HighlightPreTag:   spec.HighlightPreTag,
+		HighlightPostTag:  spec.HighlightPostTag,
 	}
 	if len(spec.Mappings) > 0 {
 		out.Mappings = make(map[string]*engrampb.FieldSpec, len(spec.Mappings))

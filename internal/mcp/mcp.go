@@ -135,6 +135,15 @@ type CollectionSpec struct {
 	Mappings  map[string]FieldSpec `json:"mappings,omitempty"`
 	Public    bool                 `json:"public,omitempty"`
 	Roles     []string             `json:"roles,omitempty"`
+
+	// Fragment sizing for search-time highlight extraction. Zero means unset
+	// — the server applies its global defaults (240 chars / 3 fragments).
+	FragmentSize      int `json:"fragment_size,omitempty"`
+	NumberOfFragments int `json:"number_of_fragments,omitempty"`
+	// Marker strings wrapped around matched terms inside each fragment; both
+	// empty (the default) means markers off. Per-collection opt-in only.
+	HighlightPreTag  string `json:"highlight_pre_tag,omitempty"`
+	HighlightPostTag string `json:"highlight_post_tag,omitempty"`
 }
 
 // CollectionInfo is one knowledge_collections entry: the collection's spec

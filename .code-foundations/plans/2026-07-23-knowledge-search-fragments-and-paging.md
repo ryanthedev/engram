@@ -1,7 +1,9 @@
 # Plan: Knowledge Search — Fragments, Drill-down & Paging
 
 **Created:** 2026-07-23
-**Status:** ready
+**Status:** in-progress
+**Started:** 2026-07-23
+**Current Phase:** 1
 **Complexity:** medium
 ---
 ## Context
@@ -118,7 +120,7 @@ Full design record: `.code-foundations/research/2026-07-22-knowledge-search-frag
 
 ### Phase 4: Harvester doc cleanup
 **Model:** haiku
-**Skills:** none -- docs-only edit; no code skill's triggers match
+**Skills:** code-clarity-and-docs
 **Gate:** Minimal
 
 **Goal:** Remove the live token embedded in `docs/harvester.md` and correct its stale mark-and-sweep-scope section to reflect the shipped per-repo scoping.

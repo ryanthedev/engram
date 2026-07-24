@@ -454,6 +454,16 @@ message CollectionSpec {
   // Declared document fields by name.
   map<string, FieldSpec> mappings = 3;
   AccessPolicy access = 4;
+  // Fragment sizing for search-time highlight extraction. 0 means UNSET —
+  // the server applies its global defaults (240 chars / 3 fragments) —
+  // never a literal zero-size fragment.
+  int32 fragment_size = 5;
+  int32 number_of_fragments = 6;
+  // Marker strings wrapped around the matched terms inside each fragment.
+  // Both empty (the default) means markers OFF: clean extraction. Markers
+  // are a per-collection opt-in; the server never hardcodes a marker pair.
+  string highlight_pre_tag = 7;
+  string highlight_post_tag = 8;
 }
 
 // KnowledgeDocument is one document in an ingest batch. fields carries the
@@ -496,12 +506,40 @@ message KnowledgeSearchRequest {
   repeated SortKey sort = 4;
   // Max results (default: server-chosen; clamped server-side).
   int32 k = 5;
+  // Paging start: skip this many ranked hits before returning k. 0 (the
+  // proto default) means the first page — "unset" and "page one" are the
+  // same thing, so there is no sentinel to get wrong.
+  int32 offset = 6;
+  // Return each hit's full stored body inline (today's pre-fragment
+  // behavior) instead of extracted fragments. Defaults to false: fragments
+  // are the medium, the body is the drill-down (memory_read by id).
+  bool full_body = 7;
 }
 
-// KnowledgeSearchResponse reuses Hit: id, BM25 score, source = collection
-// name, and the stored document as fields_json.
+// KnowledgeHit is one knowledge-search result. It is deliberately NOT the
+// memory Hit: knowledge hits carry a real collection name (memory's Hit
+// overloads source as an index-tier tag) and extracted fragments, and a
+// memory hit must never grow a permanently-empty fragments field.
+message KnowledgeHit {
+  string id = 1;
+  double score = 2;
+  // The collection this hit came from.
+  string collection = 3;
+  // The stored document rendered as JSON (scalars; the full-text body is
+  // included only for full_body searches once fragment extraction lands).
+  string fields_json = 4;
+  // Fragments extracted from the full-text body around the query matches
+  // (empty until server-side highlight extraction is wired, and always
+  // empty for full_body searches, which inline the body instead).
+  repeated string fragments = 5;
+}
+
+// KnowledgeSearchResponse carries one page of ranked knowledge hits.
 message KnowledgeSearchResponse {
-  repeated Hit hits = 1;
+  repeated KnowledgeHit hits = 1;
+  // Exact total number of matches across all pages (0 until offset paging
+  // wires track_total_hits; then never a capped estimate).
+  int64 total = 2;
 }
 
 // KnowledgeCollectionsRequest is empty; the caller is identified by the

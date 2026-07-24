@@ -115,7 +115,10 @@ func (r *KnowledgeRetriever) Search(ctx context.Context, spec knowledge.Collecti
 	if err != nil {
 		return nil, err
 	}
-	body, _ := buildQuery(ModeBM25Only, spec.TextField, "", query, nil, clampK(k), filterClauses, sortClauses)
+	body, _ := buildQuery(queryOpts{
+		mode: ModeBM25Only, textField: spec.TextField, text: query,
+		k: clampK(k), filters: filterClauses, sort: sortClauses,
+	})
 
 	status, decoded, err := postSearch(ctx, r.client, r.baseURL+"/"+spec.Index+"/_search", body)
 	if err != nil {

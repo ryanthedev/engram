@@ -115,9 +115,9 @@ func TestKnowledgeIngestTranslation(t *testing.T) {
 }
 
 func TestKnowledgeSearchTranslation(t *testing.T) {
-	srv := &captureServer{searchResp: &engrampb.KnowledgeSearchResponse{Hits: []*engrampb.Hit{
-		{Id: "d1", Score: 4.2, Source: "papers", FieldsJson: `{"title":"T"}`},
-	}}}
+	srv := &captureServer{searchResp: &engrampb.KnowledgeSearchResponse{Hits: []*engrampb.KnowledgeHit{
+		{Id: "d1", Score: 4.2, Collection: "papers", FieldsJson: `{"title":"T"}`},
+	}, Total: 1}}
 	c := dialCapture(t, srv)
 
 	hits, err := c.KnowledgeSearch(context.Background(), "papers", "transformers",

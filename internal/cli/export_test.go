@@ -90,7 +90,7 @@ type exportStub struct {
 	engrampb.UnimplementedEngramServer
 	pages        []*engrampb.ExportResponse
 	collections  []*engrampb.CollectionInfo
-	docs         map[string][]*engrampb.Hit // collection name -> hits
+	docs         map[string][]*engrampb.KnowledgeHit // collection name -> hits
 	knowledgeErr error
 }
 
@@ -139,7 +139,7 @@ func knowledgeCollectionInfo(name string, public bool) *engrampb.CollectionInfo 
 // it: title/text/memory_ref/memory_ref_name as the fields_json row
 // (memory_ref/memory_ref_name omitted from the row when empty, matching how
 // an ingest batch with no such field would look).
-func knowledgeHit(id, title, text, memoryRef, memoryRefName string) *engrampb.Hit {
+func knowledgeHit(id, title, text, memoryRef, memoryRefName string) *engrampb.KnowledgeHit {
 	fields := map[string]any{"title": title, "text": text}
 	if memoryRef != "" {
 		fields["memory_ref"] = memoryRef
@@ -151,7 +151,7 @@ func knowledgeHit(id, title, text, memoryRef, memoryRefName string) *engrampb.Hi
 	if err != nil {
 		panic(err) // fixture-only: a map of strings always marshals
 	}
-	return &engrampb.Hit{Id: id, Score: 1, Source: "curated_notes", FieldsJson: string(b)}
+	return &engrampb.KnowledgeHit{Id: id, Score: 1, Collection: "curated_notes", FieldsJson: string(b)}
 }
 
 // startStub starts srv as an in-process gRPC server and returns its address;
@@ -757,7 +757,7 @@ func TestDW_2_1_KnowledgeNotesWikilinkToExportedConcepts(t *testing.T) {
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{richPage()},
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs: map[string][]*engrampb.Hit{
+		docs: map[string][]*engrampb.KnowledgeHit{
 			"curated_notes": {
 				knowledgeHit("kd2", "Shared title", "second body", "e-a", ""),
 				knowledgeHit("kd1", "Shared title", "first body", "e-a", ""),
@@ -809,7 +809,7 @@ func TestDW_2_2_ConceptNoteGetsReferencedByBacklinks(t *testing.T) {
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{richPage()},
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs: map[string][]*engrampb.Hit{
+		docs: map[string][]*engrampb.KnowledgeHit{
 			"curated_notes": {
 				knowledgeHit("kd-b", "Note B", "body b", "e-a", ""),
 				knowledgeHit("kd-a", "Note A", "body a", "e-a", ""),
@@ -850,7 +850,7 @@ func TestDW_2_3_UnresolvedMemoryRefRendersInertMarker(t *testing.T) {
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{richPage()},
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs: map[string][]*engrampb.Hit{
+		docs: map[string][]*engrampb.KnowledgeHit{
 			"curated_notes": {
 				knowledgeHit("kd1", "Named ref", "body", "no-such-entity", "Ghost Concept"),
 				knowledgeHit("kd2", "Bare id ref", "body", "also-missing", ""),
@@ -916,7 +916,7 @@ func TestDW_2_4_InjectionTrapSanitizedAndConfined(t *testing.T) {
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{richPage()},
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs: map[string][]*engrampb.Hit{
+		docs: map[string][]*engrampb.KnowledgeHit{
 			"curated_notes": {
 				knowledgeHit("kd1", hostileTitle, hostileText, "missing-entity", hostileMemoryRefName),
 				knowledgeHit("kd2", hostileNFDTitle, "second body", "", ""),
@@ -1060,14 +1060,14 @@ func TestDW_2_6_ZeroCollectionsNoKnowledgeFolder(t *testing.T) {
 // exactly k=retrieval.MaxK docs may hold more than was fetched (the RPC has
 // no paging), and the summary must say so.
 func TestKnowledgeCollectionTruncationWarning(t *testing.T) {
-	hits := make([]*engrampb.Hit, 100)
+	hits := make([]*engrampb.KnowledgeHit, 100)
 	for i := range hits {
 		hits[i] = knowledgeHit(fmt.Sprintf("kd%03d", i), fmt.Sprintf("Doc %03d", i), "body", "", "")
 	}
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{{}}, // empty memory export keeps this test focused
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs:        map[string][]*engrampb.Hit{"curated_notes": hits},
+		docs:        map[string][]*engrampb.KnowledgeHit{"curated_notes": hits},
 	}
 	addr := startStub(t, stub)
 	dir := filepath.Join(t.TempDir(), "vault")

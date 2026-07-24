@@ -213,7 +213,10 @@ func TestBuildQueryMemoryPathByteIdenticalWhenSortNil(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _ := buildQuery(tc.mode, "text", "text_embedding", "hello", tc.vec, 5, tc.filters, nil)
+			got, _ := buildQuery(queryOpts{
+				mode: tc.mode, textField: "text", vectorField: "text_embedding",
+				text: "hello", vec: tc.vec, k: 5, filters: tc.filters,
+			})
 			if string(got) != tc.want {
 				t.Errorf("buildQuery(sort=nil) body =\n%s\nwant\n%s", got, tc.want)
 			}
