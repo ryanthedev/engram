@@ -8,6 +8,9 @@
 //     (OpenSearch directly; issuing a token cannot itself require a token).
 //   - ingest / search / status — authenticated gRPC calls carrying a bearer
 //     token (-token or ENGRAM_TOKEN).
+//   - knowledge collections/create-collection — knowledge-collection registry
+//     administration, also over gRPC with a bearer token (create requires the
+//     admin role). A collection must exist before any harvest targets it.
 package cli
 
 import (
@@ -58,6 +61,8 @@ func Run(ctx context.Context, args []string, env Env, out, errW io.Writer) int {
 		err = runAudit(ctx, rest, env, out)
 	case "export":
 		err = runExport(ctx, rest, env, out)
+	case "knowledge":
+		err = runKnowledge(ctx, rest, env, out)
 	case "help", "-h", "--help":
 		fmt.Fprintln(out, usage)
 		return 0
@@ -88,6 +93,9 @@ Usage:
   engram export         <dir> [--force] [-addr HOST:PORT] [-token TOK]
   engram quarantine list    --tenant T [--url URL]
   engram quarantine release <fingerprint> --tenant T [--url URL]
+  engram knowledge collections [-addr HOST:PORT] [-token TOK]
+  engram knowledge create-collection --name N [--text-field F] [--public] [--roles R1,R2]
+                                     [--field NAME:TYPE[:filterable][:sortable]]... [-addr HOST:PORT] [-token TOK]
 
 Ingest text is normally plain prose — the production extractor is an LLM that
 reads prose directly, so plain prose needs no special formatting. --text may
