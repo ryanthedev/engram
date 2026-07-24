@@ -87,22 +87,23 @@ collections:
 
 ### Multi-repo & sweep scope (important)
 
-A Full-Harvest source's mark-and-sweep deletes every row for
-`(collection, source_type)` that the current run did **not** re-ingest. All
-rows written by a given source type share one sweep scope, so **every repo /
-seed feeding one collection under one source type must be harvested in a single
-manifest/run**. Harvesting `repoA` and `repoB` as two separate `engram-harvester`
-invocations (each `source=github-repos`) makes the second run's sweep delete the
-first run's documents. Put them in one `github-repos` entry (`repos: [repoA, repoB]`)
-so a single run ingests both and the sweep keeps both. (Per-repo sweep scoping is
-a possible future enhancement.)
+A Full-Harvest source's mark-and-sweep mechanism deletes every row for
+`(collection, source_type)` that the current run did **not** re-ingest. With the
+per-repo sweep scoping feature (shipped in commit `ebfe8d2`), each repo configured
+in a `github-repos` entry gets its **own mark-and-sweep scope**. This means
+harvesting `repoA` in one `engram-harvester` run and `repoB` in a separate run
+will **not** delete the other repo's documents — each repo is swept independently.
+
+While you can configure multiple repos in a single `github-repos` entry (`repos: [repoA, repoB]`)
+for efficiency, it is no longer a correctness requirement. Each repo maintains its
+own scope based on its owner/repo identifier, making independent harvest runs safe.
 
 ## Running the Harvester
 
 The harvester requires a valid gRPC authentication token. To protect sensitive credentials, the token **MUST** be supplied via the `ENGRAM_HARVESTER_TOKEN` environment variable. The harvester will reject running if the token is passed in flags/arguments, or if it is empty.
 
 ```bash
-export ENGRAM_HARVESTER_TOKEN=egm_AvxGRzdGSCSeqRwsDyf6Z--aYAHmsoSHs_D539QmMYo
+export ENGRAM_HARVESTER_TOKEN=egm_REPLACE_WITH_YOUR_HARVESTER_TOKEN
 engram-harvester --manifest sources.yaml --addr localhost:7070
 ```
 
