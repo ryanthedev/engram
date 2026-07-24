@@ -154,7 +154,7 @@ func knowledgeToolSchemas() []toolSchema {
 		},
 		{
 			Name:        ToolKnowledgeSearch,
-			Description: "BM25 search over one knowledge collection with generic field filters and sort. Each hit carries extracted text fragments instead of the document body; drill the full document with memory_read(id, <collection>). An empty query (filter-only) matches no terms, so its hits carry scalar fields only — no fragments and no body. Returns budget-packed ranked hits; oversized result sets spill to overflow_path.",
+			Description: "BM25 search over one knowledge collection with generic field filters and sort. Each hit carries extracted text fragments instead of the document body; drill the full document with memory_read(id, <collection>). An empty query (filter-only) matches no terms, so its hits carry scalar fields only — no fragments and no body. Returns budget-packed ranked hits plus the exact total match count; page with offset to drain past k. Oversized result sets spill to overflow_path.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -175,6 +175,10 @@ func knowledgeToolSchemas() []toolSchema {
 						"items":       map[string]any{"type": "object"},
 					},
 					"k": map[string]any{"type": "integer", "description": "Max hits to return (default server-chosen)."},
+					"offset": map[string]any{
+						"type":        "integer",
+						"description": "Skip this many ranked hits before returning k (paging; default 0, first page). The response's total is the exact match count.",
+					},
 				},
 				"required": []any{"collection"},
 			},
@@ -417,6 +421,7 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 		Filters    []Predicate `json:"filters"`
 		Sort       []SortKey   `json:"sort"`
 		K          int         `json:"k"`
+		Offset     int         `json:"offset"`
 		FullBody   bool        `json:"full_body"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
@@ -425,17 +430,24 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 	if args.Collection == "" {
 		return toolError("knowledge_search requires a non-empty collection"), nil
 	}
+	if args.Offset < 0 {
+		return toolError("knowledge_search offset must be >= 0"), nil
+	}
 	k := args.K
 	if k <= 0 {
 		k = defaultRequestK // same request-generously-pack-tightly posture as memory_search
 	}
-	hits, err := s.backend.KnowledgeSearch(ctx, args.Collection, args.Query, args.Filters, args.Sort, k, args.FullBody)
+	hits, total, err := s.backend.KnowledgeSearch(ctx, args.Collection, args.Query, args.Filters, args.Sort, k, args.Offset, args.FullBody)
 	if err != nil {
 		return toolError(fmt.Sprintf("knowledge search failed: %v", err)), nil
 	}
 	// nil facet fields: collections declare their own field vocabulary at
 	// runtime, so v1 reports the omitted count + hint without facet values.
-	return toolResult(packAndSpill(hits, nil, ToolKnowledgeSearch)), nil
+	// Total is attached AFTER packing (packAndSpill is shared with
+	// memory_search, which has no total concept) — see searchResult.Total.
+	result := packAndSpill(hits, nil, ToolKnowledgeSearch)
+	result.Total = total
+	return toolResult(result), nil
 }
 
 func (s *Server) callKnowledgeCollections(ctx context.Context) (any, *rpcError) {

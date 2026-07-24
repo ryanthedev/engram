@@ -52,6 +52,28 @@ type CollectionMeta struct {
 	NewestDocDate     *time.Time
 }
 
+// MaxResultWindow bounds how deep offset+k may reach into a knowledge
+// collection via OpenSearch's from/size paging — OpenSearch's own
+// index.max_result_window default. Querying past it throws a
+// search_phase_execution_exception (a raw, caller-unfriendly 500), so Search
+// clamps against it itself and returns a self-correcting Go error instead of
+// ever sending an over-window request (DW-3.2). search_after paging, which
+// has no such ceiling, is explicitly out of scope for this plan.
+const MaxResultWindow = 10000
+
+// clampOffset normalizes an externally supplied paging offset: negative
+// (never legitimate — "skip -5 hits" is meaningless) becomes 0, the same
+// "first page" value an unset offset already means; in-range values pass
+// through unchanged. Mirrors clampK's silent-normalize posture rather than
+// erroring, since a negative offset self-corrects to a sane default with no
+// loss of caller intent.
+func clampOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	return offset
+}
+
 // knowledgeIndexNameRE is the safe-path-segment grammar for a knowledge
 // collection's physical index/alias name embedded in an OpenSearch REST
 // path — the same grammar store.indexNameRE uses (unexported there, so
@@ -96,11 +118,20 @@ func NewKnowledgeRetriever(client *http.Client, baseURL string, registry knowled
 
 // Search runs one BM25 query over spec's collection, applying filters and
 // sort (both generic, validated against spec.Mappings) and returning up to k
-// hits ranked by relevance (or by sort, when given). query may be empty when
-// filters alone should select documents (filter-only search). It issues
-// zero embedding calls (KnowledgeRetriever holds no embed.Embedder — a
-// structural guarantee, not just a tested one) and never registers with
+// hits — starting at offset ("from"; 0 means the first page) — ranked by
+// relevance (or by sort, when given), plus the EXACT total match count
+// (OpenSearch track_total_hits, never a capped estimate — DW-3.1). query may
+// be empty when filters alone should select documents (filter-only search).
+// It issues zero embedding calls (KnowledgeRetriever holds no embed.Embedder
+// — a structural guarantee, not just a tested one) and never registers with
 // MultiRetriever/the RRF pipeline.
+//
+// offset+k is clamped against MaxResultWindow BEFORE any HTTP call: exceeding
+// it returns a self-correcting error naming the cap rather than a raw
+// OpenSearch 500 (DW-3.2). An offset past the actual total is not an error —
+// it returns zero hits with the real total still reported (DW-3.1's dirty
+// case), exactly the shape a caller draining a collection to completion sees
+// on its final page.
 //
 // By default each hit carries highlight-extracted Fragments (sized by
 // spec.FragmentSizing, wrapped in the spec's opt-in marker tags — both empty
@@ -110,24 +141,31 @@ func NewKnowledgeRetriever(client *http.Client, baseURL string, registry knowled
 // no highlighting, body inline in Fields. A filter-only (empty-query) search
 // under the default matches no terms, so its hits carry scalars only —
 // neither fragments nor body — which is expected, not an error.
-func (r *KnowledgeRetriever) Search(ctx context.Context, spec knowledge.CollectionSpec, query string, filters []Predicate, sortKeys []SortKey, k int, fullBody bool) ([]Hit, error) {
+func (r *KnowledgeRetriever) Search(ctx context.Context, spec knowledge.CollectionSpec, query string, filters []Predicate, sortKeys []SortKey, k, offset int, fullBody bool) ([]Hit, int64, error) {
 	if err := validateKnowledgeIndex(spec.Index); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if spec.TextField == "" {
-		return nil, fmt.Errorf("retrieval: collection %q has no text field configured", spec.Name)
+		return nil, 0, fmt.Errorf("retrieval: collection %q has no text field configured", spec.Name)
 	}
 	filterClauses, err := buildFilterClauses(spec, filters)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	sortClauses, err := buildSortClauses(spec, sortKeys)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	ck, off := clampK(k), clampOffset(offset)
+	if off+ck > MaxResultWindow {
+		return nil, 0, fmt.Errorf(
+			"retrieval: offset %d + k %d = %d exceeds max_result_window %d on collection %q; page with a smaller offset or k, or narrow the query with filters",
+			off, ck, off+ck, MaxResultWindow, spec.Name)
 	}
 	opts := queryOpts{
 		mode: ModeBM25Only, textField: spec.TextField, text: query,
-		k: clampK(k), filters: filterClauses, sort: sortClauses,
+		k: ck, filters: filterClauses, sort: sortClauses,
+		offset: off, trackTotalHits: true,
 	}
 	if !fullBody {
 		opts.fragmentSize, opts.numberOfFragments = spec.FragmentSizing()
@@ -137,15 +175,15 @@ func (r *KnowledgeRetriever) Search(ctx context.Context, spec knowledge.Collecti
 
 	status, decoded, err := postSearch(ctx, r.client, r.baseURL+"/"+spec.Index+"/_search", body)
 	if err != nil {
-		return nil, fmt.Errorf("retrieval: searching knowledge collection %q: %w", spec.Name, err)
+		return nil, 0, fmt.Errorf("retrieval: searching knowledge collection %q: %w", spec.Name, err)
 	}
 	if isKnowledgeIndexNotFound(status, decoded) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("retrieval: searching knowledge collection %q: unexpected status %d: %v", spec.Name, status, decoded)
+		return nil, 0, fmt.Errorf("retrieval: searching knowledge collection %q: unexpected status %d: %v", spec.Name, status, decoded)
 	}
-	return parseHits(decoded, spec.Name), nil
+	return parseHits(decoded, spec.Name), totalHits(decoded), nil
 }
 
 // GetDocument fetches one knowledge document by doc id via realtime GET —

@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ryanthedev/engram/api/engrampb"
+	"github.com/ryanthedev/engram/internal/retrieval"
 )
 
 // --- fixtures ---
@@ -115,11 +116,25 @@ func (s *exportStub) KnowledgeCollections(ctx context.Context, req *engrampb.Kno
 	return &engrampb.KnowledgeCollectionsResponse{Collections: s.collections}, nil
 }
 
+// KnowledgeSearch honors offset/k like the real server (from/size paging
+// over the fixed docs slice) so tests exercising fetchKnowledgeDocs' paging
+// loop see real per-page slices and an exact total, not the whole slice
+// repeated on every call.
 func (s *exportStub) KnowledgeSearch(_ context.Context, req *engrampb.KnowledgeSearchRequest) (*engrampb.KnowledgeSearchResponse, error) {
 	if s.knowledgeErr != nil {
 		return nil, s.knowledgeErr
 	}
-	return &engrampb.KnowledgeSearchResponse{Hits: s.docs[req.GetCollection()]}, nil
+	all := s.docs[req.GetCollection()]
+	total := int64(len(all))
+	offset, k := int(req.GetOffset()), int(req.GetK())
+	if offset >= len(all) {
+		return &engrampb.KnowledgeSearchResponse{Total: total}, nil
+	}
+	end := offset + k
+	if k <= 0 || end > len(all) {
+		end = len(all)
+	}
+	return &engrampb.KnowledgeSearchResponse{Hits: all[offset:end], Total: total}, nil
 }
 
 // knowledgeCollectionInfo builds one CollectionInfo the stub's
@@ -1055,14 +1070,16 @@ func TestDW_2_6_ZeroCollectionsNoKnowledgeFolder(t *testing.T) {
 	}
 }
 
-// TestKnowledgeCollectionTruncationWarning is bonus coverage (past the DW
-// floor) for the Scope-mandated truncation warning: a collection returning
-// exactly k=retrieval.MaxK docs may hold more than was fetched (the RPC has
-// no paging), and the summary must say so.
-func TestKnowledgeCollectionTruncationWarning(t *testing.T) {
-	hits := make([]*engrampb.KnowledgeHit, 100)
+// TestDW_3_3_KnowledgeCollectionFullyDrainsBeyondMaxK covers Phase 3's DW-3.3:
+// a collection larger than retrieval.MaxK (the per-page fetch size) must be
+// drained COMPLETELY via offset paging, and the old possible-truncation
+// warning — which fired whenever a single k=MaxK page came back full — must
+// never appear now that paging actually continues past it.
+func TestDW_3_3_KnowledgeCollectionFullyDrainsBeyondMaxK(t *testing.T) {
+	n := retrieval.MaxK*2 + 37 // spans three pages, last one partial
+	hits := make([]*engrampb.KnowledgeHit, n)
 	for i := range hits {
-		hits[i] = knowledgeHit(fmt.Sprintf("kd%03d", i), fmt.Sprintf("Doc %03d", i), "body", "", "")
+		hits[i] = knowledgeHit(fmt.Sprintf("kd%04d", i), fmt.Sprintf("Doc %04d", i), "body", "", "")
 	}
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{{}}, // empty memory export keeps this test focused
@@ -1075,10 +1092,21 @@ func TestKnowledgeCollectionTruncationWarning(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, errW)
 	}
-	if !strings.Contains(out, "warning:") || !strings.Contains(out, "curated_notes") {
-		t.Errorf("output = %q, want a possible-truncation warning naming the collection", out)
+	if strings.Contains(out, "warning:") && strings.Contains(out, "curated_notes") {
+		t.Errorf("output = %q, the no-paging truncation warning must be gone", out)
 	}
-	if !strings.Contains(out, "100 knowledge docs") {
-		t.Errorf("output = %q, want all 100 docs counted despite the truncation warning", out)
+	want := fmt.Sprintf("%d knowledge docs", n)
+	if !strings.Contains(out, want) {
+		t.Errorf("output = %q, want all %d docs counted (%s)", out, n, want)
+	}
+	tree := vaultTree(t, dir)
+	count := 0
+	for rel := range tree {
+		if strings.HasPrefix(rel, "knowledge/") {
+			count++
+		}
+	}
+	if count != n {
+		t.Errorf("wrote %d knowledge notes, want all %d drained", count, n)
 	}
 }

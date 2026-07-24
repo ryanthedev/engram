@@ -54,29 +54,31 @@ func (c *Client) KnowledgeIngest(ctx context.Context, collection, source, harves
 }
 
 // KnowledgeSearch runs one BM25 query over a collection with generic field
-// filters and sort. By default each hit carries extracted fragments and a
+// filters and sort, paged via offset (0 = first page) and returning the
+// exact total match count (OpenSearch track_total_hits, never a capped
+// estimate). By default each hit carries extracted fragments and a
 // fields_json WITHOUT the document body (drill the whole document with
 // Read(id, collection)); fullBody=true restores whole bodies inline and
 // yields no fragments.
-func (c *Client) KnowledgeSearch(ctx context.Context, collection, query string, filters []mcp.Predicate, sortKeys []mcp.SortKey, k int, fullBody bool) ([]mcp.KnowledgeHit, error) {
-	req := &engrampb.KnowledgeSearchRequest{Collection: collection, Query: query, K: int32(k), FullBody: fullBody}
+func (c *Client) KnowledgeSearch(ctx context.Context, collection, query string, filters []mcp.Predicate, sortKeys []mcp.SortKey, k, offset int, fullBody bool) ([]mcp.KnowledgeHit, int64, error) {
+	req := &engrampb.KnowledgeSearchRequest{Collection: collection, Query: query, K: int32(k), Offset: int32(offset), FullBody: fullBody}
 	for _, p := range filters {
 		pred, err := predicateProto(p)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		req.Filters = append(req.Filters, pred)
 	}
 	for _, sk := range sortKeys {
 		key, err := sortKeyProto(sk)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		req.Sort = append(req.Sort, key)
 	}
 	resp, err := c.api.KnowledgeSearch(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	hits := make([]mcp.KnowledgeHit, 0, len(resp.GetHits()))
 	for _, h := range resp.GetHits() {
@@ -85,7 +87,7 @@ func (c *Client) KnowledgeSearch(ctx context.Context, collection, query string, 
 			Fields: h.GetFieldsJson(), Fragments: h.GetFragments(),
 		})
 	}
-	return hits, nil
+	return hits, resp.GetTotal(), nil
 }
 
 // KnowledgeCollections lists the collections the caller may read, with field

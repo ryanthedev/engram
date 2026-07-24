@@ -91,8 +91,10 @@ type fakeKnowledgeReader struct {
 	filters  []retrieval.Predicate
 	sort     []retrieval.SortKey
 	k        int
+	offset   int
 	fullBody bool
 	hits     []retrieval.Hit
+	total    int64
 	metas    []retrieval.CollectionMeta
 	err      error
 
@@ -103,9 +105,9 @@ type fakeKnowledgeReader struct {
 	docErr error
 }
 
-func (r *fakeKnowledgeReader) Search(_ context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sortKeys []retrieval.SortKey, k int, fullBody bool) ([]retrieval.Hit, error) {
-	r.spec, r.query, r.filters, r.sort, r.k, r.fullBody = spec, query, filters, sortKeys, k, fullBody
-	return r.hits, r.err
+func (r *fakeKnowledgeReader) Search(_ context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sortKeys []retrieval.SortKey, k, offset int, fullBody bool) ([]retrieval.Hit, int64, error) {
+	r.spec, r.query, r.filters, r.sort, r.k, r.offset, r.fullBody = spec, query, filters, sortKeys, k, offset, fullBody
+	return r.hits, r.total, r.err
 }
 
 func (r *fakeKnowledgeReader) GetDocument(_ context.Context, spec knowledge.CollectionSpec, id string) (map[string]any, bool, error) {
@@ -362,6 +364,31 @@ func TestKnowledgeSearchTranslatesRequestAndHits(t *testing.T) {
 	var fields map[string]any
 	if err := json.Unmarshal([]byte(h.GetFieldsJson()), &fields); err != nil || fields["title"] != "T" {
 		t.Errorf("fields_json = %q (%v)", h.GetFieldsJson(), err)
+	}
+}
+
+// TestDW_3_1_KnowledgeSearchHandlerThreadsOffsetAndTotal proves the handler
+// passes req.offset straight through to the reader and copies the reader's
+// exact total onto the response, unmodified in either direction.
+func TestDW_3_1_KnowledgeSearchHandlerThreadsOffsetAndTotal(t *testing.T) {
+	reg := &fakeRegistry{specs: map[string]knowledge.CollectionSpec{"papers": papersSpec(true)}}
+	reader := &fakeKnowledgeReader{
+		hits:  []retrieval.Hit{{ID: "d101", Score: 1, Source: "papers"}},
+		total: 2500,
+	}
+	s := knowledgeServer(reg, &fakeKnowledgeWriter{}, reader)
+
+	resp, err := s.KnowledgeSearch(identityCtx(), &engrampb.KnowledgeSearchRequest{
+		Collection: "papers", Query: "q", Offset: 100, K: 10,
+	})
+	if err != nil {
+		t.Fatalf("KnowledgeSearch: %v", err)
+	}
+	if reader.offset != 100 {
+		t.Errorf("reader got offset %d, want 100", reader.offset)
+	}
+	if resp.GetTotal() != 2500 {
+		t.Errorf("response total = %d, want 2500 (exact, from the reader)", resp.GetTotal())
 	}
 }
 

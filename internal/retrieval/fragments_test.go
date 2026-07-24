@@ -112,7 +112,7 @@ func TestKnowledgeSearchDW_2_1_DefaultRequestsFragments(t *testing.T) {
 		return http.StatusOK, knowledgeHitsBody(0)
 	})
 	r := NewKnowledgeRetriever(srv.Client(), srv.URL, newFakeKnowledgeRegistry())
-	if _, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "q", nil, nil, 10, false); err != nil {
+	if _, _, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "q", nil, nil, 10, 0, false); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	raw := captured()[0].raw
@@ -136,7 +136,7 @@ func TestKnowledgeSearchPerCollectionSizingAndTags(t *testing.T) {
 	spec.FragmentSize, spec.NumberOfFragments = 100, 1
 	spec.HighlightPreTag, spec.HighlightPostTag = "[[", "]]"
 	r := NewKnowledgeRetriever(srv.Client(), srv.URL, newFakeKnowledgeRegistry())
-	if _, err := r.Search(context.Background(), spec, "q", nil, nil, 10, false); err != nil {
+	if _, _, err := r.Search(context.Background(), spec, "q", nil, nil, 10, 0, false); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	raw := captured()[0].raw
@@ -158,7 +158,7 @@ func TestKnowledgeSearchDW_2_3_FullBodySkipsHighlight(t *testing.T) {
 		return http.StatusOK, knowledgeHitsBody(0)
 	})
 	r := NewKnowledgeRetriever(srv.Client(), srv.URL, newFakeKnowledgeRegistry())
-	if _, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "q", nil, nil, 10, true); err != nil {
+	if _, _, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "q", nil, nil, 10, 0, true); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	raw := captured()[0].raw
@@ -168,9 +168,11 @@ func TestKnowledgeSearchDW_2_3_FullBodySkipsHighlight(t *testing.T) {
 	if !strings.Contains(raw, `"excludes":["text_embedding","fact_embedding"]`) {
 		t.Errorf("full-body search must keep the text field in _source: %s", raw)
 	}
-	// The full-body request must equal the query the retriever issued before
-	// fragments existed for the same inputs (zero-value highlight opts).
-	want, _ := buildQuery(queryOpts{mode: ModeBM25Only, textField: "abstract", text: "q", k: 10})
+	// The full-body request must equal the pre-fragment query PLUS
+	// track_total_hits (Phase 3: Search always requests the exact total,
+	// full_body or not — fetchKnowledgeDocs' paging depends on it even on
+	// its full_body=true calls).
+	want, _ := buildQuery(queryOpts{mode: ModeBM25Only, textField: "abstract", text: "q", k: 10, trackTotalHits: true})
 	if raw != string(want) {
 		t.Errorf("full-body request diverged from the pre-fragment query:\n got %s\nwant %s", raw, want)
 	}

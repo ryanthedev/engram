@@ -241,10 +241,12 @@ type Backend interface {
 	// failures surface as err; retrying the whole batch is idempotent.
 	KnowledgeIngest(ctx context.Context, collection, source, harvestID string, docs []KnowledgeDoc) (indexed int, err error)
 	// KnowledgeSearch runs one BM25 query over a collection with generic
-	// field filters and sort. By default hits carry extracted fragments and
-	// scalar-only fields_json (body suppressed — Read(id, collection) drills
-	// the whole document); fullBody restores whole bodies inline.
-	KnowledgeSearch(ctx context.Context, collection, query string, filters []Predicate, sort []SortKey, k int, fullBody bool) ([]KnowledgeHit, error)
+	// field filters and sort, paged via offset (0 = first page) and
+	// returning the exact total match count (never a capped estimate). By
+	// default hits carry extracted fragments and scalar-only fields_json
+	// (body suppressed — Read(id, collection) drills the whole document);
+	// fullBody restores whole bodies inline.
+	KnowledgeSearch(ctx context.Context, collection, query string, filters []Predicate, sort []SortKey, k, offset int, fullBody bool) (hits []KnowledgeHit, total int64, err error)
 	// KnowledgeCollections lists the collections the caller may read, with
 	// field mappings, document count, and staleness.
 	KnowledgeCollections(ctx context.Context) ([]CollectionInfo, error)

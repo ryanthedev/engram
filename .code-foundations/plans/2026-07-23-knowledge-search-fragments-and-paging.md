@@ -201,3 +201,10 @@ _Gate rationale: docs-only string deletion + prose fix. Not marked Security-sens
 - [x] Committed
 Commit: eaa62ab
 Summary: Added the KnowledgeHit proto message (id/score/collection/fields_json/fragments) replacing memory-Hit reuse, offset/full_body/total wire fields, four CollectionSpec sizing/tag fields with a 240/3 fallback at consumption, and refactored buildQuery to a queryOpts struct — memory-path queries byte-identical. Downstream phases now consume KnowledgeHit + queryOpts; no behavior change to search output yet.
+
+### Phase 2: Fragment extraction & drill-down (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + implementation complete (fable)
+- [x] REVIEW: 3-sample fable security review — UNANIMOUS PASS (3/3); authorize-before-fetch verified independently (denial and absence return byte-identical errReadNotFound; reader never invoked on denial; id PathEscaped; source registry-key-only; index regex-barricaded)
+- [x] Committed
+Commit: 1ad43ad
+Summary: knowledge_search now returns extracted fragments (markers off by default, per-collection sizing) instead of the whole body — live check: 15 hits fit the 16 KB budget vs 1 before. memory_read gained a fail-closed knowledge drill-down (authz before fetch). Fixed a Phase-1 registry-persistence gap (sizing/tag fields were dropped) and made the budget packer generic. Phase 3 consumes engramclient.KnowledgeSearch(...fullBody) and KnowledgeRetriever.Search returning fragments; vaultknowledge.go currently compiles with fullBody=true as a stopgap. OPS: already-provisioned meta indices (e.g. :9201 e2e stack) need a one-time PUT _mapping for the four new CollectionSpec fields.

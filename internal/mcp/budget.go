@@ -56,7 +56,13 @@ type packable interface {
 // so the loss is visible rather than silent. knowledge_search never sets
 // either.
 type searchResult[H packable] struct {
-	Hits            []H               `json:"hits"`
+	Hits []H `json:"hits"`
+	// Total is the exact match count across every page (OpenSearch
+	// track_total_hits, never a capped estimate) — set only by
+	// knowledge_search's offset paging, after packAndSpill returns.
+	// memory_search never sets it, so its zero value stays omitted from the
+	// JSON (memory_search carries no paging concept).
+	Total           int64             `json:"total,omitempty"`
 	Omitted         int               `json:"omitted,omitempty"`
 	OmittedFacets   map[string]string `json:"omitted_facets,omitempty"`
 	Hint            string            `json:"hint,omitempty"`

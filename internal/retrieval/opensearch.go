@@ -664,19 +664,21 @@ type queryOpts struct {
 	filters     []any
 	sort        []any
 
-	// Knowledge-search seams, declared here so Phases 2–3 extend the query
-	// without another signature change. All are INERT this phase — buildQuery
-	// does not read them yet — and zero-value-off by design: memory callers
-	// leave them unset and must keep producing identical bodies when they are
-	// wired in.
+	// Knowledge-search seams: zero-value-off by design, so a memory caller
+	// (which never sets any of these) keeps producing byte-identical bodies
+	// (DW-1.3's golden matrix).
 	//
-	// offset is the paging start ("from", Phase 3); 0 means first page and
-	// emits no "from" key. fragmentSize/numberOfFragments size the highlight
-	// clause (Phase 2), already fallback-resolved by the caller via
-	// knowledge.CollectionSpec.FragmentSizing — 0 here means highlighting off.
-	// highlightPreTag/highlightPostTag wrap fragment matches; both empty means
-	// markers off (the default — never a hardcoded marker pair).
+	// offset is the paging start ("from"); 0 means first page and emits no
+	// "from" key. trackTotalHits requests OpenSearch's exact match count via
+	// "track_total_hits":true (never a capped estimate) — set unconditionally
+	// by KnowledgeRetriever.Search, never by a memory caller.
+	// fragmentSize/numberOfFragments size the highlight clause, already
+	// fallback-resolved by the caller via knowledge.CollectionSpec.FragmentSizing
+	// — 0 here means highlighting off. highlightPreTag/highlightPostTag wrap
+	// fragment matches; both empty means markers off (the default — never a
+	// hardcoded marker pair).
 	offset            int
+	trackTotalHits    bool
 	fragmentSize      int
 	numberOfFragments int
 	highlightPreTag   string
@@ -752,6 +754,15 @@ func buildQuery(opts queryOpts) (body []byte, usePipeline bool) {
 		}
 	}
 	query["_source"] = map[string]any{"excludes": excludes}
+	// Paging (from) and the exact-total request (track_total_hits) are both
+	// zero-value-off: a memory caller leaves offset=0/trackTotalHits=false
+	// and neither key is ever emitted, preserving DW-1.3's golden bytes.
+	if opts.offset > 0 {
+		query["from"] = opts.offset
+	}
+	if opts.trackTotalHits {
+		query["track_total_hits"] = true
+	}
 	if len(opts.sort) > 0 {
 		query["sort"] = opts.sort
 	}

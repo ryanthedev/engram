@@ -71,7 +71,7 @@ func TestDW_2_FragmentsAndDrillDownEndToEnd(t *testing.T) {
 	testutil.RefreshIndex(t, stack.base, "knowledge-"+col)
 
 	// --- DW-2.1: fragments by default, NO body in fields_json ----------
-	hits, err := stack.reader.KnowledgeSearch(ctx, col, "gadget", nil, nil, 100, false)
+	hits, _, err := stack.reader.KnowledgeSearch(ctx, col, "gadget", nil, nil, 100, 0, false)
 	if err != nil {
 		t.Fatalf("KnowledgeSearch(default): %v", err)
 	}
@@ -104,7 +104,7 @@ func TestDW_2_FragmentsAndDrillDownEndToEnd(t *testing.T) {
 	}
 
 	// --- DW-2.2: markers off by default, even inside a code fence ------
-	codeHits, err := stack.reader.KnowledgeSearch(ctx, col, codeToken, nil, nil, 1, false)
+	codeHits, _, err := stack.reader.KnowledgeSearch(ctx, col, codeToken, nil, nil, 1, 0, false)
 	if err != nil || len(codeHits) == 0 {
 		t.Fatalf("KnowledgeSearch(%s): hits=%d err=%v", codeToken, len(codeHits), err)
 	}
@@ -127,7 +127,7 @@ func TestDW_2_FragmentsAndDrillDownEndToEnd(t *testing.T) {
 	if err := stack.admin.UpdateCollection(ctx, tagged); err != nil {
 		t.Fatalf("UpdateCollection(tags): %v", err)
 	}
-	taggedHits, err := stack.reader.KnowledgeSearch(ctx, col, codeToken, nil, nil, 1, false)
+	taggedHits, _, err := stack.reader.KnowledgeSearch(ctx, col, codeToken, nil, nil, 1, 0, false)
 	if err != nil || len(taggedHits) == 0 {
 		t.Fatalf("KnowledgeSearch(tagged): hits=%d err=%v", len(taggedHits), err)
 	}
@@ -140,8 +140,8 @@ func TestDW_2_FragmentsAndDrillDownEndToEnd(t *testing.T) {
 	}
 
 	// --- DW-2.2b: filter-only search -> scalars only, not an error -----
-	filterHits, err := stack.reader.KnowledgeSearch(ctx, col, "",
-		[]mcp.Predicate{{Field: "lang", Op: "term", Value: "go"}}, nil, 5, false)
+	filterHits, _, err := stack.reader.KnowledgeSearch(ctx, col, "",
+		[]mcp.Predicate{{Field: "lang", Op: "term", Value: "go"}}, nil, 5, 0, false)
 	if err != nil {
 		t.Fatalf("KnowledgeSearch(filter-only): %v", err)
 	}
@@ -163,7 +163,7 @@ func TestDW_2_FragmentsAndDrillDownEndToEnd(t *testing.T) {
 	}
 
 	// --- DW-2.3: full_body restores today's whole-body behavior --------
-	fullHits, err := stack.reader.KnowledgeSearch(ctx, col, "gadget", nil, nil, 1, true)
+	fullHits, _, err := stack.reader.KnowledgeSearch(ctx, col, "gadget", nil, nil, 1, 0, true)
 	if err != nil || len(fullHits) == 0 {
 		t.Fatalf("KnowledgeSearch(full_body): hits=%d err=%v", len(fullHits), err)
 	}
