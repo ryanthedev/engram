@@ -31,13 +31,14 @@ type knowledgeFake struct {
 		filters           []Predicate
 		sort              []SortKey
 		k                 int
+		fullBody          bool
 	}
 	lastDelete struct {
 		collection, source, currentHarvestID string
 	}
 	lastSpec CollectionSpec
 
-	searchHits  []Hit
+	searchHits  []KnowledgeHit
 	collections []CollectionInfo
 	err         error
 }
@@ -47,8 +48,9 @@ func (b *knowledgeFake) KnowledgeIngest(_ context.Context, collection, source, h
 	return len(docs), b.err
 }
 
-func (b *knowledgeFake) KnowledgeSearch(_ context.Context, collection, query string, filters []Predicate, sort []SortKey, k int) ([]Hit, error) {
+func (b *knowledgeFake) KnowledgeSearch(_ context.Context, collection, query string, filters []Predicate, sort []SortKey, k int, fullBody bool) ([]KnowledgeHit, error) {
 	b.lastSearch.collection, b.lastSearch.query, b.lastSearch.filters, b.lastSearch.sort, b.lastSearch.k = collection, query, filters, sort, k
+	b.lastSearch.fullBody = fullBody
 	return b.searchHits, b.err
 }
 
@@ -122,7 +124,7 @@ func TestDW_6_1_KnowledgeToolsDispatchThroughBackend(t *testing.T) {
 	})
 
 	t.Run("knowledge_search", func(t *testing.T) {
-		b.searchHits = []Hit{{ID: "d1", Score: 2.5, Source: "papers", Fields: `{"title":"x"}`}}
+		b.searchHits = []KnowledgeHit{{ID: "d1", Score: 2.5, Collection: "papers", Fields: `{"title":"x"}`}}
 		result := callTool(t, c, ToolKnowledgeSearch, map[string]any{
 			"collection": "papers", "query": "transformers",
 			"filters": []any{map[string]any{"field": "year", "op": "range", "value": map[string]any{"gte": 2024}}},
@@ -230,9 +232,9 @@ func TestDW_6_1_KnowledgeSearchBudgetPackAndSpill(t *testing.T) {
 	t.Setenv(spillDirEnv, t.TempDir())
 	t.Setenv(searchBudgetBytesEnv, "600")
 
-	hits := make([]Hit, 20)
+	hits := make([]KnowledgeHit, 20)
 	for i := range hits {
-		hits[i] = Hit{ID: fmt.Sprintf("d%02d", i), Score: float64(20 - i), Source: "papers",
+		hits[i] = KnowledgeHit{ID: fmt.Sprintf("d%02d", i), Score: float64(20 - i), Collection: "papers",
 			Fields: `{"title":"` + strings.Repeat("x", 80) + `"}`}
 	}
 	b := &knowledgeFake{searchHits: hits}

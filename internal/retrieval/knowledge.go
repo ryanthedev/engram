@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -100,7 +101,16 @@ func NewKnowledgeRetriever(client *http.Client, baseURL string, registry knowled
 // zero embedding calls (KnowledgeRetriever holds no embed.Embedder — a
 // structural guarantee, not just a tested one) and never registers with
 // MultiRetriever/the RRF pipeline.
-func (r *KnowledgeRetriever) Search(ctx context.Context, spec knowledge.CollectionSpec, query string, filters []Predicate, sortKeys []SortKey, k int) ([]Hit, error) {
+//
+// By default each hit carries highlight-extracted Fragments (sized by
+// spec.FragmentSizing, wrapped in the spec's opt-in marker tags — both empty
+// means clean extraction) and its Fields OMIT the text field: fragments
+// replace the body, and GetDocument is the drill-down for the whole
+// document. fullBody=true restores the pre-fragment behavior byte-for-byte:
+// no highlighting, body inline in Fields. A filter-only (empty-query) search
+// under the default matches no terms, so its hits carry scalars only —
+// neither fragments nor body — which is expected, not an error.
+func (r *KnowledgeRetriever) Search(ctx context.Context, spec knowledge.CollectionSpec, query string, filters []Predicate, sortKeys []SortKey, k int, fullBody bool) ([]Hit, error) {
 	if err := validateKnowledgeIndex(spec.Index); err != nil {
 		return nil, err
 	}
@@ -115,10 +125,15 @@ func (r *KnowledgeRetriever) Search(ctx context.Context, spec knowledge.Collecti
 	if err != nil {
 		return nil, err
 	}
-	body, _ := buildQuery(queryOpts{
+	opts := queryOpts{
 		mode: ModeBM25Only, textField: spec.TextField, text: query,
 		k: clampK(k), filters: filterClauses, sort: sortClauses,
-	})
+	}
+	if !fullBody {
+		opts.fragmentSize, opts.numberOfFragments = spec.FragmentSizing()
+		opts.highlightPreTag, opts.highlightPostTag = spec.HighlightPreTag, spec.HighlightPostTag
+	}
+	body, _ := buildQuery(opts)
 
 	status, decoded, err := postSearch(ctx, r.client, r.baseURL+"/"+spec.Index+"/_search", body)
 	if err != nil {
@@ -131,6 +146,54 @@ func (r *KnowledgeRetriever) Search(ctx context.Context, spec knowledge.Collecti
 		return nil, fmt.Errorf("retrieval: searching knowledge collection %q: unexpected status %d: %v", spec.Name, status, decoded)
 	}
 	return parseHits(decoded, spec.Name), nil
+}
+
+// GetDocument fetches one knowledge document by doc id via realtime GET —
+// the memory_read drill-down for a search hit whose body was suppressed in
+// favor of fragments. It returns the FULL stored _source (body and harvest
+// provenance included); ok=false means no such doc, which also covers a
+// registered-but-unprovisioned index (the house index-not-found-as-empty
+// rule). id is caller/harvester-chosen external input embedded in a REST
+// path, so it is path-escaped, never interpolated raw; authorization is the
+// caller's job (server/read.go authorizes BEFORE fetching).
+func (r *KnowledgeRetriever) GetDocument(ctx context.Context, spec knowledge.CollectionSpec, id string) (map[string]any, bool, error) {
+	if err := validateKnowledgeIndex(spec.Index); err != nil {
+		return nil, false, err
+	}
+	if id == "" {
+		return nil, false, nil // an empty id can address nothing; opaque miss
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/"+spec.Index+"/_doc/"+url.PathEscape(id), nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("retrieval: building knowledge get request: %w", err)
+	}
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("retrieval: getting knowledge doc %q from %q: %w", id, spec.Name, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, false, fmt.Errorf("retrieval: reading knowledge doc %q from %q: %w", id, spec.Name, err)
+	}
+	var decoded map[string]any
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &decoded)
+	}
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		doc, _ := decoded["_source"].(map[string]any)
+		if doc == nil {
+			return nil, false, fmt.Errorf("retrieval: knowledge doc %q from %q has no _source", id, spec.Name)
+		}
+		return doc, true, nil
+	case resp.StatusCode == http.StatusNotFound:
+		// Both a missing doc ({"found": false}) and a missing index read as
+		// "no such doc" — absence, not infrastructure failure.
+		return nil, false, nil
+	default:
+		return nil, false, fmt.Errorf("retrieval: getting knowledge doc %q from %q: unexpected status %d: %v", id, spec.Name, resp.StatusCode, decoded)
+	}
 }
 
 // Collections reports document count and staleness for every collection the

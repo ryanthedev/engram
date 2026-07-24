@@ -78,7 +78,9 @@ func fetchKnowledgeDocs(ctx context.Context, client *engramclient.Client) ([]kno
 	var docs []knowledgeDoc
 	var warnings []string
 	for _, col := range collections {
-		hits, err := client.KnowledgeSearch(ctx, col.Name, "", nil, nil, retrieval.MaxK)
+		// full_body=true: the export renders whole documents into the vault,
+		// so fragment extraction (the search-time default) must be bypassed.
+		hits, err := client.KnowledgeSearch(ctx, col.Name, "", nil, nil, retrieval.MaxK, true)
 		if err != nil {
 			return nil, nil, fmt.Errorf("searching knowledge collection %q: %w", col.Name, err)
 		}
@@ -102,7 +104,7 @@ func fetchKnowledgeDocs(ctx context.Context, client *engramclient.Client) ([]kno
 // the whole fetch over one bad row. textField names the collection's
 // full-text key (falls back to "text" defensively if a spec ever omits it —
 // the registry requires it, but this is external, server-relayed data).
-func decodeKnowledgeHit(collection, textField string, h mcp.Hit) knowledgeDoc {
+func decodeKnowledgeHit(collection, textField string, h mcp.KnowledgeHit) knowledgeDoc {
 	var fields map[string]any
 	_ = json.Unmarshal([]byte(h.Fields), &fields)
 	text := textField

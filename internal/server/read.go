@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -10,6 +12,7 @@ import (
 	"github.com/ryanthedev/engram/api/engrampb"
 	"github.com/ryanthedev/engram/internal/acl"
 	"github.com/ryanthedev/engram/internal/authgrpc"
+	"github.com/ryanthedev/engram/internal/knowledge"
 	"github.com/ryanthedev/engram/internal/memory"
 )
 
@@ -38,6 +41,10 @@ const (
 // the same opaque NOT_FOUND, so absence and denial are indistinguishable and
 // no existence leaks. Dispatch on source touches exactly ONE index path;
 // a miss never probes the other index.
+//
+// A source that is not a memory tier is treated as a knowledge collection
+// name — the knowledge_search drill-down (readKnowledge), where the same
+// barricade holds with the collection's access policy in place of the ACL.
 func (s *Server) Read(ctx context.Context, req *engrampb.ReadRequest) (*engrampb.ReadResponse, error) {
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
@@ -52,7 +59,7 @@ func (s *Server) Read(ctx context.Context, req *engrampb.ReadRequest) (*engrampb
 		// whole memory — there is nothing more to read.
 		return nil, status.Error(codes.Unimplemented, "graph records have no drill-down; the search hit already carries the full statement")
 	default:
-		return nil, status.Error(codes.InvalidArgument, `source must be "episodic" or "semantic"`)
+		return s.readKnowledge(ctx, req.GetId(), req.GetSource())
 	}
 }
 
@@ -109,6 +116,55 @@ func (s *Server) readEpisodic(ctx context.Context, docID string) (*engrampb.Read
 			CreatedAt:  timestamppb.New(rec.CreatedAt),
 		},
 	}, nil
+}
+
+// readKnowledge serves Read for a knowledge collection source: the
+// drill-down that makes a fragment hit's suppressed body reachable. The
+// barricade ordering is the load-bearing security property and is enforced
+// HERE, fail-closed, not at the MCP edge (which merely stopped rejecting
+// collection sources):
+//
+//  1. RESOLVE the source against the registry. An unknown source gets a
+//     self-correcting INVALID_ARGUMENT naming the valid vocabulary — the
+//     same existence-naming trade resolveCollection makes for every
+//     knowledge RPC (usability over an existence oracle, per the plan).
+//  2. AUTHORIZE the caller against the collection's access policy BEFORE
+//     any document fetch. A denial — or an authorizer error — returns the
+//     same opaque NOT_FOUND as a missing doc, so an unreadable collection's
+//     contents are indistinguishable from absence.
+//  3. FETCH the document and PROJECT it whole: knowledge docs carry no
+//     per-document ACL fields (access is collection-level), so the full
+//     stored _source is the response.
+func (s *Server) readKnowledge(ctx context.Context, docID, source string) (*engrampb.ReadResponse, error) {
+	if !s.knowledgeConfigured() || s.KnowledgeReader == nil {
+		// No knowledge platform wired: the pre-drill-down vocabulary is the
+		// whole vocabulary.
+		return nil, status.Error(codes.InvalidArgument, `source must be "episodic" or "semantic"`)
+	}
+	spec, err := s.Registry.Get(ctx, source)
+	if err != nil {
+		if errors.Is(err, knowledge.ErrNotFound) {
+			return nil, status.Errorf(codes.InvalidArgument,
+				`unknown source %q: it is neither a memory tier ("episodic", "semantic") nor a registered knowledge collection (list them with knowledge_collections)`, source)
+		}
+		return nil, status.Errorf(codes.Internal, "read: resolving collection %q: %v", source, err)
+	}
+	id, _ := authgrpc.IdentityFrom(ctx)
+	if s.KnowledgeAuth.AuthorizeRead(id, spec.Access.Public, spec.Access.Roles) != nil {
+		return nil, errReadNotFound // fail-closed: unreadable reads as absent
+	}
+	doc, ok, err := s.KnowledgeReader.GetDocument(ctx, spec, docID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read: %v", err)
+	}
+	if !ok {
+		return nil, errReadNotFound
+	}
+	fieldsJSON, err := json.Marshal(doc)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read: encoding document %s: %v", docID, err)
+	}
+	return &engrampb.ReadResponse{Source: source, FieldsJson: string(fieldsJSON)}, nil
 }
 
 // readSemantic serves Read for the semantic tier by delegating to Audit —

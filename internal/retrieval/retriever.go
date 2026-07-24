@@ -79,12 +79,18 @@ type PostHook interface {
 }
 
 // Hit is one fused result. Source names the index tier the hit came from
-// (e.g. "episodic", "semantic"); Fields carries the stored document fields.
+// (e.g. "episodic", "semantic") or, on the knowledge path, the collection
+// name; Fields carries the stored document fields.
 type Hit struct {
 	ID     string
 	Score  float64
 	Source string
 	Fields map[string]any
+	// Fragments are the highlight-extracted excerpts that replace the
+	// document body on the knowledge search path (fragments default, body
+	// suppressed). Always nil on the memory path — memory queries never ask
+	// for highlighting, so parseHits finds no highlight key to read.
+	Fragments []string
 }
 
 // Retriever is the read seam Phases 1–2 and the eval harness consume: one

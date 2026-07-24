@@ -32,6 +32,14 @@ const (
 // reading this var directly.
 var memoryFacetFields = []string{"subject", "predicate", "kind"}
 
+// packable is the hit shape the byte-budget packer works over: memory Hit
+// and KnowledgeHit pack identically except for their serialized form (which
+// the packer measures by real marshal, never by estimate) and where their
+// stored fields live for facet computation — which is all fieldsJSON hides.
+type packable interface {
+	fieldsJSON() string
+}
+
 // searchResult is the memory_search and knowledge_search tool-result
 // envelope: a budget-packed
 // page of hits plus what got left out. Omitted/OmittedFacets/Hint are
@@ -47,13 +55,13 @@ var memoryFacetFields = []string{"subject", "predicate", "kind"}
 // one (DW-6.3). ExpandedOmitted reports how many expansions the budget dropped
 // so the loss is visible rather than silent. knowledge_search never sets
 // either.
-type searchResult struct {
-	Hits            []Hit             `json:"hits"`
+type searchResult[H packable] struct {
+	Hits            []H               `json:"hits"`
 	Omitted         int               `json:"omitted,omitempty"`
 	OmittedFacets   map[string]string `json:"omitted_facets,omitempty"`
 	Hint            string            `json:"hint,omitempty"`
 	OverflowPath    string            `json:"overflow_path,omitempty"`
-	Expanded        []Hit             `json:"expanded,omitempty"`
+	Expanded        []H               `json:"expanded,omitempty"`
 	ExpandedOmitted int               `json:"expanded_omitted,omitempty"`
 }
 
@@ -96,8 +104,8 @@ func searchByteBudget() int {
 // what's actually emitted.
 // facetFields selects the per-hit fields eligible for omitted-hit facet
 // computation (memoryFacetFields for memory_search, nil for knowledge_search).
-func packSearchResult(hits []Hit, budgetBytes int, facetFields []string) searchResult {
-	packed := make([]Hit, len(hits))
+func packSearchResult[H packable](hits []H, budgetBytes int, facetFields []string) searchResult[H] {
+	packed := make([]H, len(hits))
 	copy(packed, hits)
 	for len(packed) > 1 && !searchResultFits(packed, hits[len(packed):], budgetBytes, facetFields) {
 		packed = packed[:len(packed)-1]
@@ -134,7 +142,7 @@ func packSearchResult(hits []Hit, budgetBytes int, facetFields []string) searchR
 // emitted, because a caller silently missing its expansions is worse than a
 // response 24 bytes over. This is the same best-effort-at-the-floor posture
 // packSearchResult already takes with its unconditional one-hit floor.
-func packExpanded(result searchResult, expanded []Hit, budgetBytes int) searchResult {
+func packExpanded[H packable](result searchResult[H], expanded []H, budgetBytes int) searchResult[H] {
 	kept := len(expanded)
 	for kept > 0 && !withExpandedFits(result, expanded, kept, budgetBytes) {
 		kept--
@@ -153,7 +161,7 @@ func packExpanded(result searchResult, expanded []Hit, budgetBytes int) searchRe
 // itself bytes on the wire), never an estimate, and treats a marshal failure —
 // never expected for these types — as "does not fit", the safe default that
 // keeps the caller shrinking rather than emitting something unverified.
-func withExpandedFits(result searchResult, expanded []Hit, kept, budgetBytes int) bool {
+func withExpandedFits[H packable](result searchResult[H], expanded []H, kept, budgetBytes int) bool {
 	candidate := result
 	candidate.Expanded = expanded[:kept]
 	candidate.ExpandedOmitted = len(expanded) - kept
@@ -173,7 +181,7 @@ func withExpandedFits(result searchResult, expanded []Hit, kept, budgetBytes int
 // failure (never expected for these types) is treated as "does not fit" —
 // the safe default that keeps the packer shrinking rather than emitting
 // something unverified.
-func searchResultFits(packed, remainder []Hit, budgetBytes int, facetFields []string) bool {
+func searchResultFits[H packable](packed, remainder []H, budgetBytes int, facetFields []string) bool {
 	candidate := buildSearchResult(packed, remainder, facetFields)
 	if len(remainder) > 0 {
 		candidate.OverflowPath = maxSpillPath() // reserve real-field headroom, not an estimate
@@ -192,8 +200,8 @@ func searchResultFits(packed, remainder []Hit, budgetBytes int, facetFields []st
 // later fails, the caller (tools.go) downgrades the hint via a second
 // refineHint call with overflowPathSet=false so it never dangles a path
 // that was never written (DW-3.2).
-func buildSearchResult(packed, remainder []Hit, facetFields []string) searchResult {
-	result := searchResult{Hits: packed}
+func buildSearchResult[H packable](packed, remainder []H, facetFields []string) searchResult[H] {
+	result := searchResult[H]{Hits: packed}
 	if len(remainder) == 0 {
 		return result
 	}
@@ -207,12 +215,12 @@ func buildSearchResult(packed, remainder []Hit, facetFields []string) searchResu
 // among hits, skipping hits whose Fields is missing, malformed, or lacks the
 // field. Ties are broken by first-encountered order among hits, which are
 // already in the backend's stable rank order (DW-2.5).
-func topFacets(hits []Hit, facetFields []string) map[string]string {
+func topFacets[H packable](hits []H, facetFields []string) map[string]string {
 	counts := make(map[string]map[string]int, len(facetFields))
 	firstSeen := make(map[string][]string, len(facetFields))
 	for _, h := range hits {
 		var fields map[string]any
-		if err := json.Unmarshal([]byte(h.Fields), &fields); err != nil {
+		if err := json.Unmarshal([]byte(h.fieldsJSON()), &fields); err != nil {
 			continue // malformed/absent Fields: this hit contributes no facets
 		}
 		for _, field := range facetFields {

@@ -51,9 +51,13 @@ type KnowledgeWriter interface {
 }
 
 // KnowledgeReader is the BM25 read path (consumer-defined seam;
-// *retrieval.KnowledgeRetriever satisfies it).
+// *retrieval.KnowledgeRetriever satisfies it). Search returns fragment
+// hits by default (body suppressed) and whole bodies when fullBody is set;
+// GetDocument is the by-id drill-down behind memory_read's knowledge branch
+// (ok=false means no such doc — the caller maps it to an opaque not-found).
 type KnowledgeReader interface {
-	Search(ctx context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sort []retrieval.SortKey, k int) ([]retrieval.Hit, error)
+	Search(ctx context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sort []retrieval.SortKey, k int, fullBody bool) ([]retrieval.Hit, error)
+	GetDocument(ctx context.Context, spec knowledge.CollectionSpec, id string) (map[string]any, bool, error)
 	Collections(ctx context.Context) ([]retrieval.CollectionMeta, error)
 }
 
@@ -168,7 +172,7 @@ func (s *Server) KnowledgeSearch(ctx context.Context, req *engrampb.KnowledgeSea
 	}
 	// k is bounded by the retriever's clamp to [1, MaxK]; negative/zero means
 	// "server-chosen" by contract, so it passes through rather than erroring.
-	hits, err := s.KnowledgeReader.Search(ctx, spec, req.GetQuery(), filters, sortKeys, int(req.GetK()))
+	hits, err := s.KnowledgeReader.Search(ctx, spec, req.GetQuery(), filters, sortKeys, int(req.GetK()), req.GetFullBody())
 	if err != nil {
 		// The barricade already validated shape; a retriever failure here is
 		// infrastructure, not caller input.
@@ -176,16 +180,18 @@ func (s *Server) KnowledgeSearch(ctx context.Context, req *engrampb.KnowledgeSea
 	}
 	// h.Source carries the collection name on the knowledge path (parseHits
 	// tags knowledge hits with spec.Name) — it maps onto KnowledgeHit's real
-	// collection field. Fragments stay empty and total 0 until highlight
-	// extraction and track_total_hits are wired; req.offset/full_body are
-	// accepted but inert until then.
+	// collection field. By default fields_json carries scalars only (the
+	// retriever suppressed the body) beside the extracted fragments;
+	// full_body=true restores the whole body inline and yields no fragments.
+	// total stays 0 until track_total_hits paging lands (Phase 3);
+	// req.offset is accepted but inert until then.
 	out := make([]*engrampb.KnowledgeHit, len(hits))
 	for i, h := range hits {
 		fieldsJSON, err := json.Marshal(h.Fields)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "encoding hit %s fields: %v", h.ID, err)
 		}
-		out[i] = &engrampb.KnowledgeHit{Id: h.ID, Score: h.Score, Collection: h.Source, FieldsJson: string(fieldsJSON)}
+		out[i] = &engrampb.KnowledgeHit{Id: h.ID, Score: h.Score, Collection: h.Source, FieldsJson: string(fieldsJSON), Fragments: h.Fragments}
 	}
 	return &engrampb.KnowledgeSearchResponse{Hits: out}, nil
 }

@@ -180,19 +180,19 @@ func TestDW_6_1_KnowledgeEndToEnd(t *testing.T) {
 	// Search (any authenticated caller): query + term filter + sort desc.
 	hits, err := stack.reader.KnowledgeSearch(ctx, pub, "neural",
 		[]mcp.Predicate{{Field: "category", Op: "term", Value: "ai"}},
-		[]mcp.SortKey{{Field: "published", Order: "desc"}}, 10)
+		[]mcp.SortKey{{Field: "published", Order: "desc"}}, 10, false)
 	if err != nil {
 		t.Fatalf("KnowledgeSearch: %v", err)
 	}
 	if len(hits) != 2 || hits[0].ID != "d2" || hits[1].ID != "d1" {
 		t.Fatalf("filtered+sorted hits = %+v, want [d2 d1]", hits)
 	}
-	if hits[0].Source != pub {
-		t.Errorf("hit Source = %q, want collection name %q", hits[0].Source, pub)
+	if hits[0].Collection != pub {
+		t.Errorf("hit Collection = %q, want collection name %q", hits[0].Collection, pub)
 	}
 	// Range filter over the date field.
 	hits, err = stack.reader.KnowledgeSearch(ctx, pub, "",
-		[]mcp.Predicate{{Field: "published", Op: "range", Value: map[string]any{"gte": "2026-02-01"}}}, nil, 10)
+		[]mcp.Predicate{{Field: "published", Op: "range", Value: map[string]any{"gte": "2026-02-01"}}}, nil, 10, false)
 	if err != nil {
 		t.Fatalf("KnowledgeSearch(range): %v", err)
 	}
@@ -201,13 +201,13 @@ func TestDW_6_1_KnowledgeEndToEnd(t *testing.T) {
 	}
 	// Malformed filter is self-correcting (DW-6.4 at the live edge).
 	_, err = stack.reader.KnowledgeSearch(ctx, pub, "neural",
-		[]mcp.Predicate{{Field: "nope", Op: "term", Value: "x"}}, nil, 10)
+		[]mcp.Predicate{{Field: "nope", Op: "term", Value: "x"}}, nil, 10, false)
 	wantCode(t, err, codes.InvalidArgument, "unknown filter field")
 	if !strings.Contains(err.Error(), "category, published") {
 		t.Errorf("unknown-field error %q does not name the valid fields", err)
 	}
 	// Unknown collection names itself.
-	_, err = stack.reader.KnowledgeSearch(ctx, "it6ghost", "q", nil, nil, 5)
+	_, err = stack.reader.KnowledgeSearch(ctx, "it6ghost", "q", nil, nil, 5, false)
 	wantCode(t, err, codes.InvalidArgument, "unknown collection")
 	if err != nil && !strings.Contains(err.Error(), "it6ghost") {
 		t.Errorf("unknown-collection error %q does not name it", err)
@@ -254,7 +254,7 @@ func TestDW_6_1_KnowledgeEndToEnd(t *testing.T) {
 		t.Errorf("deleted = %d, want 2 (d2+d3 from h1)", deleted)
 	}
 	testutil.RefreshIndex(t, stack.base, "knowledge-"+pub)
-	hits, err = stack.reader.KnowledgeSearch(ctx, pub, "neural", nil, nil, 10)
+	hits, err = stack.reader.KnowledgeSearch(ctx, pub, "neural", nil, nil, 10, false)
 	if err != nil {
 		t.Fatalf("KnowledgeSearch(after sweep): %v", err)
 	}
@@ -277,7 +277,7 @@ func TestDW_6_1_KnowledgeEndToEnd(t *testing.T) {
 		t.Fatalf("UpdateCollection: %v", err)
 	}
 	if _, err := stack.reader.KnowledgeSearch(ctx, pub, "",
-		[]mcp.Predicate{{Field: "lang", Op: "term", Value: "en"}}, nil, 5); err != nil {
+		[]mcp.Predicate{{Field: "lang", Op: "term", Value: "en"}}, nil, 5, false); err != nil {
 		t.Errorf("filter on live-added field: %v", err)
 	}
 }
@@ -302,9 +302,9 @@ func TestDW_6_2_6_3_AuthDenialsEndToEnd(t *testing.T) {
 	}
 
 	// DW-6.2: gated read without the role -> PermissionDenied; with it -> OK.
-	_, err = stack.reader.KnowledgeSearch(ctx, gated, "anything", nil, nil, 5)
+	_, err = stack.reader.KnowledgeSearch(ctx, gated, "anything", nil, nil, 5, false)
 	wantCode(t, err, codes.PermissionDenied, "gated read without role")
-	if _, err := stack.curator.KnowledgeSearch(ctx, gated, "anything", nil, nil, 5); err != nil {
+	if _, err := stack.curator.KnowledgeSearch(ctx, gated, "anything", nil, nil, 5, false); err != nil {
 		t.Errorf("gated read with role: %v", err)
 	}
 	// The gated collection is invisible to a reader's listing, visible to a curator.

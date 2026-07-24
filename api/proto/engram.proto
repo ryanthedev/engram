@@ -264,9 +264,12 @@ message AuditResponse {
 message ReadRequest {
   // Doc id exactly as surfaced by a search Hit. Empty -> INVALID_ARGUMENT.
   string id = 1;
-  // Source tier the id lives in: "episodic" | "semantic". Selects the ONE
-  // index consulted (never both). Empty or unknown -> INVALID_ARGUMENT;
-  // "graph" -> UNIMPLEMENTED (a graph hit already carries its statement).
+  // Source the id lives in: "episodic" | "semantic", or a registered
+  // knowledge collection name (the knowledge_search drill-down). Selects the
+  // ONE index consulted (never both). Empty, or neither a memory tier nor a
+  // registered collection -> INVALID_ARGUMENT; "graph" -> UNIMPLEMENTED (a
+  // graph hit already carries its statement). Collection read authorization
+  // is fail-closed server-side: an unreadable collection reads as NOT_FOUND.
   string source = 2;
 }
 
@@ -303,6 +306,11 @@ message ReadResponse {
   FactVersion fact = 3;
   Provenance provenance = 4;
   repeated FactVersion versions = 5;
+  // Set when source is a knowledge collection: the full stored document as a
+  // JSON object (every stored field, body included) — the drill-down target
+  // for a knowledge_search hit whose body was suppressed in favor of
+  // fragments. Mirrors KnowledgeHit.fields_json's encoding.
+  string fields_json = 6;
 }
 
 // ExportRequest resumes a paged graph export. cursor is the opaque
@@ -525,12 +533,11 @@ message KnowledgeHit {
   double score = 2;
   // The collection this hit came from.
   string collection = 3;
-  // The stored document rendered as JSON (scalars; the full-text body is
-  // included only for full_body searches once fragment extraction lands).
+  // The stored document rendered as JSON (scalars only by default; the
+  // full-text body is included only for full_body searches).
   string fields_json = 4;
-  // Fragments extracted from the full-text body around the query matches
-  // (empty until server-side highlight extraction is wired, and always
-  // empty for full_body searches, which inline the body instead).
+  // Fragments extracted from the full-text body around the query matches.
+  // Empty for a filter-only search or when full_body inlines the body instead.
   repeated string fragments = 5;
 }
 

@@ -31,7 +31,7 @@ func sampleModelAndRefs() (VaultModel, VaultRefs) {
 }
 
 func TestDecodeKnowledgeHit(t *testing.T) {
-	h := mcp.Hit{ID: "kd1", Fields: `{"title":"T","text":"Body","memory_ref":"e-1","memory_ref_name":"Name"}`}
+	h := mcp.KnowledgeHit{ID: "kd1", Fields: `{"title":"T","text":"Body","memory_ref":"e-1","memory_ref_name":"Name"}`}
 	got := decodeKnowledgeHit("col1", "text", h)
 	want := knowledgeDoc{ID: "kd1", Collection: "col1", Title: "T", Text: "Body", MemoryRef: "e-1", MemoryRefName: "Name"}
 	if got != want {
@@ -40,7 +40,7 @@ func TestDecodeKnowledgeHit(t *testing.T) {
 }
 
 func TestDecodeKnowledgeHit_MalformedJSONDegradesToEmpty(t *testing.T) {
-	h := mcp.Hit{ID: "kd1", Fields: "not json"}
+	h := mcp.KnowledgeHit{ID: "kd1", Fields: "not json"}
 	got := decodeKnowledgeHit("col1", "text", h)
 	want := knowledgeDoc{ID: "kd1", Collection: "col1"}
 	if got != want {
@@ -49,7 +49,7 @@ func TestDecodeKnowledgeHit_MalformedJSONDegradesToEmpty(t *testing.T) {
 }
 
 func TestDecodeKnowledgeHit_EmptyTextFieldDefaultsToText(t *testing.T) {
-	h := mcp.Hit{ID: "kd1", Fields: `{"text":"fallback body"}`}
+	h := mcp.KnowledgeHit{ID: "kd1", Fields: `{"text":"fallback body"}`}
 	got := decodeKnowledgeHit("col1", "", h)
 	if got.Text != "fallback body" {
 		t.Errorf("Text = %q, want the default %q key honored when TextField is empty", got.Text, "text")
@@ -59,7 +59,7 @@ func TestDecodeKnowledgeHit_EmptyTextFieldDefaultsToText(t *testing.T) {
 func TestDecodeKnowledgeHit_NonStringFieldDegradesToEmpty(t *testing.T) {
 	// title is a JSON number, not a string: an untrusted-shape row must
 	// degrade to "", never panic on the type assertion.
-	h := mcp.Hit{ID: "kd1", Fields: `{"title":42,"text":"body"}`}
+	h := mcp.KnowledgeHit{ID: "kd1", Fields: `{"title":42,"text":"body"}`}
 	got := decodeKnowledgeHit("col1", "text", h)
 	if got.Title != "" {
 		t.Errorf("Title = %q, want \"\" for a non-string field", got.Title)

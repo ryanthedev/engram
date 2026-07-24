@@ -194,4 +194,10 @@ _Gate rationale: docs-only string deletion + prose fix. Not marked Security-sens
 - Unresearched (from the research doc, non-blocking because markers default off): whether marking measurably helps LLM output, and llms.txt snippet-budget guidance.
 ---
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Proto & query-builder foundation (Gate: Full)
+- [x] BUILD: Discovery + design + implementation complete (fable)
+- [x] REVIEW: Verification passed (sonnet) — golden matrix confirmed to pin pre-refactor buildQuery behavior (reviewer re-ran HEAD~1 impl against all 15 cells, byte-identical)
+- [x] Committed
+Commit: eaa62ab
+Summary: Added the KnowledgeHit proto message (id/score/collection/fields_json/fragments) replacing memory-Hit reuse, offset/full_body/total wire fields, four CollectionSpec sizing/tag fields with a 240/3 fallback at consumption, and refactored buildQuery to a queryOpts struct — memory-path queries byte-identical. Downstream phases now consume KnowledgeHit + queryOpts; no behavior change to search output yet.

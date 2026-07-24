@@ -731,7 +731,27 @@ func buildQuery(opts queryOpts) (body []byte, usePipeline bool) {
 	// Never fetch embedding vectors back: they are query-time inputs, not
 	// results, and dominate response size (~95% of a raw hit). Excluding a
 	// field an index doesn't have is a no-op, so both names apply to both tiers.
-	query["_source"] = map[string]any{"excludes": []string{"text_embedding", "fact_embedding"}}
+	excludes := []string{"text_embedding", "fact_embedding"}
+	// Highlighting on (numberOfFragments > 0, the knowledge path's
+	// fragments-default) means fragments REPLACE the body: the highlight
+	// clause and the text-field suppression are one decision, gated on one
+	// knob, so a caller can never get fragments plus the body it was meant to
+	// spare, or a suppressed body with no fragments to stand in for it.
+	// pre/post tags are emitted as-is — [""] when unset, which is OpenSearch's
+	// markers-off escape from its <em> default; a non-empty pair comes from
+	// the collection's opt-in tag fields, never a hardcoded marker.
+	if opts.numberOfFragments > 0 {
+		excludes = append(excludes, opts.textField)
+		query["highlight"] = map[string]any{
+			"fields": map[string]any{opts.textField: map[string]any{
+				"fragment_size":       opts.fragmentSize,
+				"number_of_fragments": opts.numberOfFragments,
+				"pre_tags":            []string{opts.highlightPreTag},
+				"post_tags":           []string{opts.highlightPostTag},
+			}},
+		}
+	}
+	query["_source"] = map[string]any{"excludes": excludes}
 	if len(opts.sort) > 0 {
 		query["sort"] = opts.sort
 	}
@@ -740,7 +760,10 @@ func buildQuery(opts queryOpts) (body []byte, usePipeline bool) {
 }
 
 // parseHits decodes an OpenSearch _search response into fused Hits, tagged
-// with the tier's Source.
+// with the tier's Source. A hit's "highlight" section (knowledge path only —
+// buildQuery requests exactly ONE highlighted field, and memory queries
+// request none, so the key is simply absent there) is flattened into
+// Hit.Fragments.
 func parseHits(decoded map[string]any, source string) []Hit {
 	hitsField, _ := decoded["hits"].(map[string]any)
 	rawHits, _ := hitsField["hits"].([]any)
@@ -753,7 +776,25 @@ func parseHits(decoded map[string]any, source string) []Hit {
 		id, _ := hm["_id"].(string)
 		score, _ := hm["_score"].(float64)
 		fields, _ := hm["_source"].(map[string]any)
-		out = append(out, Hit{ID: id, Score: score, Source: source, Fields: fields})
+		out = append(out, Hit{ID: id, Score: score, Source: source, Fields: fields, Fragments: parseFragments(hm)})
+	}
+	return out
+}
+
+// parseFragments reads one raw hit's highlight section into a fragment list.
+// Only one field is ever requested for highlighting (the collection's text
+// field), so every fragment under the section belongs to it regardless of
+// key name; nil when the section is absent (every memory hit) or empty.
+func parseFragments(hit map[string]any) []string {
+	highlight, _ := hit["highlight"].(map[string]any)
+	var out []string
+	for _, v := range highlight {
+		frags, _ := v.([]any)
+		for _, f := range frags {
+			if s, ok := f.(string); ok {
+				out = append(out, s)
+			}
+		}
 	}
 	return out
 }

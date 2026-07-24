@@ -54,9 +54,12 @@ func (c *Client) KnowledgeIngest(ctx context.Context, collection, source, harves
 }
 
 // KnowledgeSearch runs one BM25 query over a collection with generic field
-// filters and sort.
-func (c *Client) KnowledgeSearch(ctx context.Context, collection, query string, filters []mcp.Predicate, sortKeys []mcp.SortKey, k int) ([]mcp.Hit, error) {
-	req := &engrampb.KnowledgeSearchRequest{Collection: collection, Query: query, K: int32(k)}
+// filters and sort. By default each hit carries extracted fragments and a
+// fields_json WITHOUT the document body (drill the whole document with
+// Read(id, collection)); fullBody=true restores whole bodies inline and
+// yields no fragments.
+func (c *Client) KnowledgeSearch(ctx context.Context, collection, query string, filters []mcp.Predicate, sortKeys []mcp.SortKey, k int, fullBody bool) ([]mcp.KnowledgeHit, error) {
+	req := &engrampb.KnowledgeSearchRequest{Collection: collection, Query: query, K: int32(k), FullBody: fullBody}
 	for _, p := range filters {
 		pred, err := predicateProto(p)
 		if err != nil {
@@ -75,14 +78,12 @@ func (c *Client) KnowledgeSearch(ctx context.Context, collection, query string, 
 	if err != nil {
 		return nil, err
 	}
-	// KnowledgeHit's collection maps onto mcp.Hit.Source: knowledge hits ride
-	// the memory Hit DTO until the fragment/paging surface replaces it, and
-	// its Source slot has always carried the collection name on this path.
-	// Fragments and total are not surfaced yet (empty/0 until the server
-	// wires highlight extraction and track_total_hits).
-	hits := make([]mcp.Hit, 0, len(resp.GetHits()))
+	hits := make([]mcp.KnowledgeHit, 0, len(resp.GetHits()))
 	for _, h := range resp.GetHits() {
-		hits = append(hits, mcp.Hit{ID: h.GetId(), Score: h.GetScore(), Source: h.GetCollection(), Fields: h.GetFieldsJson()})
+		hits = append(hits, mcp.KnowledgeHit{
+			ID: h.GetId(), Score: h.GetScore(), Collection: h.GetCollection(),
+			Fields: h.GetFieldsJson(), Fragments: h.GetFragments(),
+		})
 	}
 	return hits, nil
 }

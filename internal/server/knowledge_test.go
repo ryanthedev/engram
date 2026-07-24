@@ -86,19 +86,31 @@ func (w *fakeKnowledgeWriter) DeleteByQuery(_ context.Context, index, collection
 
 // fakeKnowledgeReader records the retriever-facing read calls.
 type fakeKnowledgeReader struct {
-	spec    knowledge.CollectionSpec
-	query   string
-	filters []retrieval.Predicate
-	sort    []retrieval.SortKey
-	k       int
-	hits    []retrieval.Hit
-	metas   []retrieval.CollectionMeta
-	err     error
+	spec     knowledge.CollectionSpec
+	query    string
+	filters  []retrieval.Predicate
+	sort     []retrieval.SortKey
+	k        int
+	fullBody bool
+	hits     []retrieval.Hit
+	metas    []retrieval.CollectionMeta
+	err      error
+
+	// GetDocument drill-down state.
+	docID  string
+	doc    map[string]any
+	docOK  bool
+	docErr error
 }
 
-func (r *fakeKnowledgeReader) Search(_ context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sortKeys []retrieval.SortKey, k int) ([]retrieval.Hit, error) {
-	r.spec, r.query, r.filters, r.sort, r.k = spec, query, filters, sortKeys, k
+func (r *fakeKnowledgeReader) Search(_ context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sortKeys []retrieval.SortKey, k int, fullBody bool) ([]retrieval.Hit, error) {
+	r.spec, r.query, r.filters, r.sort, r.k, r.fullBody = spec, query, filters, sortKeys, k, fullBody
 	return r.hits, r.err
+}
+
+func (r *fakeKnowledgeReader) GetDocument(_ context.Context, spec knowledge.CollectionSpec, id string) (map[string]any, bool, error) {
+	r.spec, r.docID = spec, id
+	return r.doc, r.docOK, r.docErr
 }
 
 func (r *fakeKnowledgeReader) Collections(context.Context) ([]retrieval.CollectionMeta, error) {

@@ -31,11 +31,12 @@ const (
 	ToolUpdateCollection     = "knowledge_update_collection"
 )
 
-// readSources are the source values memory_read accepts — validated at this
-// entry (agent-supplied arguments are external input) before the id ever
-// reaches the backend. "graph" is recognized but short-circuited: a graph
-// hit's statement already IS the whole memory.
-var readSources = map[string]bool{"episodic": true, "semantic": true, "graph": true}
+// memory_read's source vocabulary is OPEN at this edge: beyond the memory
+// tiers ("episodic" | "semantic"; "graph" is recognized but short-circuited
+// — a graph hit's statement already IS the whole memory), any other value is
+// forwarded as a knowledge collection name. The server's read barricade is
+// the authority (fail-closed): collection existence gets a self-correcting
+// error there, and an unreadable collection reads as an opaque not-found.
 
 // toolSchemas is the advertised tool set. Kept as a function so each call
 // gets a fresh map (no shared-mutable-state hazard).
@@ -91,12 +92,12 @@ func toolSchemas() []toolSchema {
 		},
 		{
 			Name:        ToolRead,
-			Description: "Read ONE memory record's full content by the id and source a memory_search result line exposes. Episodic returns the full untruncated text; semantic returns the fact plus its provenance and version history. Spends your context on the whole record — drill deliberately.",
+			Description: "Read ONE record's full content by the id and source a search result exposes. Episodic returns the full untruncated text; semantic returns the fact plus its provenance and version history; a knowledge collection returns the full stored document a knowledge_search fragment came from. Spends your context on the whole record — drill deliberately.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":     strProp("Record id exactly as shown in a memory_search result (required)."),
-					"source": strProp(`Source tier of the id: "episodic" or "semantic" (required; "graph" has no drill-down).`),
+					"id":     strProp("Record id exactly as shown in a search result (required)."),
+					"source": strProp(`Where the id lives: "episodic", "semantic", or a knowledge collection name from a knowledge_search hit (required; "graph" has no drill-down).`),
 				},
 				"required": []any{"id", "source"},
 			},
@@ -153,12 +154,16 @@ func knowledgeToolSchemas() []toolSchema {
 		},
 		{
 			Name:        ToolKnowledgeSearch,
-			Description: "BM25 search over one knowledge collection with generic field filters and sort. Returns budget-packed ranked hits; oversized result sets spill to overflow_path.",
+			Description: "BM25 search over one knowledge collection with generic field filters and sort. Each hit carries extracted text fragments instead of the document body; drill the full document with memory_read(id, <collection>). An empty query (filter-only) matches no terms, so its hits carry scalar fields only — no fragments and no body. Returns budget-packed ranked hits; oversized result sets spill to overflow_path.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"collection": strProp("Collection to search (required)."),
 					"query":      strProp("Full-text query; may be empty when filters alone select documents."),
+					"full_body": map[string]any{
+						"type":        "boolean",
+						"description": "Return each hit's whole document body inline instead of fragments (default false). Spends context fast — prefer fragments plus a targeted memory_read.",
+					},
 					"filters": map[string]any{
 						"type":        "array",
 						"description": "Field filters: {field, op: term|range|prefix, value}. range takes value {gte, lte} (either bound optional). Fields must be declared filterable — knowledge_collections lists them.",
@@ -305,9 +310,9 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	//
 	// memory_search renders the budget-packed result as compact lines: the
 	// text block is the compact-line form the agent reads; structuredContent
-	// carries the rendered envelope. (knowledge_search keeps the raw
-	// structured JSON — its docs have no memory_read drill-down, so it never
-	// truncates a body to a gist.)
+	// carries the rendered envelope. (knowledge_search returns extracted
+	// fragments rather than the full body; the suppressed body is reachable
+	// via memory_read(id, <collection>) — see the knowledge drill-down.)
 	result := packAndSpill(res.Hits, memoryFacetFields, ToolSearch)
 	result = packExpanded(result, res.Expanded, searchByteBudget())
 	rendered := renderSearchResult(result)
@@ -322,7 +327,7 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 // (DW-3.4) — log and return the capped page without overflow_path rather than
 // propagating the error. Shared verbatim by memory_search and
 // knowledge_search (DW-6.1); toolName only labels the degradation log line.
-func packAndSpill(hits []Hit, facetFields []string, toolName string) searchResult {
+func packAndSpill[H packable](hits []H, facetFields []string, toolName string) searchResult[H] {
 	result := packSearchResult(hits, searchByteBudget(), facetFields)
 	if result.Omitted > 0 {
 		if path, spillErr := spillFullResult(hits); spillErr != nil {
@@ -355,12 +360,14 @@ func (s *Server) callRead(ctx context.Context, raw json.RawMessage) (any, *rpcEr
 	if args.ID == "" || args.Source == "" {
 		return toolError("memory_read requires non-empty id and source"), nil
 	}
-	if !readSources[args.Source] {
-		return toolError(`memory_read source must be "episodic" or "semantic" (as shown in the memory_search result line)`), nil
-	}
 	if args.Source == "graph" {
 		return toolError("graph records have no drill-down: the memory_search result already carries the full statement"), nil
 	}
+	// Any other source is forwarded: memory tiers dispatch to their index,
+	// everything else is treated as a knowledge collection name. Existence
+	// and read authorization are enforced server-side, fail-closed — an
+	// unknown source comes back as a self-correcting error, an unreadable
+	// collection as an opaque not-found.
 	result, err := s.backend.Read(ctx, args.ID, args.Source)
 	if err != nil {
 		return toolError(fmt.Sprintf("read failed: %v", err)), nil
@@ -410,6 +417,7 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 		Filters    []Predicate `json:"filters"`
 		Sort       []SortKey   `json:"sort"`
 		K          int         `json:"k"`
+		FullBody   bool        `json:"full_body"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: "invalid knowledge_search arguments"}
@@ -421,7 +429,7 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 	if k <= 0 {
 		k = defaultRequestK // same request-generously-pack-tightly posture as memory_search
 	}
-	hits, err := s.backend.KnowledgeSearch(ctx, args.Collection, args.Query, args.Filters, args.Sort, k)
+	hits, err := s.backend.KnowledgeSearch(ctx, args.Collection, args.Query, args.Filters, args.Sort, k, args.FullBody)
 	if err != nil {
 		return toolError(fmt.Sprintf("knowledge search failed: %v", err)), nil
 	}

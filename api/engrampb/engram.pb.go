@@ -953,9 +953,12 @@ type ReadRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Doc id exactly as surfaced by a search Hit. Empty -> INVALID_ARGUMENT.
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// Source tier the id lives in: "episodic" | "semantic". Selects the ONE
-	// index consulted (never both). Empty or unknown -> INVALID_ARGUMENT;
-	// "graph" -> UNIMPLEMENTED (a graph hit already carries its statement).
+	// Source the id lives in: "episodic" | "semantic", or a registered
+	// knowledge collection name (the knowledge_search drill-down). Selects the
+	// ONE index consulted (never both). Empty, or neither a memory tier nor a
+	// registered collection -> INVALID_ARGUMENT; "graph" -> UNIMPLEMENTED (a
+	// graph hit already carries its statement). Collection read authorization
+	// is fail-closed server-side: an unreadable collection reads as NOT_FOUND.
 	Source        string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1118,9 +1121,14 @@ type ReadResponse struct {
 	// returns that immutable version with its possibly-closed validity
 	// interval), plus its provenance and full bi-temporal history — the Audit
 	// contract, reused.
-	Fact          *FactVersion   `protobuf:"bytes,3,opt,name=fact,proto3" json:"fact,omitempty"`
-	Provenance    *Provenance    `protobuf:"bytes,4,opt,name=provenance,proto3" json:"provenance,omitempty"`
-	Versions      []*FactVersion `protobuf:"bytes,5,rep,name=versions,proto3" json:"versions,omitempty"`
+	Fact       *FactVersion   `protobuf:"bytes,3,opt,name=fact,proto3" json:"fact,omitempty"`
+	Provenance *Provenance    `protobuf:"bytes,4,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	Versions   []*FactVersion `protobuf:"bytes,5,rep,name=versions,proto3" json:"versions,omitempty"`
+	// Set when source is a knowledge collection: the full stored document as a
+	// JSON object (every stored field, body included) — the drill-down target
+	// for a knowledge_search hit whose body was suppressed in favor of
+	// fragments. Mirrors KnowledgeHit.fields_json's encoding.
+	FieldsJson    string `protobuf:"bytes,6,opt,name=fields_json,json=fieldsJson,proto3" json:"fields_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1188,6 +1196,13 @@ func (x *ReadResponse) GetVersions() []*FactVersion {
 		return x.Versions
 	}
 	return nil
+}
+
+func (x *ReadResponse) GetFieldsJson() string {
+	if x != nil {
+		return x.FieldsJson
+	}
+	return ""
 }
 
 // ExportRequest resumes a paged graph export. cursor is the opaque
@@ -2419,12 +2434,11 @@ type KnowledgeHit struct {
 	Score float64                `protobuf:"fixed64,2,opt,name=score,proto3" json:"score,omitempty"`
 	// The collection this hit came from.
 	Collection string `protobuf:"bytes,3,opt,name=collection,proto3" json:"collection,omitempty"`
-	// The stored document rendered as JSON (scalars; the full-text body is
-	// included only for full_body searches once fragment extraction lands).
+	// The stored document rendered as JSON (scalars only by default; the
+	// full-text body is included only for full_body searches).
 	FieldsJson string `protobuf:"bytes,4,opt,name=fields_json,json=fieldsJson,proto3" json:"fields_json,omitempty"`
-	// Fragments extracted from the full-text body around the query matches
-	// (empty until server-side highlight extraction is wired, and always
-	// empty for full_body searches, which inline the body instead).
+	// Fragments extracted from the full-text body around the query matches.
+	// Empty for a filter-only search or when full_body inlines the body instead.
 	Fragments     []string `protobuf:"bytes,5,rep,name=fragments,proto3" json:"fragments,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3207,7 +3221,7 @@ const file_engram_proto_rawDesc = "" +
 	"\voccurred_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"occurredAt\x129\n" +
 	"\n" +
-	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xf4\x01\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x95\x02\n" +
 	"\fReadResponse\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\tR\x06source\x125\n" +
 	"\bepisodic\x18\x02 \x01(\v2\x19.engram.v1.EpisodicRecordR\bepisodic\x12*\n" +
@@ -3215,7 +3229,9 @@ const file_engram_proto_rawDesc = "" +
 	"\n" +
 	"provenance\x18\x04 \x01(\v2\x15.engram.v1.ProvenanceR\n" +
 	"provenance\x122\n" +
-	"\bversions\x18\x05 \x03(\v2\x16.engram.v1.FactVersionR\bversions\"'\n" +
+	"\bversions\x18\x05 \x03(\v2\x16.engram.v1.FactVersionR\bversions\x12\x1f\n" +
+	"\vfields_json\x18\x06 \x01(\tR\n" +
+	"fieldsJson\"'\n" +
 	"\rExportRequest\x12\x16\n" +
 	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\xd7\x02\n" +
 	"\fExportEntity\x12\x0e\n" +

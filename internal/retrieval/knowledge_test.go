@@ -137,7 +137,7 @@ func TestKnowledgeSearchReturnsRankedHits(t *testing.T) {
 		)
 	})
 	r := NewKnowledgeRetriever(srv.Client(), srv.URL, newFakeKnowledgeRegistry())
-	hits, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "chain-of-thought", nil, nil, 10)
+	hits, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "chain-of-thought", nil, nil, 10, false)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestKnowledgeSearchEmptyQueryIsFilterOnly(t *testing.T) {
 	})
 	r := NewKnowledgeRetriever(srv.Client(), srv.URL, newFakeKnowledgeRegistry())
 	hits, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "",
-		[]Predicate{{Field: "categories", Op: "term", Value: "cs.CL"}}, nil, 10)
+		[]Predicate{{Field: "categories", Op: "term", Value: "cs.CL"}}, nil, 10, false)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestKnowledgeSearchFilterClauseShapes(t *testing.T) {
 				return http.StatusOK, knowledgeHitsBody(0)
 			})
 			r := NewKnowledgeRetriever(srv.Client(), srv.URL, newFakeKnowledgeRegistry())
-			_, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "x", []Predicate{tc.pred}, nil, 10)
+			_, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "x", []Predicate{tc.pred}, nil, 10, false)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("want error, got nil")
@@ -308,7 +308,7 @@ func TestKnowledgeSearchUnknownFilterFieldNamesValidFields(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := r.Search(context.Background(), spec, "x", []Predicate{{Field: tc.field, Op: "term", Value: "v"}}, nil, 10)
+			_, err := r.Search(context.Background(), spec, "x", []Predicate{{Field: tc.field, Op: "term", Value: "v"}}, nil, 10, false)
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
@@ -335,7 +335,7 @@ func TestKnowledgeSearchSortAppliesSortClause(t *testing.T) {
 	})
 	r := NewKnowledgeRetriever(srv.Client(), srv.URL, newFakeKnowledgeRegistry())
 	_, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "x", nil,
-		[]SortKey{{Field: "published", Order: "desc"}}, 10)
+		[]SortKey{{Field: "published", Order: "desc"}}, 10, false)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestKnowledgeSearchNonSortableFieldErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := r.Search(context.Background(), spec, "x", nil, []SortKey{tc.key}, 10)
+			_, err := r.Search(context.Background(), spec, "x", nil, []SortKey{tc.key}, 10, false)
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
@@ -388,7 +388,7 @@ func TestKnowledgeSearchKBounds(t *testing.T) {
 				return http.StatusOK, knowledgeHitsBody(0)
 			})
 			r := NewKnowledgeRetriever(srv.Client(), srv.URL, newFakeKnowledgeRegistry())
-			if _, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "x", nil, nil, tc.k); err != nil {
+			if _, err := r.Search(context.Background(), arxivSpec("knowledge-arxiv"), "x", nil, nil, tc.k, false); err != nil {
 				t.Fatalf("Search: %v", err)
 			}
 			want := fmt.Sprintf(`"size":%d`, tc.wantSize)
@@ -499,7 +499,7 @@ func TestKnowledgeSearchUnprovisionedIndexReturnsNoHits(t *testing.T) {
 		return http.StatusNotFound, map[string]any{"error": map[string]any{"type": "index_not_found_exception"}}
 	})
 	r := NewKnowledgeRetriever(srv.Client(), srv.URL, newFakeKnowledgeRegistry())
-	hits, err := r.Search(context.Background(), arxivSpec("knowledge-fresh"), "x", nil, nil, 10)
+	hits, err := r.Search(context.Background(), arxivSpec("knowledge-fresh"), "x", nil, nil, 10, false)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

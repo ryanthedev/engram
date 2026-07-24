@@ -74,7 +74,7 @@ func (knowledgeStubs) KnowledgeIngest(context.Context, string, string, string, [
 	return 0, nil
 }
 
-func (knowledgeStubs) KnowledgeSearch(context.Context, string, string, []Predicate, []SortKey, int) ([]Hit, error) {
+func (knowledgeStubs) KnowledgeSearch(context.Context, string, string, []Predicate, []SortKey, int, bool) ([]KnowledgeHit, error) {
 	return nil, nil
 }
 

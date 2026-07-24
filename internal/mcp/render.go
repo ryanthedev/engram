@@ -61,7 +61,7 @@ type renderedResult struct {
 // copied into new renderedHit/renderedResult values, so the caller's
 // original Hit slice (and, upstream, whatever engramclient/gRPC decoded)
 // stays byte-identical after this call.
-func renderSearchResult(result searchResult) renderedResult {
+func renderSearchResult(result searchResult[Hit]) renderedResult {
 	return renderedResult{
 		Hits:            renderHits(result.Hits),
 		Omitted:         result.Omitted,

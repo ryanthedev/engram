@@ -9,6 +9,7 @@ package engramclient_test
 import (
 	"context"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -126,11 +127,11 @@ func TestKnowledgeSearchTranslation(t *testing.T) {
 			{Field: "published", Op: "range", Value: map[string]any{"gte": "2026-01-01", "lte": "2026-07-10"}},
 			{Field: "title", Op: "prefix", Value: "atten"},
 		},
-		[]mcp.SortKey{{Field: "published", Order: "desc"}}, 9)
+		[]mcp.SortKey{{Field: "published", Order: "desc"}}, 9, false)
 	if err != nil {
 		t.Fatalf("KnowledgeSearch: %v", err)
 	}
-	if len(hits) != 1 || hits[0] != (mcp.Hit{ID: "d1", Score: 4.2, Source: "papers", Fields: `{"title":"T"}`}) {
+	if len(hits) != 1 || !reflect.DeepEqual(hits[0], mcp.KnowledgeHit{ID: "d1", Score: 4.2, Collection: "papers", Fields: `{"title":"T"}`}) {
 		t.Errorf("hits = %+v", hits)
 	}
 	req := srv.searchReq
@@ -171,7 +172,7 @@ func TestKnowledgeSearchClientSideShapeErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := c.KnowledgeSearch(context.Background(), "papers", "q", []mcp.Predicate{tt.pred}, nil, 1)
+			_, err := c.KnowledgeSearch(context.Background(), "papers", "q", []mcp.Predicate{tt.pred}, nil, 1, false)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("error = %v, want it to contain %q", err, tt.want)
 			}
@@ -181,7 +182,7 @@ func TestKnowledgeSearchClientSideShapeErrors(t *testing.T) {
 		})
 	}
 	if _, err := c.KnowledgeSearch(context.Background(), "papers", "q", nil,
-		[]mcp.SortKey{{Field: "year", Order: "up"}}, 1); err == nil || !strings.Contains(err.Error(), "valid orders: asc, desc") {
+		[]mcp.SortKey{{Field: "year", Order: "up"}}, 1, false); err == nil || !strings.Contains(err.Error(), "valid orders: asc, desc") {
 		t.Errorf("bad sort order error = %v", err)
 	}
 }
@@ -265,7 +266,7 @@ func TestKnowledgeScalarValueRoundTrip(t *testing.T) {
 	_, err := c.KnowledgeSearch(context.Background(), "papers", "", []mcp.Predicate{
 		{Field: "year", Op: "term", Value: 2026.0},
 		{Field: "flagged", Op: "term", Value: true},
-	}, nil, 1)
+	}, nil, 1, false)
 	if err != nil {
 		t.Fatalf("KnowledgeSearch: %v", err)
 	}
@@ -279,7 +280,37 @@ func TestKnowledgeScalarValueRoundTrip(t *testing.T) {
 	// An unencodable scalar (e.g. a channel) fails client-side, pre-wire.
 	if _, err := c.KnowledgeSearch(context.Background(), "papers", "", []mcp.Predicate{
 		{Field: "year", Op: "term", Value: make(chan int)},
-	}, nil, 1); err == nil {
+	}, nil, 1, false); err == nil {
 		t.Error("unencodable scalar must error client-side")
+	}
+}
+
+// TestKnowledgeSearchFragmentsAndFullBodyTranslation (Phase 2): fragments
+// ride the wire into mcp.KnowledgeHit and the fullBody flag lands on the
+// request.
+func TestKnowledgeSearchFragmentsAndFullBodyTranslation(t *testing.T) {
+	srv := &captureServer{searchResp: &engrampb.KnowledgeSearchResponse{Hits: []*engrampb.KnowledgeHit{
+		{Id: "d1", Score: 1.5, Collection: "papers", FieldsJson: `{"title":"T"}`, Fragments: []string{"frag one", "frag two"}},
+	}}}
+	c := dialCapture(t, srv)
+
+	hits, err := c.KnowledgeSearch(context.Background(), "papers", "q", nil, nil, 3, true)
+	if err != nil {
+		t.Fatalf("KnowledgeSearch: %v", err)
+	}
+	if !srv.searchReq.GetFullBody() {
+		t.Error("full_body flag did not reach the wire")
+	}
+	want := mcp.KnowledgeHit{ID: "d1", Score: 1.5, Collection: "papers", Fields: `{"title":"T"}`, Fragments: []string{"frag one", "frag two"}}
+	if len(hits) != 1 || !reflect.DeepEqual(hits[0], want) {
+		t.Errorf("hits = %+v, want [%+v]", hits, want)
+	}
+
+	// Default search leaves full_body false on the wire.
+	if _, err := c.KnowledgeSearch(context.Background(), "papers", "q", nil, nil, 3, false); err != nil {
+		t.Fatalf("KnowledgeSearch: %v", err)
+	}
+	if srv.searchReq.GetFullBody() {
+		t.Error("default search must not set full_body")
 	}
 }

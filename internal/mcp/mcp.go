@@ -29,15 +29,40 @@ const (
 	serverVersion = "0.1.0"
 )
 
-// Hit is one search result surfaced through the memory_search and
-// knowledge_search tools. Source is the hit's origin: a memory tier
-// ("episodic" | "semantic") or, for knowledge hits, the collection name.
+// Hit is one memory search result surfaced through the memory_search tool.
+// Source is the hit's origin memory tier ("episodic" | "semantic" | "graph"
+// | a registered tier source).
 type Hit struct {
 	ID     string  `json:"id"`
 	Score  float64 `json:"score"`
 	Source string  `json:"source"`
 	Fields string  `json:"fields_json,omitempty"`
 }
+
+// KnowledgeHit is one knowledge_search result: deliberately its own DTO
+// rather than a reuse of Hit (mirroring the wire-level KnowledgeHit/Hit
+// split), so memory hits never carry a permanently-empty fragments field and
+// the collection is a real named field instead of a repurposed Source slot.
+type KnowledgeHit struct {
+	ID    string  `json:"id"`
+	Score float64 `json:"score"`
+	// Collection names the collection the hit came from — also the source
+	// value memory_read accepts to drill into the full document.
+	Collection string `json:"collection"`
+	// Fields is the stored document's scalar fields as JSON. Under the
+	// default fragment extraction it OMITS the document body (drill with
+	// memory_read); a full_body search restores the body inline.
+	Fields string `json:"fields_json,omitempty"`
+	// Fragments are the highlight-extracted excerpts that replace the body.
+	// Empty on a full_body search and on a filter-only (empty-query) search,
+	// which matches no terms to extract around.
+	Fragments []string `json:"fragments,omitempty"`
+}
+
+// fieldsJSON lets the byte-budget packer read a hit's stored fields without
+// caring which hit DTO it is packing (see packable in budget.go).
+func (h Hit) fieldsJSON() string          { return h.Fields }
+func (h KnowledgeHit) fieldsJSON() string { return h.Fields }
 
 // SearchResult is one memory_search answer in two labeled blocks. Hits are the
 // query's MATCHED hits — at most k of them, and never a graph expansion. Expanded
@@ -216,8 +241,10 @@ type Backend interface {
 	// failures surface as err; retrying the whole batch is idempotent.
 	KnowledgeIngest(ctx context.Context, collection, source, harvestID string, docs []KnowledgeDoc) (indexed int, err error)
 	// KnowledgeSearch runs one BM25 query over a collection with generic
-	// field filters and sort; hits carry the collection name as Source.
-	KnowledgeSearch(ctx context.Context, collection, query string, filters []Predicate, sort []SortKey, k int) ([]Hit, error)
+	// field filters and sort. By default hits carry extracted fragments and
+	// scalar-only fields_json (body suppressed — Read(id, collection) drills
+	// the whole document); fullBody restores whole bodies inline.
+	KnowledgeSearch(ctx context.Context, collection, query string, filters []Predicate, sort []SortKey, k int, fullBody bool) ([]KnowledgeHit, error)
 	// KnowledgeCollections lists the collections the caller may read, with
 	// field mappings, document count, and staleness.
 	KnowledgeCollections(ctx context.Context) ([]CollectionInfo, error)
