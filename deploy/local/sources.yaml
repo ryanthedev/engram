@@ -1,0 +1,45 @@
+# Harvester manifest for this workstation.
+#
+# Every collection named here must already be registered on the target server
+# (`engram knowledge create-collection ...`) with a mapping covering the fields
+# its sources emit — the knowledge index is dynamic:strict, so an undeclared
+# field is rejected at ingest and aborts the run before the sweep.
+#
+# Run against the LIVE instance, which is the containerized stack:
+#
+#   ENGRAM_HARVESTER_TOKEN=egm_... engram-harvester \
+#     --manifest deploy/local/sources.yaml --addr localhost:7071
+#
+# Note the address: localhost:7070 is a separate dev/loadtest server with its
+# own unrelated collections, and harvesting into it is a silent no-op as far as
+# the MCP client is concerned.
+
+collections:
+  # Hand-written notes ported off grug-brain. text_field: body ; keyword fields:
+  # brain, category, note_type, path, description ; date field: date.
+  - name: notes
+    sources:
+      - type: markdown-dir
+        roots:
+          - { path: ~/.grug-brain/self, brain: self }
+          - { path: ~/.grug-brain/memories, brain: hive }
+        # recall.md is grug's auto-generated index (40k words of link list, no
+        # content of its own) and README.md documents the brain layout rather
+        # than holding a note; both are root-level only, so the bare filename
+        # patterns are correct here.
+        exclude: [".trash/**", "recall.md", "README.md"]
+
+  # Upstream documentation mirrors. text_field: body ; keyword fields: repo, path.
+  # These replace the five read-only grug brains (drizzle, powersync, svelte,
+  # sveltekit, react-native), which were themselves just clones of these trees.
+  - name: docs
+    sources:
+      - type: github-repos
+        repos:
+          - { repo: drizzle-team/drizzle-orm-docs, subdir: src/content/docs }
+          - powersync-ja/powersync-docs
+          - { repo: sveltejs/svelte, subdir: documentation/docs }
+          - { repo: sveltejs/kit, subdir: documentation/docs }
+          - { repo: facebook/react-native-website, subdir: docs }
+          - { repo: expo/expo, subdir: docs/pages }
+        files: ["**/*.md", "**/*.mdx"]

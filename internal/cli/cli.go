@@ -8,6 +8,11 @@
 //     (OpenSearch directly; issuing a token cannot itself require a token).
 //   - ingest / search / status — authenticated gRPC calls carrying a bearer
 //     token (-token or ENGRAM_TOKEN).
+//   - knowledge collections/create-collection — knowledge-collection registry
+//     administration, also over gRPC with a bearer token (create requires the
+//     admin role). A collection must exist before any harvest targets it.
+//   - purge — the memory tier's only delete path (requires the memory-admin
+//     role). Dry-run by default; see purge.go for why.
 package cli
 
 import (
@@ -58,6 +63,10 @@ func Run(ctx context.Context, args []string, env Env, out, errW io.Writer) int {
 		err = runAudit(ctx, rest, env, out)
 	case "export":
 		err = runExport(ctx, rest, env, out)
+	case "knowledge":
+		err = runKnowledge(ctx, rest, env, out)
+	case "purge":
+		err = runPurge(ctx, rest, env, out)
 	case "help", "-h", "--help":
 		fmt.Fprintln(out, usage)
 		return 0
@@ -86,8 +95,12 @@ Usage:
   engram status         [-addr HOST:PORT] [-token TOK]
   engram audit          <fact-id> [-addr HOST:PORT] [-token TOK]
   engram export         <dir> [--force] [-addr HOST:PORT] [-token TOK]
+  engram purge          --event-id ID [--event-id ID2 ...] [--confirm] [-addr HOST:PORT] [-token TOK]
   engram quarantine list    --tenant T [--url URL]
   engram quarantine release <fingerprint> --tenant T [--url URL]
+  engram knowledge collections [-addr HOST:PORT] [-token TOK]
+  engram knowledge create-collection --name N [--text-field F] [--public] [--roles R1,R2]
+                                     [--field NAME:TYPE[:filterable][:sortable]]... [-addr HOST:PORT] [-token TOK]
 
 Ingest text is normally plain prose — the production extractor is an LLM that
 reads prose directly, so plain prose needs no special formatting. --text may
@@ -102,6 +115,13 @@ grammar prints a non-fatal advisory to stderr; it never blocks the ingest.
 --event-id is not a full idempotency key: derived semantic facts are deduped by content;
 the raw episodic log entry for --text, however, is appended on every ingest call — replaying
 the same --event-id does not deduplicate the raw log.
+
+purge is the only way to remove ingested memory, and it is DRY RUN BY DEFAULT: without
+--confirm it just reports what would go. It hard-deletes the episodic and extraction-ledger
+rows for each --event-id (every replayed duplicate included) and soft-deletes the semantic
+facts extracted from them (expired_at stamped: gone from search, still visible to audit).
+The graph tier is untouched — rebuild it with cmd/engram-graph-rebuild. The token must
+carry the memory-admin role, and the tenant comes from the token, never from a flag.
 
 Environment: ENGRAM_OPENSEARCH_URL, ENGRAM_ADDR, ENGRAM_TOKEN.`
 

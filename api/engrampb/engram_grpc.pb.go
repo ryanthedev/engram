@@ -45,6 +45,7 @@ const (
 	Engram_Audit_FullMethodName                = "/engram.v1.Engram/Audit"
 	Engram_Read_FullMethodName                 = "/engram.v1.Engram/Read"
 	Engram_Export_FullMethodName               = "/engram.v1.Engram/Export"
+	Engram_MemoryPurge_FullMethodName          = "/engram.v1.Engram/MemoryPurge"
 	Engram_KnowledgeIngest_FullMethodName      = "/engram.v1.Engram/KnowledgeIngest"
 	Engram_KnowledgeSearch_FullMethodName      = "/engram.v1.Engram/KnowledgeSearch"
 	Engram_KnowledgeCollections_FullMethodName = "/engram.v1.Engram/KnowledgeCollections"
@@ -97,6 +98,28 @@ type EngramClient interface {
 	// next_cursor means the graph is exhausted. Unary by design: it runs under
 	// the same auth/telemetry interceptor chain as every other call.
 	Export(ctx context.Context, in *ExportRequest, opts ...grpc.CallOption) (*ExportResponse, error)
+	// MemoryPurge erases ingested events from the memory tier by event_id — the
+	// one sanctioned escape hatch from append-only ingest, for undoing a bad
+	// bulk migration. It is deliberately NOT a general retraction primitive
+	// (that is an ordinary `retract:` ingest, which adds a fact rather than
+	// removing one).
+	//
+	// Mixed hard/soft by tier, and per tier for a reason: the episodic log and
+	// the extraction ledger (D13) are HARD-deleted, because neither has a
+	// liveness filter on its read paths — a tombstone there would be invisible
+	// to the outbox scan, export, and read. Semantic facts are SOFT-deleted by
+	// stamping expired_at (the transaction-time close, D3), because hard-
+	// deleting them would dangle the supersedes chains Audit walks.
+	//
+	// Purging by event_id removes EVERY episodic doc carrying that id, so the
+	// replay duplicates a retried Ingest creates (event_id does not deduplicate
+	// the raw log) all go together. The graph tier is not touched here: rebuild
+	// it with the engram-graph-rebuild tool. dry_run (the recommended default
+	// for callers) counts what would be removed and mutates nothing.
+	//
+	// Requires the memory-admin role; the tenant is taken from the caller's
+	// verified token and can never be named in the request.
+	MemoryPurge(ctx context.Context, in *MemoryPurgeRequest, opts ...grpc.CallOption) (*MemoryPurgeResponse, error)
 	// KnowledgeIngest bulk-upserts one harvest batch of documents into a
 	// collection. Rows are stamped server-side with harvest_id and harvested_at;
 	// replays of the same document ids overwrite in place, so a failed batch is
@@ -183,6 +206,16 @@ func (c *engramClient) Export(ctx context.Context, in *ExportRequest, opts ...gr
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ExportResponse)
 	err := c.cc.Invoke(ctx, Engram_Export_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramClient) MemoryPurge(ctx context.Context, in *MemoryPurgeRequest, opts ...grpc.CallOption) (*MemoryPurgeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MemoryPurgeResponse)
+	err := c.cc.Invoke(ctx, Engram_MemoryPurge_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -293,6 +326,28 @@ type EngramServer interface {
 	// next_cursor means the graph is exhausted. Unary by design: it runs under
 	// the same auth/telemetry interceptor chain as every other call.
 	Export(context.Context, *ExportRequest) (*ExportResponse, error)
+	// MemoryPurge erases ingested events from the memory tier by event_id — the
+	// one sanctioned escape hatch from append-only ingest, for undoing a bad
+	// bulk migration. It is deliberately NOT a general retraction primitive
+	// (that is an ordinary `retract:` ingest, which adds a fact rather than
+	// removing one).
+	//
+	// Mixed hard/soft by tier, and per tier for a reason: the episodic log and
+	// the extraction ledger (D13) are HARD-deleted, because neither has a
+	// liveness filter on its read paths — a tombstone there would be invisible
+	// to the outbox scan, export, and read. Semantic facts are SOFT-deleted by
+	// stamping expired_at (the transaction-time close, D3), because hard-
+	// deleting them would dangle the supersedes chains Audit walks.
+	//
+	// Purging by event_id removes EVERY episodic doc carrying that id, so the
+	// replay duplicates a retried Ingest creates (event_id does not deduplicate
+	// the raw log) all go together. The graph tier is not touched here: rebuild
+	// it with the engram-graph-rebuild tool. dry_run (the recommended default
+	// for callers) counts what would be removed and mutates nothing.
+	//
+	// Requires the memory-admin role; the tenant is taken from the caller's
+	// verified token and can never be named in the request.
+	MemoryPurge(context.Context, *MemoryPurgeRequest) (*MemoryPurgeResponse, error)
 	// KnowledgeIngest bulk-upserts one harvest batch of documents into a
 	// collection. Rows are stamped server-side with harvest_id and harvested_at;
 	// replays of the same document ids overwrite in place, so a failed batch is
@@ -342,6 +397,9 @@ func (UnimplementedEngramServer) Read(context.Context, *ReadRequest) (*ReadRespo
 }
 func (UnimplementedEngramServer) Export(context.Context, *ExportRequest) (*ExportResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Export not implemented")
+}
+func (UnimplementedEngramServer) MemoryPurge(context.Context, *MemoryPurgeRequest) (*MemoryPurgeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MemoryPurge not implemented")
 }
 func (UnimplementedEngramServer) KnowledgeIngest(context.Context, *KnowledgeIngestRequest) (*KnowledgeIngestResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method KnowledgeIngest not implemented")
@@ -490,6 +548,24 @@ func _Engram_Export_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Engram_MemoryPurge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MemoryPurgeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServer).MemoryPurge(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engram_MemoryPurge_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServer).MemoryPurge(ctx, req.(*MemoryPurgeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Engram_KnowledgeIngest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KnowledgeIngestRequest)
 	if err := dec(in); err != nil {
@@ -628,6 +704,10 @@ var Engram_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Export",
 			Handler:    _Engram_Export_Handler,
+		},
+		{
+			MethodName: "MemoryPurge",
+			Handler:    _Engram_MemoryPurge_Handler,
 		},
 		{
 			MethodName: "KnowledgeIngest",

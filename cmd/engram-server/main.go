@@ -290,6 +290,11 @@ func main() {
 	// store cannot reach the episodic index).
 	svc.Exporter = graphStore
 	svc.EpisodicExporter = st
+	// MemoryPurge: the memory tier's only delete path, gated on the
+	// memory-admin role at the handler. Same store as every other memory
+	// operation — the purge queries are just by-query deletes/tombstones over
+	// the episodic, ledger, and semantic indices it already owns.
+	svc.Purger = st
 	engrampb.RegisterEngramServer(grpcServer, svc)
 
 	go func() {

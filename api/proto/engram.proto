@@ -72,6 +72,29 @@ service Engram {
   // the same auth/telemetry interceptor chain as every other call.
   rpc Export(ExportRequest) returns (ExportResponse);
 
+  // MemoryPurge erases ingested events from the memory tier by event_id — the
+  // one sanctioned escape hatch from append-only ingest, for undoing a bad
+  // bulk migration. It is deliberately NOT a general retraction primitive
+  // (that is an ordinary `retract:` ingest, which adds a fact rather than
+  // removing one).
+  //
+  // Mixed hard/soft by tier, and per tier for a reason: the episodic log and
+  // the extraction ledger (D13) are HARD-deleted, because neither has a
+  // liveness filter on its read paths — a tombstone there would be invisible
+  // to the outbox scan, export, and read. Semantic facts are SOFT-deleted by
+  // stamping expired_at (the transaction-time close, D3), because hard-
+  // deleting them would dangle the supersedes chains Audit walks.
+  //
+  // Purging by event_id removes EVERY episodic doc carrying that id, so the
+  // replay duplicates a retried Ingest creates (event_id does not deduplicate
+  // the raw log) all go together. The graph tier is not touched here: rebuild
+  // it with the engram-graph-rebuild tool. dry_run (the recommended default
+  // for callers) counts what would be removed and mutates nothing.
+  //
+  // Requires the memory-admin role; the tenant is taken from the caller's
+  // verified token and can never be named in the request.
+  rpc MemoryPurge(MemoryPurgeRequest) returns (MemoryPurgeResponse);
+
   // --- Knowledge platform (document collections: BM25/FTS only, no fact
   // extraction, no embeddings; upsert-by-id + mark-and-sweep delete — the
   // documented deviation from memory's append-only writes). Every field shape
@@ -388,6 +411,33 @@ message ExportResponse {
   repeated ExportEdge edges = 2;
   string next_cursor = 3;
   repeated ExportEpisodic episodics = 4;
+}
+
+// MemoryPurgeRequest names the events to erase. There is deliberately no
+// tenant field: the tenant is pinned from the caller's verified token, so a
+// token can never purge outside its own binding. event_ids is capped
+// server-side (500 per call) and every entry must be non-blank.
+message MemoryPurgeRequest {
+  repeated string event_ids = 1;
+  // dry_run counts what would be removed without mutating anything.
+  bool dry_run = 2;
+}
+
+// MemoryPurgeResponse reports per-tier totals summed over every requested
+// event id. Zero matches is a successful purge of nothing, not an error.
+message MemoryPurgeResponse {
+  // episodic is the number of raw episodic docs hard-deleted (replay
+  // duplicates sharing one event_id each count individually).
+  int64 episodic = 1;
+  // ledger is the number of extraction-ledger rows hard-deleted, so a
+  // re-ingest of the same event_id re-extracts cleanly instead of
+  // short-circuiting on the completed ledger entry (D13).
+  int64 ledger = 2;
+  // semantic is the number of facts soft-deleted by stamping expired_at.
+  // Already-tombstoned facts are not re-stamped and do not count.
+  int64 semantic = 3;
+  // dry_run echoes the request: true means nothing was mutated.
+  bool dry_run = 4;
 }
 
 // PredicateOp is the closed set of generic filter operations a Predicate can
