@@ -29,6 +29,39 @@ collections:
         # patterns are correct here.
         exclude: [".trash/**", "recall.md", "README.md"]
 
+  # arXiv paper FULL TEXT, transcribed from PDF to markdown (each carries the
+  # tell-tale "## Page 1" pagination). This is deliberately a separate tier from
+  # the `arxiv` metadata collection: the arxiv-kaggle/arxiv-oaipmh sources are
+  # metadata-only by design and never fetch a PDF, so these local transcriptions
+  # are the full-text layer engram cannot otherwise reach — complementary, not a
+  # duplicate. Kept out of `research` because 473 paper bodies would swamp the
+  # two dozen hand-written notes there in any BM25 ranking.
+  - name: papers
+    sources:
+      - type: markdown-dir
+        roots:
+          - { path: ~/repos/grug-docs, brain: research }
+        files: ["**/*.md", "**/*.mdx"]
+        # expo/bun/typescript are vendored upstream docs, harvested into `docs`
+        # from their real repos below; research-synthesis and skill-refresh are
+        # hand-written and belong in `research`.
+        exclude: ["expo/**", "bun/**", "typescript/**", "research-synthesis/**", "skill-refresh/**"]
+        # One transcription is 2.3MB, over the 1MiB default. Raised rather than
+        # losing the paper. NOTE this interacts with --batch-size: batching is
+        # by document COUNT, not bytes, and knowledge_ingest is capped by the
+        # 4MiB gRPC frame — run this collection with --batch-size 5 (median doc
+        # here is 92KB, p95 309KB, so 5 stays well under even with the outlier).
+        max_file_bytes: 3145728
+
+  # The hand-written half of the research brain: distillations written over the
+  # transcriptions above, not extracted from them.
+  - name: research
+    sources:
+      - type: markdown-dir
+        roots:
+          - { path: ~/repos/grug-docs, brain: research }
+        files: ["research-synthesis/**/*.md", "skill-refresh/**/*.md"]
+
   # Upstream documentation mirrors. text_field: body ; keyword fields: repo, path.
   # These replace the five read-only grug brains (drizzle, powersync, svelte,
   # sveltekit, react-native), which were themselves just clones of these trees.
@@ -42,4 +75,9 @@ collections:
           - { repo: sveltejs/kit, subdir: documentation/docs }
           - { repo: facebook/react-native-website, subdir: docs }
           - { repo: expo/expo, subdir: docs/pages }
+          # These two were mirrored into the grug research brain as flat files
+          # (bun/, typescript/); harvested from their real repos they stay
+          # current and keep upstream docs in one collection.
+          - { repo: oven-sh/bun, subdir: docs }
+          - { repo: microsoft/TypeScript-Website, subdir: packages/documentation/copy/en }
         files: ["**/*.md", "**/*.mdx"]
