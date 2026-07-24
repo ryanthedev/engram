@@ -83,6 +83,11 @@ type Server struct {
 	// Episodic backs the Read RPC's episodic branch; nil disables episodic
 	// reads (UNIMPLEMENTED). See read.go.
 	Episodic EpisodicReader
+
+	// Purger backs the MemoryPurge RPC — the memory tier's only delete path;
+	// nil disables purging (UNIMPLEMENTED). It reuses KnowledgeAuth above as
+	// the stateless role check (see RoleMemoryAdmin). See purge.go.
+	Purger MemoryPurger
 }
 
 // New returns a Server wired to s (write path) and r (read path).
