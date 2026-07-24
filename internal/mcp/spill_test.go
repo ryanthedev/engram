@@ -103,7 +103,7 @@ func TestDW_3_2_OverflowPathRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading overflow_path: %v", err)
 	}
-	var spilled searchResult
+	var spilled searchResult[Hit]
 	if err := json.Unmarshal(raw, &spilled); err != nil {
 		t.Fatalf("overflow_path content is not valid JSON for the result shape: %v (%s)", err, raw)
 	}

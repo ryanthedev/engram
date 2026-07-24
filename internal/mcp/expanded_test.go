@@ -221,7 +221,7 @@ func TestDW_6_4_MatchedOverflowStillSpills(t *testing.T) {
 // all expansions, the compact-line header says so — the caller can tell the
 // block is partial rather than assuming it saw every neighbor.
 func TestExpandedHeaderReportsDroppedExpansions(t *testing.T) {
-	result := searchResult{
+	result := searchResult[Hit]{
 		Hits:            []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 5)},
 		Expanded:        []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 5)},
 		ExpandedOmitted: 3,
@@ -240,12 +240,12 @@ func TestExpandedHeaderReportsDroppedExpansions(t *testing.T) {
 func TestPackExpandedNeverPanicsOnEmptyInputs(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		result searchResult
+		result searchResult[Hit]
 		expand []Hit
 	}{
-		{"no expansions", searchResult{Hits: []Hit{semanticHit("s1", "a", "b", "c", 5)}}, nil},
-		{"no matched hits", searchResult{Hits: []Hit{}}, []Hit{padGraphHit("g1", "a", "b", "c", 5)}},
-		{"neither", searchResult{Hits: []Hit{}}, nil},
+		{"no expansions", searchResult[Hit]{Hits: []Hit{semanticHit("s1", "a", "b", "c", 5)}}, nil},
+		{"no matched hits", searchResult[Hit]{Hits: []Hit{}}, []Hit{padGraphHit("g1", "a", "b", "c", 5)}},
+		{"neither", searchResult[Hit]{Hits: []Hit{}}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := packExpanded(tc.result, tc.expand, 16384)

@@ -116,6 +116,13 @@ type collectionMetaDoc struct {
 	Roles     []string    `json:"roles"`
 	Fields    []metaField `json:"fields"`
 	UpdatedAt time.Time   `json:"updated_at"`
+	// Fragment sizing + highlight marker tags (Phase-2 fragments). Zero/empty
+	// means unset — FragmentSizing applies the global defaults at consumption
+	// — and omitempty keeps pre-fragment meta rows byte-stable.
+	FragmentSize      int    `json:"fragment_size,omitempty"`
+	NumberOfFragments int    `json:"number_of_fragments,omitempty"`
+	HighlightPreTag   string `json:"highlight_pre_tag,omitempty"`
+	HighlightPostTag  string `json:"highlight_post_tag,omitempty"`
 }
 
 type metaField struct {
@@ -127,13 +134,17 @@ type metaField struct {
 
 func metaDocFrom(spec knowledge.CollectionSpec, version int) collectionMetaDoc {
 	doc := collectionMetaDoc{
-		Name:      spec.Name,
-		TextField: spec.TextField,
-		Index:     spec.Index,
-		Version:   version,
-		Public:    spec.Access.Public,
-		Roles:     spec.Access.Roles,
-		UpdatedAt: time.Now().UTC(),
+		Name:              spec.Name,
+		TextField:         spec.TextField,
+		Index:             spec.Index,
+		Version:           version,
+		Public:            spec.Access.Public,
+		Roles:             spec.Access.Roles,
+		UpdatedAt:         time.Now().UTC(),
+		FragmentSize:      spec.FragmentSize,
+		NumberOfFragments: spec.NumberOfFragments,
+		HighlightPreTag:   spec.HighlightPreTag,
+		HighlightPostTag:  spec.HighlightPostTag,
 	}
 	names := make([]string, 0, len(spec.Mappings))
 	for name := range spec.Mappings {
@@ -149,10 +160,14 @@ func metaDocFrom(spec knowledge.CollectionSpec, version int) collectionMetaDoc {
 
 func (d collectionMetaDoc) spec() knowledge.CollectionSpec {
 	spec := knowledge.CollectionSpec{
-		Name:      d.Name,
-		Index:     d.Index,
-		TextField: d.TextField,
-		Access:    knowledge.AccessPolicy{Public: d.Public, Roles: d.Roles},
+		Name:              d.Name,
+		Index:             d.Index,
+		TextField:         d.TextField,
+		Access:            knowledge.AccessPolicy{Public: d.Public, Roles: d.Roles},
+		FragmentSize:      d.FragmentSize,
+		NumberOfFragments: d.NumberOfFragments,
+		HighlightPreTag:   d.HighlightPreTag,
+		HighlightPostTag:  d.HighlightPostTag,
 	}
 	if len(d.Fields) > 0 {
 		spec.Mappings = make(map[string]knowledge.FieldSpec, len(d.Fields))

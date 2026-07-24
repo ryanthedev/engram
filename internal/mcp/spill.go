@@ -76,8 +76,8 @@ func maxSpillPath() string {
 // all), and every error branch after that removes the temp file before
 // returning (DW-3.6). Callers must treat a non-nil error as "spill did not
 // happen" and degrade gracefully — this function never partially succeeds.
-func spillFullResult(hits []Hit) (path string, err error) {
-	content, err := json.Marshal(searchResult{Hits: hits})
+func spillFullResult[H packable](hits []H) (path string, err error) {
+	content, err := json.Marshal(searchResult[H]{Hits: hits})
 	if err != nil {
 		return "", fmt.Errorf("mcp: marshaling spill content: %w", err)
 	}

@@ -54,6 +54,43 @@ type CollectionSpec struct {
 	TextField string
 	Mappings  map[string]FieldSpec
 	Access    AccessPolicy
+
+	// Fragment sizing for search-time highlight extraction. Zero means UNSET
+	// — consumers must read the resolved values through FragmentSizing, which
+	// applies the global defaults, never a literal zero size.
+	FragmentSize      int
+	NumberOfFragments int
+	// Marker strings wrapped around matched terms inside each fragment. Both
+	// empty (the zero value) means markers OFF — clean extraction, the
+	// default. Markers are a per-collection opt-in; no global marker default
+	// exists, so these two fields have no FragmentSizing-style fallback.
+	HighlightPreTag  string
+	HighlightPostTag string
+}
+
+// Global fragment-sizing fallbacks: a collection that declares no sizing
+// gets fragments of DefaultFragmentSize chars, DefaultNumberOfFragments per
+// hit (plan D4).
+const (
+	DefaultFragmentSize      = 240
+	DefaultNumberOfFragments = 3
+)
+
+// FragmentSizing resolves the collection's fragment sizing, applying the
+// global fallbacks: any unset (zero — the proto default for an absent field)
+// or nonsensical (negative) value reads as the corresponding default, so an
+// existing collection created before these knobs existed can never produce
+// zero-size or zero-count fragments. Consumers read sizing ONLY through
+// here; the raw fields stay raw so unset survives proto round-trips.
+func (s CollectionSpec) FragmentSizing() (size, count int) {
+	size, count = s.FragmentSize, s.NumberOfFragments
+	if size <= 0 {
+		size = DefaultFragmentSize
+	}
+	if count <= 0 {
+		count = DefaultNumberOfFragments
+	}
+	return size, count
 }
 
 // CollectionSummary is one List entry: enough to enumerate collections and

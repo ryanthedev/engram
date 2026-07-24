@@ -1,8 +1,8 @@
 // vaultknowledge.go renders the additive knowledge/ folder atop an
 // already-assembled memory vault (Phase 2 of the memory-knowledge mapping
-// prototype): enumerate every collection the caller may read, drain each via
-// one bounded KnowledgeSearch call, decode the hits into knowledgeDocs, then
-// resolve each doc's memory_ref against the memory vault's hub concepts (a
+// prototype): enumerate every collection the caller may read, fully drain
+// each via paged KnowledgeSearch calls, decode the hits into knowledgeDocs,
+// then resolve each doc's memory_ref against the memory vault's hub concepts (a
 // KNOWLEDGE-tier keyword field carrying a MEMORY-tier entity id — the one
 // soft foreign key this prototype proves out end-to-end) into a
 // [[wikilink]], write one knowledge/<name>.md per doc, and append a
@@ -62,37 +62,43 @@ type knowledgeDoc struct {
 
 // fetchKnowledgeDocs enumerates every collection the caller may read
 // (KnowledgeCollections already filters to readable collections server-side
-// — no client-side access check needed) and drains each via a single
-// empty-query KnowledgeSearch call at retrieval.MaxK: the RPC has no
-// offset/cursor, so a second call could never see more than the first.
-// Returned docs are sorted by id for deterministic downstream rendering.
-// warnings holds one line per collection whose hit count equals the k cap —
-// a possible-truncation signal, non-fatal, surfaced in the export summary.
-// Any RPC error aborts the whole fetch; the caller treats that as soft
-// (network/availability), never touching the already-written memory vault.
-func fetchKnowledgeDocs(ctx context.Context, client *engramclient.Client) ([]knowledgeDoc, []string, error) {
+// — no client-side access check needed) and fully drains each via paged
+// KnowledgeSearch calls: retrieval.MaxK hits per page, offset advancing by
+// the page's hit count, until the exact server-reported total is reached (or
+// a page returns no hits at all). Because offset strictly increases by at
+// least one on every non-empty page, the loop is bounded by the collection's
+// real size — there is no cursor to get stuck repeating, unlike fetchExport's
+// server-cursor case. Returned docs are sorted by id for deterministic
+// downstream rendering. Any RPC error aborts the whole fetch; the caller
+// treats that as soft (network/availability), never touching the
+// already-written memory vault.
+func fetchKnowledgeDocs(ctx context.Context, client *engramclient.Client) ([]knowledgeDoc, error) {
 	collections, err := client.KnowledgeCollections(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("listing knowledge collections: %w", err)
+		return nil, fmt.Errorf("listing knowledge collections: %w", err)
 	}
 	var docs []knowledgeDoc
-	var warnings []string
 	for _, col := range collections {
-		hits, err := client.KnowledgeSearch(ctx, col.Name, "", nil, nil, retrieval.MaxK)
-		if err != nil {
-			return nil, nil, fmt.Errorf("searching knowledge collection %q: %w", col.Name, err)
-		}
-		if len(hits) == retrieval.MaxK {
-			warnings = append(warnings, fmt.Sprintf(
-				"knowledge collection %q returned %d docs (the k=%d fetch cap) and may hold more than was exported — the RPC has no paging",
-				col.Name, len(hits), retrieval.MaxK))
-		}
-		for _, h := range hits {
-			docs = append(docs, decodeKnowledgeHit(col.Name, col.TextField, h))
+		offset := 0
+		for {
+			// full_body=true: the export renders whole documents into the
+			// vault, so fragment extraction (the search-time default) must
+			// be bypassed.
+			hits, total, err := client.KnowledgeSearch(ctx, col.Name, "", nil, nil, retrieval.MaxK, offset, true)
+			if err != nil {
+				return nil, fmt.Errorf("searching knowledge collection %q: %w", col.Name, err)
+			}
+			for _, h := range hits {
+				docs = append(docs, decodeKnowledgeHit(col.Name, col.TextField, h))
+			}
+			offset += len(hits)
+			if len(hits) == 0 || int64(offset) >= total {
+				break
+			}
 		}
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].ID < docs[j].ID })
-	return docs, warnings, nil
+	return docs, nil
 }
 
 // decodeKnowledgeHit parses one hit's fields_json into a knowledgeDoc.
@@ -102,7 +108,7 @@ func fetchKnowledgeDocs(ctx context.Context, client *engramclient.Client) ([]kno
 // the whole fetch over one bad row. textField names the collection's
 // full-text key (falls back to "text" defensively if a spec ever omits it —
 // the registry requires it, but this is external, server-relayed data).
-func decodeKnowledgeHit(collection, textField string, h mcp.Hit) knowledgeDoc {
+func decodeKnowledgeHit(collection, textField string, h mcp.KnowledgeHit) knowledgeDoc {
 	var fields map[string]any
 	_ = json.Unmarshal([]byte(h.Fields), &fields)
 	text := textField

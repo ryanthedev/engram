@@ -23,6 +23,10 @@
             "sortable": { "type": "boolean" }
           }
         },
+        "fragment_size": { "type": "integer" },
+        "number_of_fragments": { "type": "integer" },
+        "highlight_pre_tag": { "type": "keyword" },
+        "highlight_post_tag": { "type": "keyword" },
         "updated_at": { "type": "date" }
       }
     }

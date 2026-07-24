@@ -31,13 +31,16 @@ type knowledgeFake struct {
 		filters           []Predicate
 		sort              []SortKey
 		k                 int
+		offset            int
+		fullBody          bool
 	}
 	lastDelete struct {
 		collection, source, currentHarvestID string
 	}
 	lastSpec CollectionSpec
 
-	searchHits  []Hit
+	searchHits  []KnowledgeHit
+	searchTotal int64
 	collections []CollectionInfo
 	err         error
 }
@@ -47,9 +50,10 @@ func (b *knowledgeFake) KnowledgeIngest(_ context.Context, collection, source, h
 	return len(docs), b.err
 }
 
-func (b *knowledgeFake) KnowledgeSearch(_ context.Context, collection, query string, filters []Predicate, sort []SortKey, k int) ([]Hit, error) {
+func (b *knowledgeFake) KnowledgeSearch(_ context.Context, collection, query string, filters []Predicate, sort []SortKey, k, offset int, fullBody bool) ([]KnowledgeHit, int64, error) {
 	b.lastSearch.collection, b.lastSearch.query, b.lastSearch.filters, b.lastSearch.sort, b.lastSearch.k = collection, query, filters, sort, k
-	return b.searchHits, b.err
+	b.lastSearch.offset, b.lastSearch.fullBody = offset, fullBody
+	return b.searchHits, b.searchTotal, b.err
 }
 
 func (b *knowledgeFake) KnowledgeCollections(context.Context) ([]CollectionInfo, error) {
@@ -122,7 +126,7 @@ func TestDW_6_1_KnowledgeToolsDispatchThroughBackend(t *testing.T) {
 	})
 
 	t.Run("knowledge_search", func(t *testing.T) {
-		b.searchHits = []Hit{{ID: "d1", Score: 2.5, Source: "papers", Fields: `{"title":"x"}`}}
+		b.searchHits = []KnowledgeHit{{ID: "d1", Score: 2.5, Collection: "papers", Fields: `{"title":"x"}`}}
 		result := callTool(t, c, ToolKnowledgeSearch, map[string]any{
 			"collection": "papers", "query": "transformers",
 			"filters": []any{map[string]any{"field": "year", "op": "range", "value": map[string]any{"gte": 2024}}},
@@ -192,6 +196,48 @@ func TestDW_6_1_KnowledgeToolsDispatchThroughBackend(t *testing.T) {
 	})
 }
 
+// TestDW_3_1_KnowledgeSearchToolThreadsOffsetAndTotal proves the
+// knowledge_search tool accepts an offset argument, threads it to the
+// Backend unchanged, and surfaces the Backend's exact total in the response
+// envelope — the MCP-tool leg of DW-3.1's offset/total contract.
+func TestDW_3_1_KnowledgeSearchToolThreadsOffsetAndTotal(t *testing.T) {
+	b := &knowledgeFake{
+		searchHits:  []KnowledgeHit{{ID: "d1", Score: 1, Collection: "papers"}},
+		searchTotal: 250,
+	}
+	c := startServer(t, b)
+	c.call("initialize", nil)
+
+	result := callTool(t, c, ToolKnowledgeSearch, map[string]any{"collection": "papers", "offset": 100})
+	if result["isError"] != false {
+		t.Fatalf("isError = %v: %v", result["isError"], result)
+	}
+	if b.lastSearch.offset != 100 {
+		t.Errorf("backend got offset %d, want 100", b.lastSearch.offset)
+	}
+	sc := structured(t, result)
+	if got := sc["total"]; got != float64(250) {
+		t.Errorf("total = %v, want 250", got)
+	}
+}
+
+// TestKnowledgeSearchToolNegativeOffsetIsToolError pins the tool-boundary
+// barricade: a negative offset is external-input nonsense ("skip -5 hits")
+// and must be rejected before it ever reaches the Backend.
+func TestKnowledgeSearchToolNegativeOffsetIsToolError(t *testing.T) {
+	b := &knowledgeFake{}
+	c := startServer(t, b)
+	c.call("initialize", nil)
+
+	result := callTool(t, c, ToolKnowledgeSearch, map[string]any{"collection": "papers", "offset": -1})
+	if result["isError"] != true {
+		t.Fatalf("isError = %v, want true: %v", result["isError"], result)
+	}
+	if b.lastSearch.collection != "" {
+		t.Errorf("negative offset must not reach the backend, got a call: %+v", b.lastSearch)
+	}
+}
+
 // TestDW_6_4_KnowledgeCollectionsToolSurfacesStaleness proves the tool
 // reports each collection's count and staleness timestamps.
 func TestDW_6_4_KnowledgeCollectionsToolSurfacesStaleness(t *testing.T) {
@@ -230,9 +276,9 @@ func TestDW_6_1_KnowledgeSearchBudgetPackAndSpill(t *testing.T) {
 	t.Setenv(spillDirEnv, t.TempDir())
 	t.Setenv(searchBudgetBytesEnv, "600")
 
-	hits := make([]Hit, 20)
+	hits := make([]KnowledgeHit, 20)
 	for i := range hits {
-		hits[i] = Hit{ID: fmt.Sprintf("d%02d", i), Score: float64(20 - i), Source: "papers",
+		hits[i] = KnowledgeHit{ID: fmt.Sprintf("d%02d", i), Score: float64(20 - i), Collection: "papers",
 			Fields: `{"title":"` + strings.Repeat("x", 80) + `"}`}
 	}
 	b := &knowledgeFake{searchHits: hits}

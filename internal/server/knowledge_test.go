@@ -86,19 +86,33 @@ func (w *fakeKnowledgeWriter) DeleteByQuery(_ context.Context, index, collection
 
 // fakeKnowledgeReader records the retriever-facing read calls.
 type fakeKnowledgeReader struct {
-	spec    knowledge.CollectionSpec
-	query   string
-	filters []retrieval.Predicate
-	sort    []retrieval.SortKey
-	k       int
-	hits    []retrieval.Hit
-	metas   []retrieval.CollectionMeta
-	err     error
+	spec     knowledge.CollectionSpec
+	query    string
+	filters  []retrieval.Predicate
+	sort     []retrieval.SortKey
+	k        int
+	offset   int
+	fullBody bool
+	hits     []retrieval.Hit
+	total    int64
+	metas    []retrieval.CollectionMeta
+	err      error
+
+	// GetDocument drill-down state.
+	docID  string
+	doc    map[string]any
+	docOK  bool
+	docErr error
 }
 
-func (r *fakeKnowledgeReader) Search(_ context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sortKeys []retrieval.SortKey, k int) ([]retrieval.Hit, error) {
-	r.spec, r.query, r.filters, r.sort, r.k = spec, query, filters, sortKeys, k
-	return r.hits, r.err
+func (r *fakeKnowledgeReader) Search(_ context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sortKeys []retrieval.SortKey, k, offset int, fullBody bool) ([]retrieval.Hit, int64, error) {
+	r.spec, r.query, r.filters, r.sort, r.k, r.offset, r.fullBody = spec, query, filters, sortKeys, k, offset, fullBody
+	return r.hits, r.total, r.err
+}
+
+func (r *fakeKnowledgeReader) GetDocument(_ context.Context, spec knowledge.CollectionSpec, id string) (map[string]any, bool, error) {
+	r.spec, r.docID = spec, id
+	return r.doc, r.docOK, r.docErr
 }
 
 func (r *fakeKnowledgeReader) Collections(context.Context) ([]retrieval.CollectionMeta, error) {
@@ -344,12 +358,37 @@ func TestKnowledgeSearchTranslatesRequestAndHits(t *testing.T) {
 		t.Fatalf("hits = %v", resp.GetHits())
 	}
 	h := resp.GetHits()[0]
-	if h.GetId() != "d1" || h.GetScore() != 3.5 || h.GetSource() != "papers" {
+	if h.GetId() != "d1" || h.GetScore() != 3.5 || h.GetCollection() != "papers" {
 		t.Errorf("hit = %v", h)
 	}
 	var fields map[string]any
 	if err := json.Unmarshal([]byte(h.GetFieldsJson()), &fields); err != nil || fields["title"] != "T" {
 		t.Errorf("fields_json = %q (%v)", h.GetFieldsJson(), err)
+	}
+}
+
+// TestDW_3_1_KnowledgeSearchHandlerThreadsOffsetAndTotal proves the handler
+// passes req.offset straight through to the reader and copies the reader's
+// exact total onto the response, unmodified in either direction.
+func TestDW_3_1_KnowledgeSearchHandlerThreadsOffsetAndTotal(t *testing.T) {
+	reg := &fakeRegistry{specs: map[string]knowledge.CollectionSpec{"papers": papersSpec(true)}}
+	reader := &fakeKnowledgeReader{
+		hits:  []retrieval.Hit{{ID: "d101", Score: 1, Source: "papers"}},
+		total: 2500,
+	}
+	s := knowledgeServer(reg, &fakeKnowledgeWriter{}, reader)
+
+	resp, err := s.KnowledgeSearch(identityCtx(), &engrampb.KnowledgeSearchRequest{
+		Collection: "papers", Query: "q", Offset: 100, K: 10,
+	})
+	if err != nil {
+		t.Fatalf("KnowledgeSearch: %v", err)
+	}
+	if reader.offset != 100 {
+		t.Errorf("reader got offset %d, want 100", reader.offset)
+	}
+	if resp.GetTotal() != 2500 {
+		t.Errorf("response total = %d, want 2500 (exact, from the reader)", resp.GetTotal())
 	}
 }
 

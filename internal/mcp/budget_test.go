@@ -332,7 +332,7 @@ func TestTopFacetsSkipsMalformedOrMissingFields(t *testing.T) {
 // non-nil page — not a panic, not a null hits array (DW-2.1's zero-hit edge
 // case; the packing loop must test at the beginning).
 func TestPackSearchResultZeroHits(t *testing.T) {
-	result := packSearchResult(nil, searchBudgetBytesDefault, memoryFacetFields)
+	result := packSearchResult[Hit](nil, searchBudgetBytesDefault, memoryFacetFields)
 	if result.Hits == nil {
 		t.Error("Hits is nil, want a non-nil empty slice (marshals to [] not null)")
 	}

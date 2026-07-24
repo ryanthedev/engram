@@ -51,9 +51,15 @@ type KnowledgeWriter interface {
 }
 
 // KnowledgeReader is the BM25 read path (consumer-defined seam;
-// *retrieval.KnowledgeRetriever satisfies it).
+// *retrieval.KnowledgeRetriever satisfies it). Search returns fragment
+// hits by default (body suppressed) and whole bodies when fullBody is set,
+// paged via offset (0 = first page) and reporting the exact total match
+// count; GetDocument is the by-id drill-down behind memory_read's knowledge
+// branch (ok=false means no such doc — the caller maps it to an opaque
+// not-found).
 type KnowledgeReader interface {
-	Search(ctx context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sort []retrieval.SortKey, k int) ([]retrieval.Hit, error)
+	Search(ctx context.Context, spec knowledge.CollectionSpec, query string, filters []retrieval.Predicate, sort []retrieval.SortKey, k, offset int, fullBody bool) ([]retrieval.Hit, int64, error)
+	GetDocument(ctx context.Context, spec knowledge.CollectionSpec, id string) (map[string]any, bool, error)
 	Collections(ctx context.Context) ([]retrieval.CollectionMeta, error)
 }
 
@@ -168,21 +174,29 @@ func (s *Server) KnowledgeSearch(ctx context.Context, req *engrampb.KnowledgeSea
 	}
 	// k is bounded by the retriever's clamp to [1, MaxK]; negative/zero means
 	// "server-chosen" by contract, so it passes through rather than erroring.
-	hits, err := s.KnowledgeReader.Search(ctx, spec, req.GetQuery(), filters, sortKeys, int(req.GetK()))
+	// offset (0 = first page) and the clamp against max_result_window are the
+	// retriever's job too (DW-3.2's self-correcting error, not a raw
+	// OpenSearch 500).
+	hits, total, err := s.KnowledgeReader.Search(ctx, spec, req.GetQuery(), filters, sortKeys, int(req.GetK()), int(req.GetOffset()), req.GetFullBody())
 	if err != nil {
 		// The barricade already validated shape; a retriever failure here is
 		// infrastructure, not caller input.
 		return nil, status.Errorf(codes.Internal, "searching collection %q: %v", spec.Name, err)
 	}
-	out := make([]*engrampb.Hit, len(hits))
+	// h.Source carries the collection name on the knowledge path (parseHits
+	// tags knowledge hits with spec.Name) — it maps onto KnowledgeHit's real
+	// collection field. By default fields_json carries scalars only (the
+	// retriever suppressed the body) beside the extracted fragments;
+	// full_body=true restores the whole body inline and yields no fragments.
+	out := make([]*engrampb.KnowledgeHit, len(hits))
 	for i, h := range hits {
 		fieldsJSON, err := json.Marshal(h.Fields)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "encoding hit %s fields: %v", h.ID, err)
 		}
-		out[i] = &engrampb.Hit{Id: h.ID, Score: h.Score, Source: h.Source, FieldsJson: string(fieldsJSON)}
+		out[i] = &engrampb.KnowledgeHit{Id: h.ID, Score: h.Score, Collection: h.Source, FieldsJson: string(fieldsJSON), Fragments: h.Fragments}
 	}
-	return &engrampb.KnowledgeSearchResponse{Hits: out}, nil
+	return &engrampb.KnowledgeSearchResponse{Hits: out, Total: total}, nil
 }
 
 // KnowledgeCollections implements engrampb.EngramServer: it lists ONLY the
@@ -395,9 +409,13 @@ func collectionSpecFromProto(p *engrampb.CollectionSpec) (knowledge.CollectionSp
 		return knowledge.CollectionSpec{}, status.Error(codes.InvalidArgument, "spec.name is required")
 	}
 	spec := knowledge.CollectionSpec{
-		Name:      p.GetName(),
-		TextField: p.GetTextField(),
-		Access:    knowledge.AccessPolicy{Public: p.GetAccess().GetPublic(), Roles: p.GetAccess().GetRoles()},
+		Name:              p.GetName(),
+		TextField:         p.GetTextField(),
+		Access:            knowledge.AccessPolicy{Public: p.GetAccess().GetPublic(), Roles: p.GetAccess().GetRoles()},
+		FragmentSize:      int(p.GetFragmentSize()),
+		NumberOfFragments: int(p.GetNumberOfFragments()),
+		HighlightPreTag:   p.GetHighlightPreTag(),
+		HighlightPostTag:  p.GetHighlightPostTag(),
 	}
 	if m := p.GetMappings(); len(m) > 0 {
 		spec.Mappings = make(map[string]knowledge.FieldSpec, len(m))
@@ -411,9 +429,13 @@ func collectionSpecFromProto(p *engrampb.CollectionSpec) (knowledge.CollectionSp
 // collectionSpecProto renders a domain spec for the wire, omitting Index.
 func collectionSpecProto(spec knowledge.CollectionSpec) *engrampb.CollectionSpec {
 	out := &engrampb.CollectionSpec{
-		Name:      spec.Name,
-		TextField: spec.TextField,
-		Access:    &engrampb.AccessPolicy{Public: spec.Access.Public, Roles: spec.Access.Roles},
+		Name:              spec.Name,
+		TextField:         spec.TextField,
+		Access:            &engrampb.AccessPolicy{Public: spec.Access.Public, Roles: spec.Access.Roles},
+		FragmentSize:      int32(spec.FragmentSize),
+		NumberOfFragments: int32(spec.NumberOfFragments),
+		HighlightPreTag:   spec.HighlightPreTag,
+		HighlightPostTag:  spec.HighlightPostTag,
 	}
 	if len(spec.Mappings) > 0 {
 		out.Mappings = make(map[string]*engrampb.FieldSpec, len(spec.Mappings))

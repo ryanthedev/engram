@@ -6,6 +6,7 @@ package engramclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -148,6 +149,15 @@ func (c *Client) Read(ctx context.Context, id, source string) (mcp.ReadResult, e
 // as RFC 3339, zero-valued fields omitted rather than invented.
 func readResultFromProto(id string, resp *engrampb.ReadResponse) mcp.ReadResult {
 	out := mcp.ReadResult{ID: id, Source: resp.GetSource()}
+	if fj := resp.GetFieldsJson(); fj != "" {
+		// Knowledge-collection drill-down: the full stored document arrives
+		// as one JSON object. A decode failure leaves Fields nil rather than
+		// smuggling a stringified blob into a field documented as structured.
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(fj), &fields); err == nil {
+			out.Fields = fields
+		}
+	}
 	if ep := resp.GetEpisodic(); ep != nil {
 		out.Fields = prune(map[string]any{
 			"text":        ep.GetText(),

@@ -101,13 +101,8 @@ func TestDW_1_2_HybridFusionOutranksSingleSignal(t *testing.T) {
 	t.Logf("finding: fused order=%v", hitIDs(hits))
 }
 
-func hitIDs(hits []retrieval.Hit) []string {
-	ids := make([]string, len(hits))
-	for i, h := range hits {
-		ids[i] = h.ID
-	}
-	return ids
-}
+// hitIDs lives in splitexpanded_test.go (same package, no build tag) — the
+// duplicate here collided with it under -tags=integration builds.
 
 // TestDW_1_4_ScopeAndValidityFiltersEnforced covers the correctness half of
 // DW-1.4: tenant scoping never leaks another tenant's doc, ValidOnly excludes

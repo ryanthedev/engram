@@ -91,3 +91,32 @@ func TestReadResultFromProtoSemantic(t *testing.T) {
 		t.Error("live version invented an invalid_at")
 	}
 }
+
+// TestReadResultFromProtoKnowledgeFieldsJSON (Phase 2, DW-2.4): a knowledge
+// drill-down ReadResponse decodes fields_json into structured Fields — a
+// real object, never a re-stringified blob — and carries no memory extras.
+func TestReadResultFromProtoKnowledgeFieldsJSON(t *testing.T) {
+	resp := &engrampb.ReadResponse{
+		Source:     "papers",
+		FieldsJson: `{"title":"T","text":"whole body","harvest_id":"h1"}`,
+	}
+	out := readResultFromProto("d1", resp)
+	if out.ID != "d1" || out.Source != "papers" {
+		t.Errorf("address = %s/%s", out.ID, out.Source)
+	}
+	if out.Fields["text"] != "whole body" || out.Fields["title"] != "T" {
+		t.Errorf("fields = %+v, want the decoded document", out.Fields)
+	}
+	if out.Provenance != nil || out.Versions != nil {
+		t.Errorf("knowledge read must not carry semantic extras: %+v / %+v", out.Provenance, out.Versions)
+	}
+}
+
+// TestReadResultFromProtoKnowledgeMalformedJSONDegrades: undecodable
+// fields_json leaves Fields nil rather than inventing content.
+func TestReadResultFromProtoKnowledgeMalformedJSONDegrades(t *testing.T) {
+	out := readResultFromProto("d1", &engrampb.ReadResponse{Source: "papers", FieldsJson: "not json"})
+	if out.Fields != nil {
+		t.Errorf("Fields = %+v, want nil for malformed fields_json", out.Fields)
+	}
+}

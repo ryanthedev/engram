@@ -115,7 +115,12 @@ func TestToolsCallMemoryReadValidation(t *testing.T) {
 	}{
 		{"missing id", map[string]any{"source": "episodic"}, "non-empty id and source"},
 		{"blank source", map[string]any{"id": "ep-1", "source": ""}, "non-empty id and source"},
-		{"unknown source", map[string]any{"id": "ep-1", "source": "experience"}, `must be "episodic" or "semantic"`},
+		// A non-tier source is no longer rejected at this edge: it is
+		// forwarded as a potential knowledge collection name, and the SERVER
+		// barricade answers (self-correcting for unknown, opaque not-found
+		// for unreadable — server/read_test.go pins those). The fake backend
+		// answers every unknown (id, source) with its opaque not-found.
+		{"unknown source forwards to backend", map[string]any{"id": "ep-1", "source": "experience"}, "read failed"},
 		{"graph has no drill", map[string]any{"id": "g-1", "source": "graph"}, "no drill-down"},
 		{"unknown id", map[string]any{"id": "ep-missing", "source": "episodic"}, "read failed"},
 	}

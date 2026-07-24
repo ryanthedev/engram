@@ -54,32 +54,40 @@ func (c *Client) KnowledgeIngest(ctx context.Context, collection, source, harves
 }
 
 // KnowledgeSearch runs one BM25 query over a collection with generic field
-// filters and sort.
-func (c *Client) KnowledgeSearch(ctx context.Context, collection, query string, filters []mcp.Predicate, sortKeys []mcp.SortKey, k int) ([]mcp.Hit, error) {
-	req := &engrampb.KnowledgeSearchRequest{Collection: collection, Query: query, K: int32(k)}
+// filters and sort, paged via offset (0 = first page) and returning the
+// exact total match count (OpenSearch track_total_hits, never a capped
+// estimate). By default each hit carries extracted fragments and a
+// fields_json WITHOUT the document body (drill the whole document with
+// Read(id, collection)); fullBody=true restores whole bodies inline and
+// yields no fragments.
+func (c *Client) KnowledgeSearch(ctx context.Context, collection, query string, filters []mcp.Predicate, sortKeys []mcp.SortKey, k, offset int, fullBody bool) ([]mcp.KnowledgeHit, int64, error) {
+	req := &engrampb.KnowledgeSearchRequest{Collection: collection, Query: query, K: int32(k), Offset: int32(offset), FullBody: fullBody}
 	for _, p := range filters {
 		pred, err := predicateProto(p)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		req.Filters = append(req.Filters, pred)
 	}
 	for _, sk := range sortKeys {
 		key, err := sortKeyProto(sk)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		req.Sort = append(req.Sort, key)
 	}
 	resp, err := c.api.KnowledgeSearch(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	hits := make([]mcp.Hit, 0, len(resp.GetHits()))
+	hits := make([]mcp.KnowledgeHit, 0, len(resp.GetHits()))
 	for _, h := range resp.GetHits() {
-		hits = append(hits, mcp.Hit{ID: h.GetId(), Score: h.GetScore(), Source: h.GetSource(), Fields: h.GetFieldsJson()})
+		hits = append(hits, mcp.KnowledgeHit{
+			ID: h.GetId(), Score: h.GetScore(), Collection: h.GetCollection(),
+			Fields: h.GetFieldsJson(), Fragments: h.GetFragments(),
+		})
 	}
-	return hits, nil
+	return hits, resp.GetTotal(), nil
 }
 
 // KnowledgeCollections lists the collections the caller may read, with field
@@ -205,9 +213,13 @@ func sortKeyProto(k mcp.SortKey) (*engrampb.SortKey, error) {
 // AccessPolicy; there is no index field to carry (registry-internal).
 func collectionSpecProto(spec mcp.CollectionSpec) *engrampb.CollectionSpec {
 	out := &engrampb.CollectionSpec{
-		Name:      spec.Name,
-		TextField: spec.TextField,
-		Access:    &engrampb.AccessPolicy{Public: spec.Public, Roles: spec.Roles},
+		Name:              spec.Name,
+		TextField:         spec.TextField,
+		Access:            &engrampb.AccessPolicy{Public: spec.Public, Roles: spec.Roles},
+		FragmentSize:      int32(spec.FragmentSize),
+		NumberOfFragments: int32(spec.NumberOfFragments),
+		HighlightPreTag:   spec.HighlightPreTag,
+		HighlightPostTag:  spec.HighlightPostTag,
 	}
 	if len(spec.Mappings) > 0 {
 		out.Mappings = make(map[string]*engrampb.FieldSpec, len(spec.Mappings))
@@ -221,10 +233,14 @@ func collectionSpecProto(spec mcp.CollectionSpec) *engrampb.CollectionSpec {
 // collectionSpecFromProto is collectionSpecProto's inverse.
 func collectionSpecFromProto(p *engrampb.CollectionSpec) mcp.CollectionSpec {
 	spec := mcp.CollectionSpec{
-		Name:      p.GetName(),
-		TextField: p.GetTextField(),
-		Public:    p.GetAccess().GetPublic(),
-		Roles:     p.GetAccess().GetRoles(),
+		Name:              p.GetName(),
+		TextField:         p.GetTextField(),
+		Public:            p.GetAccess().GetPublic(),
+		Roles:             p.GetAccess().GetRoles(),
+		FragmentSize:      int(p.GetFragmentSize()),
+		NumberOfFragments: int(p.GetNumberOfFragments()),
+		HighlightPreTag:   p.GetHighlightPreTag(),
+		HighlightPostTag:  p.GetHighlightPostTag(),
 	}
 	if m := p.GetMappings(); len(m) > 0 {
 		spec.Mappings = make(map[string]mcp.FieldSpec, len(m))

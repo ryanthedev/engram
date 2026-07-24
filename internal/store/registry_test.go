@@ -621,3 +621,41 @@ func TestReservedNameCanNeverShadowMetaIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestMetaDocRoundTripsFragmentSizing (Phase 2): the registry's persisted
+// form carries the four sizing/tag knobs, so a collection's fragment
+// configuration survives Create/Update -> Get through the meta-index — the
+// third translation beside the proto and MCP ones (DW-2.2's persistence
+// leg; this was the gap the Phase-2 integration test surfaced).
+func TestMetaDocRoundTripsFragmentSizing(t *testing.T) {
+	in := knowledge.CollectionSpec{
+		Name: "docs", Index: "knowledge-docs-v1", TextField: "text",
+		FragmentSize: 100, NumberOfFragments: 2,
+		HighlightPreTag: "«", HighlightPostTag: "»",
+	}
+	doc := metaDocFrom(in, 1)
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reloaded collectionMetaDoc
+	if err := json.Unmarshal(raw, &reloaded); err != nil {
+		t.Fatal(err)
+	}
+	out := reloaded.spec()
+	if out.FragmentSize != 100 || out.NumberOfFragments != 2 ||
+		out.HighlightPreTag != "«" || out.HighlightPostTag != "»" {
+		t.Errorf("sizing/tags lost through the meta doc: %+v", out)
+	}
+
+	// Unset knobs stay unset (zero) on the wire so FragmentSizing's fallback
+	// still owns the default, and the JSON omits them (pre-fragment rows are
+	// byte-stable).
+	plain := metaDocFrom(knowledge.CollectionSpec{Name: "d", Index: "i", TextField: "t"}, 1)
+	rawPlain, _ := json.Marshal(plain)
+	for _, key := range []string{"fragment_size", "number_of_fragments", "highlight_pre_tag", "highlight_post_tag"} {
+		if strings.Contains(string(rawPlain), key) {
+			t.Errorf("unset knob %q serialized: %s", key, rawPlain)
+		}
+	}
+}

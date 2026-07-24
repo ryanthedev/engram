@@ -546,7 +546,10 @@ func (t *tierRetriever) search(ctx context.Context, q Query, f Filter, aclClause
 	// Memory tiers never sort (relevance/RRF order only) — nil is the only
 	// value any memory caller ever passes, which is exactly the value
 	// buildQuery treats as "omit the sort key entirely" (DW-5.1).
-	body, usePipeline := buildQuery(mode, t.textField, t.vectorField, q.Text, vec, k, filters, nil)
+	body, usePipeline := buildQuery(queryOpts{
+		mode: mode, textField: t.textField, vectorField: t.vectorField,
+		text: q.Text, vec: vec, k: k, filters: filters,
+	})
 
 	url := t.baseURL + "/" + t.index + "/_search"
 	if usePipeline {
@@ -646,6 +649,42 @@ func (t *tierRetriever) filterClauses(f Filter, aclClause map[string]any) ([]any
 	return clauses, nil
 }
 
+// queryOpts carries every input to buildQuery. Its ZERO VALUE is safe: an
+// unset field means "off", so a caller setting only the core search fields
+// (mode..sort) gets byte-for-byte the query the old 8-positional-parameter
+// buildQuery produced — the memory path relies on that (DW-1.3's golden
+// matrix in buildquery_golden_test.go pins it against pre-refactor bytes).
+type queryOpts struct {
+	mode        SearchMode
+	textField   string
+	vectorField string
+	text        string
+	vec         []float32
+	k           int
+	filters     []any
+	sort        []any
+
+	// Knowledge-search seams: zero-value-off by design, so a memory caller
+	// (which never sets any of these) keeps producing byte-identical bodies
+	// (DW-1.3's golden matrix).
+	//
+	// offset is the paging start ("from"); 0 means first page and emits no
+	// "from" key. trackTotalHits requests OpenSearch's exact match count via
+	// "track_total_hits":true (never a capped estimate) — set unconditionally
+	// by KnowledgeRetriever.Search, never by a memory caller.
+	// fragmentSize/numberOfFragments size the highlight clause, already
+	// fallback-resolved by the caller via knowledge.CollectionSpec.FragmentSizing
+	// — 0 here means highlighting off. highlightPreTag/highlightPostTag wrap
+	// fragment matches; both empty means markers off (the default — never a
+	// hardcoded marker pair).
+	offset            int
+	trackTotalHits    bool
+	fragmentSize      int
+	numberOfFragments int
+	highlightPreTag   string
+	highlightPostTag  string
+}
+
 // buildQuery constructs the OpenSearch request body for one tier's search.
 // usePipeline reports whether the caller must attach the RRF search_pipeline
 // query param (only hybrid mode with a usable vector fuses two clauses).
@@ -662,48 +701,80 @@ func (t *tierRetriever) filterClauses(f Filter, aclClause map[string]any) ([]any
 // here) falls back to match_all so filters alone can still select documents,
 // rather than a "match" query on an empty string, which OpenSearch analyzes
 // to zero terms and use.
-func buildQuery(mode SearchMode, textField, vectorField, text string, vec []float32, k int, filters []any, sort []any) (body []byte, usePipeline bool) {
+func buildQuery(opts queryOpts) (body []byte, usePipeline bool) {
 	bm25Query := map[string]any{"match_all": map[string]any{}}
-	if text != "" {
-		bm25Query = map[string]any{"match": map[string]any{textField: text}}
+	if opts.text != "" {
+		bm25Query = map[string]any{"match": map[string]any{opts.textField: opts.text}}
 	}
 	var bm25 any = bm25Query
-	if len(filters) > 0 {
-		bm25 = map[string]any{"bool": map[string]any{"must": []any{bm25Query}, "filter": filters}}
+	if len(opts.filters) > 0 {
+		bm25 = map[string]any{"bool": map[string]any{"must": []any{bm25Query}, "filter": opts.filters}}
 	}
 
 	var knn any
-	if vec != nil {
-		inner := map[string]any{"vector": vec, "k": k}
-		if len(filters) > 0 {
-			inner["filter"] = map[string]any{"bool": map[string]any{"filter": filters}}
+	if opts.vec != nil {
+		inner := map[string]any{"vector": opts.vec, "k": opts.k}
+		if len(opts.filters) > 0 {
+			inner["filter"] = map[string]any{"bool": map[string]any{"filter": opts.filters}}
 		}
-		knn = map[string]any{"knn": map[string]any{vectorField: inner}}
+		knn = map[string]any{"knn": map[string]any{opts.vectorField: inner}}
 	}
 
 	var query map[string]any
 	switch {
-	case mode == ModeBM25Only || knn == nil:
-		query = map[string]any{"size": k, "query": bm25}
-	case mode == ModeKNNOnly:
-		query = map[string]any{"size": k, "query": knn}
+	case opts.mode == ModeBM25Only || knn == nil:
+		query = map[string]any{"size": opts.k, "query": bm25}
+	case opts.mode == ModeKNNOnly:
+		query = map[string]any{"size": opts.k, "query": knn}
 	default: // ModeHybrid with a usable vector.
-		query = map[string]any{"size": k, "query": map[string]any{"hybrid": map[string]any{"queries": []any{bm25, knn}}}}
+		query = map[string]any{"size": opts.k, "query": map[string]any{"hybrid": map[string]any{"queries": []any{bm25, knn}}}}
 		usePipeline = true
 	}
 	// Never fetch embedding vectors back: they are query-time inputs, not
 	// results, and dominate response size (~95% of a raw hit). Excluding a
 	// field an index doesn't have is a no-op, so both names apply to both tiers.
-	query["_source"] = map[string]any{"excludes": []string{"text_embedding", "fact_embedding"}}
-	if len(sort) > 0 {
-		query["sort"] = sort
+	excludes := []string{"text_embedding", "fact_embedding"}
+	// Highlighting on (numberOfFragments > 0, the knowledge path's
+	// fragments-default) means fragments REPLACE the body: the highlight
+	// clause and the text-field suppression are one decision, gated on one
+	// knob, so a caller can never get fragments plus the body it was meant to
+	// spare, or a suppressed body with no fragments to stand in for it.
+	// pre/post tags are emitted as-is — [""] when unset, which is OpenSearch's
+	// markers-off escape from its <em> default; a non-empty pair comes from
+	// the collection's opt-in tag fields, never a hardcoded marker.
+	if opts.numberOfFragments > 0 {
+		excludes = append(excludes, opts.textField)
+		query["highlight"] = map[string]any{
+			"fields": map[string]any{opts.textField: map[string]any{
+				"fragment_size":       opts.fragmentSize,
+				"number_of_fragments": opts.numberOfFragments,
+				"pre_tags":            []string{opts.highlightPreTag},
+				"post_tags":           []string{opts.highlightPostTag},
+			}},
+		}
+	}
+	query["_source"] = map[string]any{"excludes": excludes}
+	// Paging (from) and the exact-total request (track_total_hits) are both
+	// zero-value-off: a memory caller leaves offset=0/trackTotalHits=false
+	// and neither key is ever emitted, preserving DW-1.3's golden bytes.
+	if opts.offset > 0 {
+		query["from"] = opts.offset
+	}
+	if opts.trackTotalHits {
+		query["track_total_hits"] = true
+	}
+	if len(opts.sort) > 0 {
+		query["sort"] = opts.sort
 	}
 	body, _ = json.Marshal(query)
 	return body, usePipeline
 }
 
 // parseHits decodes an OpenSearch _search response into fused Hits, tagged
-// with the tier's Source.
+// with the tier's Source. A hit's "highlight" section (knowledge path only —
+// buildQuery requests exactly ONE highlighted field, and memory queries
+// request none, so the key is simply absent there) is flattened into
+// Hit.Fragments.
 func parseHits(decoded map[string]any, source string) []Hit {
 	hitsField, _ := decoded["hits"].(map[string]any)
 	rawHits, _ := hitsField["hits"].([]any)
@@ -716,7 +787,25 @@ func parseHits(decoded map[string]any, source string) []Hit {
 		id, _ := hm["_id"].(string)
 		score, _ := hm["_score"].(float64)
 		fields, _ := hm["_source"].(map[string]any)
-		out = append(out, Hit{ID: id, Score: score, Source: source, Fields: fields})
+		out = append(out, Hit{ID: id, Score: score, Source: source, Fields: fields, Fragments: parseFragments(hm)})
+	}
+	return out
+}
+
+// parseFragments reads one raw hit's highlight section into a fragment list.
+// Only one field is ever requested for highlighting (the collection's text
+// field), so every fragment under the section belongs to it regardless of
+// key name; nil when the section is absent (every memory hit) or empty.
+func parseFragments(hit map[string]any) []string {
+	highlight, _ := hit["highlight"].(map[string]any)
+	var out []string
+	for _, v := range highlight {
+		frags, _ := v.([]any)
+		for _, f := range frags {
+			if s, ok := f.(string); ok {
+				out = append(out, s)
+			}
+		}
 	}
 	return out
 }

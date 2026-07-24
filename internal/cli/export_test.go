@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ryanthedev/engram/api/engrampb"
+	"github.com/ryanthedev/engram/internal/retrieval"
 )
 
 // --- fixtures ---
@@ -90,7 +91,7 @@ type exportStub struct {
 	engrampb.UnimplementedEngramServer
 	pages        []*engrampb.ExportResponse
 	collections  []*engrampb.CollectionInfo
-	docs         map[string][]*engrampb.Hit // collection name -> hits
+	docs         map[string][]*engrampb.KnowledgeHit // collection name -> hits
 	knowledgeErr error
 }
 
@@ -115,11 +116,25 @@ func (s *exportStub) KnowledgeCollections(ctx context.Context, req *engrampb.Kno
 	return &engrampb.KnowledgeCollectionsResponse{Collections: s.collections}, nil
 }
 
+// KnowledgeSearch honors offset/k like the real server (from/size paging
+// over the fixed docs slice) so tests exercising fetchKnowledgeDocs' paging
+// loop see real per-page slices and an exact total, not the whole slice
+// repeated on every call.
 func (s *exportStub) KnowledgeSearch(_ context.Context, req *engrampb.KnowledgeSearchRequest) (*engrampb.KnowledgeSearchResponse, error) {
 	if s.knowledgeErr != nil {
 		return nil, s.knowledgeErr
 	}
-	return &engrampb.KnowledgeSearchResponse{Hits: s.docs[req.GetCollection()]}, nil
+	all := s.docs[req.GetCollection()]
+	total := int64(len(all))
+	offset, k := int(req.GetOffset()), int(req.GetK())
+	if offset >= len(all) {
+		return &engrampb.KnowledgeSearchResponse{Total: total}, nil
+	}
+	end := offset + k
+	if k <= 0 || end > len(all) {
+		end = len(all)
+	}
+	return &engrampb.KnowledgeSearchResponse{Hits: all[offset:end], Total: total}, nil
 }
 
 // knowledgeCollectionInfo builds one CollectionInfo the stub's
@@ -139,7 +154,7 @@ func knowledgeCollectionInfo(name string, public bool) *engrampb.CollectionInfo 
 // it: title/text/memory_ref/memory_ref_name as the fields_json row
 // (memory_ref/memory_ref_name omitted from the row when empty, matching how
 // an ingest batch with no such field would look).
-func knowledgeHit(id, title, text, memoryRef, memoryRefName string) *engrampb.Hit {
+func knowledgeHit(id, title, text, memoryRef, memoryRefName string) *engrampb.KnowledgeHit {
 	fields := map[string]any{"title": title, "text": text}
 	if memoryRef != "" {
 		fields["memory_ref"] = memoryRef
@@ -151,7 +166,7 @@ func knowledgeHit(id, title, text, memoryRef, memoryRefName string) *engrampb.Hi
 	if err != nil {
 		panic(err) // fixture-only: a map of strings always marshals
 	}
-	return &engrampb.Hit{Id: id, Score: 1, Source: "curated_notes", FieldsJson: string(b)}
+	return &engrampb.KnowledgeHit{Id: id, Score: 1, Collection: "curated_notes", FieldsJson: string(b)}
 }
 
 // startStub starts srv as an in-process gRPC server and returns its address;
@@ -757,7 +772,7 @@ func TestDW_2_1_KnowledgeNotesWikilinkToExportedConcepts(t *testing.T) {
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{richPage()},
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs: map[string][]*engrampb.Hit{
+		docs: map[string][]*engrampb.KnowledgeHit{
 			"curated_notes": {
 				knowledgeHit("kd2", "Shared title", "second body", "e-a", ""),
 				knowledgeHit("kd1", "Shared title", "first body", "e-a", ""),
@@ -809,7 +824,7 @@ func TestDW_2_2_ConceptNoteGetsReferencedByBacklinks(t *testing.T) {
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{richPage()},
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs: map[string][]*engrampb.Hit{
+		docs: map[string][]*engrampb.KnowledgeHit{
 			"curated_notes": {
 				knowledgeHit("kd-b", "Note B", "body b", "e-a", ""),
 				knowledgeHit("kd-a", "Note A", "body a", "e-a", ""),
@@ -850,7 +865,7 @@ func TestDW_2_3_UnresolvedMemoryRefRendersInertMarker(t *testing.T) {
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{richPage()},
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs: map[string][]*engrampb.Hit{
+		docs: map[string][]*engrampb.KnowledgeHit{
 			"curated_notes": {
 				knowledgeHit("kd1", "Named ref", "body", "no-such-entity", "Ghost Concept"),
 				knowledgeHit("kd2", "Bare id ref", "body", "also-missing", ""),
@@ -916,7 +931,7 @@ func TestDW_2_4_InjectionTrapSanitizedAndConfined(t *testing.T) {
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{richPage()},
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs: map[string][]*engrampb.Hit{
+		docs: map[string][]*engrampb.KnowledgeHit{
 			"curated_notes": {
 				knowledgeHit("kd1", hostileTitle, hostileText, "missing-entity", hostileMemoryRefName),
 				knowledgeHit("kd2", hostileNFDTitle, "second body", "", ""),
@@ -1055,19 +1070,21 @@ func TestDW_2_6_ZeroCollectionsNoKnowledgeFolder(t *testing.T) {
 	}
 }
 
-// TestKnowledgeCollectionTruncationWarning is bonus coverage (past the DW
-// floor) for the Scope-mandated truncation warning: a collection returning
-// exactly k=retrieval.MaxK docs may hold more than was fetched (the RPC has
-// no paging), and the summary must say so.
-func TestKnowledgeCollectionTruncationWarning(t *testing.T) {
-	hits := make([]*engrampb.Hit, 100)
+// TestDW_3_3_KnowledgeCollectionFullyDrainsBeyondMaxK covers Phase 3's DW-3.3:
+// a collection larger than retrieval.MaxK (the per-page fetch size) must be
+// drained COMPLETELY via offset paging, and the old possible-truncation
+// warning — which fired whenever a single k=MaxK page came back full — must
+// never appear now that paging actually continues past it.
+func TestDW_3_3_KnowledgeCollectionFullyDrainsBeyondMaxK(t *testing.T) {
+	n := retrieval.MaxK*2 + 37 // spans three pages, last one partial
+	hits := make([]*engrampb.KnowledgeHit, n)
 	for i := range hits {
-		hits[i] = knowledgeHit(fmt.Sprintf("kd%03d", i), fmt.Sprintf("Doc %03d", i), "body", "", "")
+		hits[i] = knowledgeHit(fmt.Sprintf("kd%04d", i), fmt.Sprintf("Doc %04d", i), "body", "", "")
 	}
 	stub := &exportStub{
 		pages:       []*engrampb.ExportResponse{{}}, // empty memory export keeps this test focused
 		collections: []*engrampb.CollectionInfo{knowledgeCollectionInfo("curated_notes", true)},
-		docs:        map[string][]*engrampb.Hit{"curated_notes": hits},
+		docs:        map[string][]*engrampb.KnowledgeHit{"curated_notes": hits},
 	}
 	addr := startStub(t, stub)
 	dir := filepath.Join(t.TempDir(), "vault")
@@ -1075,10 +1092,21 @@ func TestKnowledgeCollectionTruncationWarning(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, errW)
 	}
-	if !strings.Contains(out, "warning:") || !strings.Contains(out, "curated_notes") {
-		t.Errorf("output = %q, want a possible-truncation warning naming the collection", out)
+	if strings.Contains(out, "warning:") && strings.Contains(out, "curated_notes") {
+		t.Errorf("output = %q, the no-paging truncation warning must be gone", out)
 	}
-	if !strings.Contains(out, "100 knowledge docs") {
-		t.Errorf("output = %q, want all 100 docs counted despite the truncation warning", out)
+	want := fmt.Sprintf("%d knowledge docs", n)
+	if !strings.Contains(out, want) {
+		t.Errorf("output = %q, want all %d docs counted (%s)", out, n, want)
+	}
+	tree := vaultTree(t, dir)
+	count := 0
+	for rel := range tree {
+		if strings.HasPrefix(rel, "knowledge/") {
+			count++
+		}
+	}
+	if count != n {
+		t.Errorf("wrote %d knowledge notes, want all %d drained", count, n)
 	}
 }

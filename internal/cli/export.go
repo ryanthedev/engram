@@ -125,13 +125,10 @@ func runExport(ctx context.Context, args []string, env Env, out io.Writer) error
 	// render-time error, by contrast, is a local write failure and is left
 	// to propagate like any other write failure in this command.
 	var kstats knowledgeStats
-	docs, warnings, kerr := fetchKnowledgeDocs(ctx, client)
+	docs, kerr := fetchKnowledgeDocs(ctx, client)
 	if kerr != nil {
 		fmt.Fprintf(out, "warning: knowledge fetch failed, skipping the knowledge/ folder: %v\n", kerr)
 	} else {
-		for _, w := range warnings {
-			fmt.Fprintf(out, "warning: %s\n", w)
-		}
 		kstats, err = renderKnowledgeVault(dir, docs, model, refs)
 		if err != nil {
 			return err
