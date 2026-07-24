@@ -13,7 +13,9 @@ Every collection `name` must already be registered in engram (via
 emits — the knowledge index is `dynamic:strict`, so an unmapped field is
 rejected at ingest. arXiv sources emit `categories, published_date,
 update_date, doi, journal_ref, comments, authors`; `github-repos` emits
-`repo, path`; `web-crawl` emits `url`.
+`repo, path`; `web-crawl` emits `url`; `markdown-dir` emits `brain, category,
+note_type, date, path, description` (every one but `brain` and `path` is
+omitted when the note's frontmatter does not carry it).
 
 ### Example `sources.yaml`
 
@@ -40,6 +42,15 @@ collections:
   - name: docs-sites                  # text_field: body ; keyword field: url
     sources:
       - { type: web-crawl, seeds: ["https://docs.astral.sh/uv/"], max_pages: 500 }
+
+  - name: notes                       # must declare: brain, category, note_type,
+    sources:                          # path, description (keyword-ish) and date (date)
+      # One entry may list several note directories; each root is swept on its own.
+      - type: markdown-dir
+        roots:
+          - ~/brains/self             # brain defaults to the base name ("self")
+          - { path: /srv/notes/work, brain: work }
+        exclude: [".trash/**", "recall.md", "README.md"]
 ```
 
 ### Source Type Config Keys
@@ -84,6 +95,62 @@ collections:
    - `delay` (Go duration, optional, default `200ms`): per-host politeness.
    - `max_frontier` (int, optional, default `10 × max_pages`): hard cap on discovered URLs.
    - `user_agent` (string, optional).
+
+5. **`markdown-dir`** (Full Harvest — sweeps)
+   - Walks one or more LOCAL directories of markdown notes and emits one doc per
+     file (`id = <brain>/<path relative to the root>`,
+     `source_version = sha256:<first 16 hex of the file's content hash>` — there
+     is no commit SHA for a local directory). YAML frontmatter is parsed into the
+     collection's fields: `name` becomes the title (falling back to the relative
+     path), `type` becomes `note_type`, and `date`/`description` are carried
+     through; `category` is the note's containing top-level subdirectory. The
+     frontmatter block is stripped from the indexed text. Symlinks and `.git` are
+     skipped. Malformed frontmatter never fails the run; how it degrades depends
+     on whether the block's extent is knowable:
+     - **No block, or an unterminated one** (no leading `---`, or no closing
+       `---`/`...`): there is nothing to strip, so the WHOLE file is the text and
+       the relative path is the title. No fields are recovered.
+     - **A correctly delimited block whose YAML does not parse**: the extent IS
+       known, so the text is the content AFTER the block, exactly as on the
+       successful path — the `---` fence and its YAML are never indexed as prose.
+       Fields are then recovered by a lenient line scan instead of being lost:
+       - Only `name`, `type`, `date` and `description` are recovered (the keys
+         the collection actually uses); any other key is ignored.
+       - A line counts only if it starts at column 0. An indented line is
+         spillover from the previous key's mangled value, not a field.
+       - The value is everything after the FIRST colon, trimmed, further colons
+         included — `name: Raw research: Managed Agents` recovers whole.
+       - One layer of MATCHING surrounding quotes is stripped. Unbalanced,
+         mismatched or lone quote characters are kept verbatim rather than
+         half-stripped or dropped.
+       - A repeated key keeps the FIRST occurrence with a NON-EMPTY value (this
+         diverges from YAML, which keeps the last: in a block already known to
+         be broken, a repeat is usually debris from the first value rather than
+         a real reassignment). An empty value never claims the key, so a bare
+         `type:` above a real `type: gotcha` does not swallow the usable value.
+       - A recovered `date` goes through the same normalization as a parsed one:
+         emitted as a `YYYY-MM-DD` string, or omitted if it will not parse.
+       A recovery is logged at INFO with the number of keys salvaged; a block
+       from which nothing could be recovered is logged at WARN, as before.
+   - `roots` (**required**) is an array whose entries may be either:
+     - a directory-path string, whose `brain` defaults to the directory's base
+       name; or
+     - an object with `path` (string, required) and `brain` (string, optional).
+     A leading `~` IS expanded (this is the only place in the harvester that does
+     so); relative paths are resolved against the process working directory, so
+     prefer absolute ones. A root that does not exist **fails the run** rather
+     than harvesting nothing — an empty harvest would let the sweep delete every
+     document that root had contributed.
+   - `files` (array of globs, optional, default `["**/*.md"]`): supports `**`,
+     matched against the root-relative path, same semantics as `github-repos`.
+   - `exclude` (array of globs, optional, default none): matched against the
+     root-relative path; a pattern ending in `/**` excludes that directory and
+     everything beneath it at any depth (and prunes the walk). Note that
+     `README.md` excludes only the root-level file — use `**/README.md` for all.
+   - `max_file_bytes` (int, optional, default `1048576`): larger/binary files skipped.
+   - Each root gets its OWN mark-and-sweep scope (`markdown-dir:<absolute path>`),
+     so harvesting one brain never sweeps another brain's documents. Two entries
+     pointing at the same directory collapse to one scope — list a directory once.
 
 ### Multi-repo & sweep scope (important)
 
