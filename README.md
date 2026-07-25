@@ -4,7 +4,9 @@ Agent memory platform — hybrid retrieval (OpenSearch **BM25 + kNN + RRF**), ti
 (**working / episodic / semantic / experience / graph**), async **LLM-gated bi-temporal** writes,
 and multi-agent **provenance-as-ACL**.
 
-**Status:** pre-build. Walking-skeleton plan approved; Phases 0–2 next.
+**Status:** built and running. The gRPC service, the `engram` CLI, and the MCP server are in daily
+local use — the MCP surface backs a live Claude Code client over a compose stack. Deploy targets:
+local compose (`deploy/local`), LocalStack, and AWS (`deploy/aws`).
 
 ## Why
 
@@ -19,6 +21,71 @@ base, and shared memory across agents with access control and concurrent-write s
   deployment topology.
 - **API surface reference:** [`docs/api.md`](docs/api.md) — gRPC RPCs, the `engram` CLI, MCP
   tools, the harvester, auth/tokens, config, and HTTP endpoints.
+- **Runbooks:** [`docs/runbooks/`](docs/runbooks/) — worker lag, DLQ, node failure, snapshot
+  restore, secrets rotation, rollback, and local-stack restart durability on macOS.
+
+## MCP
+
+Ten tools over stdio: `memory_ingest` / `memory_search` / `memory_read` / `memory_status`, and
+`knowledge_ingest` / `knowledge_search` / `knowledge_collections` / `knowledge_create_collection` /
+`knowledge_update_collection` / `knowledge_delete`.
+
+Search results are **text-only** — three tab-separated columns (id, date, matched text) under a
+source header, ripgrep-shaped. The id is self-addressing (`<source>:<id>`); pass it to
+`memory_read` for the full record. `memory_read` is the one tool that still returns structured
+JSON, because it returns a record to parse rather than a list to scan.
+
+The client needs two environment variables:
+
+```
+ENGRAM_ADDR=localhost:7071   # gRPC address of the server
+ENGRAM_TOKEN=egm_…           # bearer token, minted per store
+```
+
+**`ENGRAM_ADDR` is not optional in practice.** `engram-mcp` falls back to `localhost:7070` when it
+is unset, and the local compose stack listens on **7071** — so an unset address silently reaches a
+different server whose token store has never seen your token, and every call fails as
+`Unauthenticated`. Tokens are per-store: mint against the OpenSearch backing the server you intend
+to talk to (`engram token create --url http://localhost:9201` for the compose stack), not the one
+you happen to have open.
+
+## Stack
+
+Go · OpenSearch 3.1 (pinned; Faiss HNSW kNN + BM25 + RRF) · **BGE-M3** 1024-dim embeddings ·
+gRPC/protobuf · Neo4j/FalkorDB later (only for >2-hop graph traversal).
+
+Embeddings run out-of-process. The default compose stack uses a deterministic **fake embedder** —
+fine for tests and `make e2e`, useless for real retrieval. Real vectors come from
+`deploy/local/embed-real/run-host.sh`, which runs `BAAI/bge-m3` **natively on the host** with
+`EMBED_DEVICE=mps` and proxies it into the containers: macOS passes no Metal into the podman VM, so
+an in-container embedder can only run CPU and gets OOM-killed in a 4 GB VM. Point the server at it
+with `-embed-url`.
+
+## Layout
+
+```
+cmd/
+  engram-server/     # the service entrypoint
+  engram/            # CLI: search, ingest, status, export, purge, audit,
+                     #      plus token / acl / quarantine / knowledge admin
+  engram-mcp/        # MCP server over stdio
+  engram-harvester/  # knowledge ingestion (arXiv, markdown dirs)
+  engram-embed-server/, engram-extract-shim/, engram-eval/, engram-deploy/, …
+internal/
+  memory/            # tier models + record schemas
+  retrieval/         # hybrid search (BM25 + kNN + RRF)
+  ingest/ enrich/    # async write, extraction, reconciliation, embedding backfill
+  experience/ graph/ # experience tier + incremental entity/edge graph
+  knowledge/         # collections, fragments, vault export
+  auth/ authgrpc/    # token barricade + gRPC interceptor
+  acl/ knowledgeauth/# provenance-as-ACL + per-collection RBAC
+  store/             # OpenSearch client + index templates
+  api/ server/       # gRPC service
+  mcp/               # MCP tool surface + response rendering
+api/proto            # protobuf contracts
+deploy/local, deploy/aws
+docs/vision/         # the roadmap website
+```
 
 ## Where this is going
 
@@ -28,25 +95,3 @@ base, and shared memory across agents with access control and concurrent-write s
 - **Research (the grounding):** [`.code-foundations/research/`](.code-foundations/research/) —
   `REFERENCE-ARCHITECTURE.md`, `GREENFIELD-BUILD-PLAN.md` (deep-reads of Zep, Mem0, Letta, A-MEM,
   GraphRAG, MemOS, Mem-α, MUSE, Collaborative Memory, G-Memory, GeAR …).
-
-## Stack
-
-Go · OpenSearch 3.1 (pinned; Faiss HNSW kNN + BM25 + RRF) · BGE-M3 1024-dim embeddings (co-located) ·
-gRPC/protobuf · Neo4j/FalkorDB later (only for >2-hop graph traversal).
-
-## Layout
-
-```
-cmd/engramd        # service entrypoint
-internal/
-  memory/          # tier models + record schemas
-  retrieval/       # hybrid search (BM25 + kNN + RRF)
-  ingest/          # async write + extraction + reconciliation
-  acl/             # provenance-as-ACL (Phase 4)
-  graph/           # incremental entity/edge graph (Phase 5)
-  store/           # OpenSearch client + index templates
-  api/             # gRPC service
-api/proto          # protobuf contracts
-deploy/            # cluster + service deploy
-docs/vision/       # the roadmap website
-```
