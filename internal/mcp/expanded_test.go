@@ -9,6 +9,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -44,27 +45,34 @@ func TestDW_6_2_SearchResultRendersExpandedSection(t *testing.T) {
 	if len(hits) != 1 || len(expanded) != 1 {
 		t.Fatalf("hits/expanded = %d/%d, want 1/1 — the blocks must stay separate", len(hits), len(expanded))
 	}
-	if h, _ := hits[0].(map[string]any); h["source"] == "graph" {
+	// The tier now travels inside the self-addressing id ("<source>:<id>"),
+	// so a graph hit is identifiable by its id prefix rather than a field.
+	// Rows are compact lines; the tier travels in the self-addressing id, so a
+	// graph hit is identifiable by its first column's prefix.
+	if h := fmt.Sprint(hits[0]); strings.HasPrefix(h, "graph:") {
 		t.Fatalf("a graph hit was rendered into the matched hits array: %v", h)
 	}
-	if e, _ := expanded[0].(map[string]any); e["source"] != "graph" || e["id"] != "g1" {
-		t.Fatalf("expanded[0] = %v, want the graph hit g1", e)
+	if e := fmt.Sprint(expanded[0]); !strings.HasPrefix(e, "graph:g1\t") {
+		t.Fatalf("expanded[0] = %v, want the graph hit graph:g1", e)
 	}
 
 	// Text: the compact-line block an agent actually reads. The expansion must
 	// sit BELOW a header that says what it is, not silently among the matches.
 	lines := strings.Split(text, "\n")
-	if len(lines) != 3 {
-		t.Fatalf("compact lines = %d, want 3 (1 matched, 1 header, 1 expanded):\n%s", len(lines), text)
+	if len(lines) != 4 {
+		t.Fatalf("compact lines = %d, want 4 (block header, 1 matched, graph header, 1 expanded):\n%s", len(lines), text)
 	}
-	if !strings.HasPrefix(lines[0], "s1\tsemantic\t") {
-		t.Errorf("line 0 = %q, want the matched hit first", lines[0])
+	if !strings.HasPrefix(lines[0], "memory (") {
+		t.Errorf("line 0 = %q, want the memory block header", lines[0])
 	}
-	if !strings.Contains(lines[1], "expanded") || !strings.Contains(lines[1], "not counted against k") {
-		t.Errorf("line 1 = %q, want a header naming the block and stating it is not counted against k", lines[1])
+	if !strings.HasPrefix(lines[1], "semantic:s1\t") {
+		t.Errorf("line 1 = %q, want the matched hit under the block header", lines[1])
 	}
-	if !strings.HasPrefix(lines[2], "g1\tgraph\t") {
-		t.Errorf("line 2 = %q, want the graph expansion below the header", lines[2])
+	if !strings.HasPrefix(lines[2], "graph (") || !strings.Contains(lines[2], "not counted against k") {
+		t.Errorf("line 2 = %q, want a header naming the block and stating it is not counted against k", lines[2])
+	}
+	if !strings.HasPrefix(lines[3], "graph:g1\t") {
+		t.Errorf("line 3 = %q, want the graph expansion below the header", lines[3])
 	}
 }
 
@@ -226,12 +234,13 @@ func TestExpandedHeaderReportsDroppedExpansions(t *testing.T) {
 		Expanded:        []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 5)},
 		ExpandedOmitted: 3,
 	}
+	// block header, hit, graph header, expansion
 	lines := strings.Split(compactLines(renderSearchResult(result)), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("lines = %d, want 3", len(lines))
+	if len(lines) != 4 {
+		t.Fatalf("lines = %d, want 4: %q", len(lines), lines)
 	}
-	if !strings.Contains(lines[1], "3 more dropped") {
-		t.Errorf("header = %q, want it to report the 3 dropped expansions", lines[1])
+	if !strings.Contains(lines[2], "3 more dropped") {
+		t.Errorf("header = %q, want it to report the 3 dropped expansions", lines[2])
 	}
 }
 

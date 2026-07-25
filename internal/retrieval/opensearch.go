@@ -677,12 +677,17 @@ type queryOpts struct {
 	// — 0 here means highlighting off. highlightPreTag/highlightPostTag wrap
 	// fragment matches; both empty means markers off (the default — never a
 	// hardcoded marker pair).
+	// sourceExcludes names stored fields to drop from _source before the
+	// response leaves the cluster — bytes never fetched, not bytes fetched
+	// and discarded. Appended to the always-on embedding excludes, so a nil
+	// slice (every memory caller) changes nothing.
 	offset            int
 	trackTotalHits    bool
 	fragmentSize      int
 	numberOfFragments int
 	highlightPreTag   string
 	highlightPostTag  string
+	sourceExcludes    []string
 }
 
 // buildQuery constructs the OpenSearch request body for one tier's search.
@@ -753,6 +758,9 @@ func buildQuery(opts queryOpts) (body []byte, usePipeline bool) {
 			}},
 		}
 	}
+	// Caller-supplied excludes land last so the unconditional embedding
+	// suppression above can never be reordered out from under a golden test.
+	excludes = append(excludes, opts.sourceExcludes...)
 	query["_source"] = map[string]any{"excludes": excludes}
 	// Paging (from) and the exact-total request (track_total_hits) are both
 	// zero-value-off: a memory caller leaves offset=0/trackTotalHits=false

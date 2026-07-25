@@ -7,7 +7,7 @@ package mcp
 
 import (
 	"context"
-	"reflect"
+	"fmt"
 	"testing"
 )
 
@@ -42,9 +42,10 @@ func TestKnowledgeSearchToolForwardsFullBody(t *testing.T) {
 }
 
 // TestKnowledgeSearchToolEmitsCollectionAndFragments: the tool result's hits
-// carry the pinned {id, score, collection, fields_json, fragments[]} shape —
-// a real collection key (never a repurposed "source") and a real fragments
-// array.
+// render to the minimal {id, date, text} row shape memory hits use, with the
+// collection folded into a self-addressing id and the highlight fragments
+// joined into the row's text — so one line format spans both sources and the
+// structured payload carries exactly what the text block shows.
 func TestKnowledgeSearchToolEmitsCollectionAndFragments(t *testing.T) {
 	b := &knowledgeFake{searchHits: []KnowledgeHit{{
 		ID: "d1", Score: 2.0, Collection: "papers",
@@ -55,18 +56,12 @@ func TestKnowledgeSearchToolEmitsCollectionAndFragments(t *testing.T) {
 	c.call("initialize", nil)
 
 	result := callTool(t, c, ToolKnowledgeSearch, map[string]any{"collection": "papers", "query": "q"})
-	hit := structured(t, result)["hits"].([]any)[0].(map[string]any)
-	if hit["collection"] != "papers" {
-		t.Errorf(`hit["collection"] = %v, want "papers"`, hit["collection"])
+	row := fmt.Sprint(searchLines(t, result)["hits"].([]any)[0])
+	if want := "papers:d1\t\tfrag one ¶ frag two"; row != want {
+		t.Errorf("row = %q, want %q (id, empty date, joined fragments)", row, want)
 	}
-	if _, hasSource := hit["source"]; hasSource {
-		t.Error("knowledge hit must not carry a source key")
-	}
-	if !reflect.DeepEqual(hit["fragments"], []any{"frag one", "frag two"}) {
-		t.Errorf("fragments = %v, want [frag one, frag two]", hit["fragments"])
-	}
-	if hit["fields_json"] != `{"title":"T"}` {
-		t.Errorf("fields_json = %v", hit["fields_json"])
+	if _, present := result["structuredContent"]; present {
+		t.Error("knowledge_search must be text-only: a structuredContent copy is what clients render instead of the lines")
 	}
 }
 
@@ -107,5 +102,35 @@ func TestMemoryReadGraphStillShortCircuits(t *testing.T) {
 	}
 	if b.lastRead.id != "" {
 		t.Error("graph must short-circuit before the backend")
+	}
+}
+
+// TestMemoryReadAcceptsSelfAddressingID: a search row's id ("<source>:<id>")
+// is handed straight back to memory_read with no source argument, and splits
+// on the FIRST colon only — knowledge doc ids routinely contain slashes and
+// colons of their own, so a naive split would truncate them. An explicit
+// source still wins, keeping every pre-existing caller valid.
+func TestMemoryReadAcceptsSelfAddressingID(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		args            map[string]any
+		wantID, wantSrc string
+	}{
+		{"memory row", map[string]any{"id": "episodic:ep-1"}, "ep-1", "episodic"},
+		{"knowledge row with slashes", map[string]any{"id": "notes:self/thegrid/a.md"}, "self/thegrid/a.md", "notes"},
+		{"doc id containing a colon", map[string]any{"id": "notes:self/a:b.md"}, "self/a:b.md", "notes"},
+		{"explicit source still wins", map[string]any{"id": "raw:id", "source": "episodic"}, "raw:id", "episodic"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &knowledgeFake{}
+			c := startServer(t, b)
+			c.call("initialize", nil)
+			if result := callTool(t, c, ToolRead, tc.args); result["isError"] != false {
+				t.Fatalf("isError = %v: %v", result["isError"], result)
+			}
+			if b.lastReadID != tc.wantID || b.lastReadSource != tc.wantSrc {
+				t.Errorf("backend got (%q, %q), want (%q, %q)", b.lastReadID, b.lastReadSource, tc.wantID, tc.wantSrc)
+			}
+		})
 	}
 }

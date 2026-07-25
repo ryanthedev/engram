@@ -319,8 +319,7 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	// via memory_read(id, <collection>) — see the knowledge drill-down.)
 	result := packAndSpill(res.Hits, memoryFacetFields, ToolSearch)
 	result = packExpanded(result, res.Expanded, searchByteBudget())
-	rendered := renderSearchResult(result)
-	return toolResultWithText(rendered, compactLines(rendered)), nil
+	return toolResultLines(compactLines(renderSearchResult(result))), nil
 }
 
 // packAndSpill budget-packs hits (facet hints computed over facetFields) and,
@@ -361,8 +360,19 @@ func (s *Server) callRead(ctx context.Context, raw json.RawMessage) (any, *rpcEr
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: "invalid memory_read arguments"}
 	}
+	// Search rows are self-addressing ("<source>:<id>"), so accept that form
+	// whole and split it here rather than making the caller take it apart.
+	// An explicit source argument still wins, and a bare id with a separate
+	// source keeps working unchanged — both older callers and the tool schema
+	// stay valid. Split on the FIRST colon only: memory ids are opaque and
+	// knowledge doc ids routinely contain slashes and colons of their own.
+	if args.Source == "" {
+		if prefix, rest, found := strings.Cut(args.ID, ":"); found && prefix != "" && rest != "" {
+			args.Source, args.ID = prefix, rest
+		}
+	}
 	if args.ID == "" || args.Source == "" {
-		return toolError("memory_read requires non-empty id and source"), nil
+		return toolError("memory_read requires non-empty id and source (or a single \"<source>:<id>\" id as search returns)"), nil
 	}
 	if args.Source == "graph" {
 		return toolError("graph records have no drill-down: the memory_search result already carries the full statement"), nil
@@ -447,7 +457,12 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 	// memory_search, which has no total concept) — see searchResult.Total.
 	result := packAndSpill(hits, nil, ToolKnowledgeSearch)
 	result.Total = total
-	return toolResult(result), nil
+	// Same render path as memory_search: one line format across both sources,
+	// and the structured payload carries the SAME minimal hits the text block
+	// shows. Emitting the fat form in structuredContent while the text block
+	// showed compact lines is what made the render savings invisible — a
+	// client that consumes structuredContent got none of them.
+	return toolResultLines(compactLines(renderKnowledgeResult(args.Collection, result))), nil
 }
 
 func (s *Server) callKnowledgeCollections(ctx context.Context) (any, *rpcError) {
@@ -511,6 +526,27 @@ func (s *Server) callUpdateCollection(ctx context.Context, raw json.RawMessage) 
 		return toolError(fmt.Sprintf("update collection failed: %v", err)), nil
 	}
 	return toolResult(map[string]any{"updated": spec.Name}), nil
+}
+
+// toolResultLines wraps a search rendering as a TEXT-ONLY MCP tool result:
+// one content block holding the compact lines, and deliberately NO
+// structuredContent.
+//
+// The omission is the whole point. A result carrying both surfaces lets the
+// client choose, and clients that consume structuredContent render the JSON —
+// so the compact lines were generated and discarded, and every byte the
+// rendering saved was paid anyway in the JSON copy alongside it. Shipping one
+// surface is the only way the line format is what the caller actually reads.
+//
+// Search is the one tool family where this trade is right: its result is a
+// scan-and-decide list, not a record to parse. Every other tool keeps
+// toolResult's both-ways shape — memory_read in particular returns a record
+// whose fields a caller genuinely consumes as data.
+func toolResultLines(text string) map[string]any {
+	return map[string]any{
+		"content": []any{map[string]any{"type": "text", "text": text}},
+		"isError": false,
+	}
 }
 
 // toolResult wraps a structured payload as an MCP tool result: a text content

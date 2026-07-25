@@ -229,8 +229,7 @@ func TestDW_3_5_ConformanceCallTool(t *testing.T) {
 		"arguments": map[string]any{"query": "deploy key", "k": 5},
 	})
 	sres, _ := srch["result"].(map[string]any)
-	scon, _ := sres["structuredContent"].(map[string]any)
-	hits, _ := scon["hits"].([]any)
+	hits, _ := searchLines(t, sres)["hits"].([]any)
 	if len(hits) != 1 {
 		t.Fatalf("search returned %d hits, want 1", len(hits))
 	}

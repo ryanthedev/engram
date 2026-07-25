@@ -47,6 +47,30 @@ var baseDocProperties = map[string]string{
 	"harvested_at":   "date",
 }
 
+// SearchProvenanceExcludes are the envelope fields a knowledge SEARCH hit
+// never needs: the harvest bookkeeping every stored document carries but no
+// caller reads back off a result. Derived from baseDocProperties minus
+// "title" — the one envelope field callers scan results by — so the two can
+// never drift as the envelope grows. Sorted, because buildQuery's output is
+// pinned by golden-byte tests and Go map iteration order is random.
+//
+// Applied at query time via _source.excludes, so the bytes never leave the
+// cluster. Deliberately NOT applied to a full_body search: the vault exporter
+// (internal/cli/vaultknowledge.go) drains whole documents through that path
+// and reads these fields back. GetDocument is likewise untouched — it returns
+// the full stored _source by contract.
+func SearchProvenanceExcludes() []string {
+	out := make([]string, 0, len(baseDocProperties)-1)
+	for name := range baseDocProperties {
+		if name == "title" {
+			continue
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // allowedFieldTypes is the FieldSpec.Type vocabulary.
 var allowedFieldTypes = map[string]bool{
 	"text": true, "keyword": true, "date": true, "boolean": true,
