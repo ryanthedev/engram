@@ -58,6 +58,7 @@ func main() {
 	embedRevision := flag.String("embed-revision", "unpinned-dev", "embedding model revision (D15)")
 	enrichInterval := flag.Duration("enrich-interval", 2*time.Second, "embedding-enrichment poll interval")
 	enrichBatch := flag.Int("enrich-batch", 50, "embedding-enrichment batch size")
+	embedTimeout := flag.Duration("embed-timeout", 5*time.Minute, "per-request budget for the embedding service")
 	extractURL := flag.String("extract-url", "", "OpenAI-compatible extraction endpoint base URL (e.g. https://api.openai.com/v1); empty uses the deterministic rule extractor")
 	extractModel := flag.String("extract-model", ingest.DefaultPricing.Model, "extraction model id (the pinned cheap model)")
 	extractorVersion := flag.String("extractor-version", "v1", "extraction pipeline version (ledger key component, D13)")
@@ -96,7 +97,16 @@ func main() {
 
 	var embedder embed.Embedder
 	if *embedURL != "" {
-		embedder = embed.NewHTTPEmbedder(httpClient, *embedURL, embed.ModelInfo{Model: *embedModel, Revision: *embedRevision, Dim: store.EmbeddingDim})
+		// A separate client on purpose: httpClient carries store.DefaultTimeout,
+		// which is sized for OpenSearch round-trips, and model inference is not
+		// that shape. A full -enrich-batch of long documents can take minutes,
+		// and because the enrichment scans are oldest-first, a batch that
+		// cannot finish inside the budget is re-fetched every tick forever —
+		// the backlog deadlocks rather than merely crawling. The budget belongs
+		// to the embedder, so it is tunable without loosening every OpenSearch
+		// call in the process.
+		embedClient := &http.Client{Timeout: *embedTimeout}
+		embedder = embed.NewHTTPEmbedder(embedClient, *embedURL, embed.ModelInfo{Model: *embedModel, Revision: *embedRevision, Dim: store.EmbeddingDim})
 	} else {
 		embedder = embed.NewFakeEmbedder(store.EmbeddingDim, nil)
 	}

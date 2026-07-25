@@ -106,7 +106,11 @@ func TestParseHitsDW_2_5_NoHighlightKeyInert(t *testing.T) {
 
 // TestKnowledgeSearchDW_2_1_DefaultRequestsFragments: the default search
 // asks OpenSearch for highlighting sized by the collection's FragmentSizing
-// fallback (240/3 when unset) and excludes the text field from _source.
+// fallback (240/3 when unset) and excludes from _source the embeddings, the
+// text field (fragments replace it), and the harvest provenance envelope —
+// bookkeeping no search caller reads back off a hit. Order is significant:
+// the unconditional embedding excludes come first, then the text field, then
+// the sorted provenance set (store.SearchProvenanceExcludes).
 func TestKnowledgeSearchDW_2_1_DefaultRequestsFragments(t *testing.T) {
 	srv, captured := newFakeKnowledgeServer(t, func(string) (int, any) {
 		return http.StatusOK, knowledgeHitsBody(0)
@@ -118,7 +122,8 @@ func TestKnowledgeSearchDW_2_1_DefaultRequestsFragments(t *testing.T) {
 	raw := captured()[0].raw
 	for _, want := range []string{
 		`"fragment_size":240`, `"number_of_fragments":3`,
-		`"excludes":["text_embedding","fact_embedding","abstract"]`,
+		`"excludes":["text_embedding","fact_embedding","abstract",` +
+			`"collection","harvest_id","harvested_at","source","source_version"]`,
 	} {
 		if !strings.Contains(raw, want) {
 			t.Errorf("default search request missing %s: %s", want, raw)
@@ -153,6 +158,14 @@ func TestKnowledgeSearchPerCollectionSizingAndTags(t *testing.T) {
 // TestKnowledgeSearchDW_2_3_FullBodySkipsHighlight: fullBody=true restores
 // the pre-fragment request byte-for-byte — no highlight clause, text field
 // kept in _source — which IS today's whole-body behavior.
+//
+// The excludes assertion below is load-bearing beyond the text field: it also
+// pins that a full-body search carries NO harvest-provenance excludes. The
+// vault exporter (internal/cli/vaultknowledge.go) drains every collection
+// through this path and reads title/body/memory_ref back out of fields_json,
+// and its decoder degrades to an empty doc rather than erroring — so leaking
+// the default search's excludes into this path would rewrite the user's vault
+// with empty notes and exit 0. Silent. Keep this assertion exact.
 func TestKnowledgeSearchDW_2_3_FullBodySkipsHighlight(t *testing.T) {
 	srv, captured := newFakeKnowledgeServer(t, func(string) (int, any) {
 		return http.StatusOK, knowledgeHitsBody(0)

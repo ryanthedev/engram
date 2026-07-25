@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -656,6 +657,53 @@ func TestMetaDocRoundTripsFragmentSizing(t *testing.T) {
 	for _, key := range []string{"fragment_size", "number_of_fragments", "highlight_pre_tag", "highlight_post_tag"} {
 		if strings.Contains(string(rawPlain), key) {
 			t.Errorf("unset knob %q serialized: %s", key, rawPlain)
+		}
+	}
+}
+
+// TestSearchProvenanceExcludesNeverDropsReadFields pins the two properties
+// the knowledge-search projection depends on.
+//
+// (1) It never excludes a field a downstream consumer reads back off a hit.
+// The vault exporter (internal/cli/vaultknowledge.go) decodes title, the
+// collection's text field, memory_ref and memory_ref_name out of fields_json
+// — and its decoder degrades to an EMPTY doc rather than erroring, so an
+// over-broad exclude list would rewrite a user's Obsidian vault with empty
+// notes and exit 0. Silent data loss, caught by nothing else.
+//
+// (2) It is derived from baseDocProperties rather than hand-listed, so the
+// two can never drift as the envelope grows — and it is sorted, because
+// buildQuery's output is pinned by golden-byte tests and Go map iteration
+// order is random.
+func TestSearchProvenanceExcludesNeverDropsReadFields(t *testing.T) {
+	got := SearchProvenanceExcludes()
+
+	for _, readByConsumers := range []string{"title", "text", "memory_ref", "memory_ref_name"} {
+		for _, excluded := range got {
+			if excluded == readByConsumers {
+				t.Errorf("SearchProvenanceExcludes() drops %q, which a downstream consumer reads back off a hit", readByConsumers)
+			}
+		}
+	}
+
+	if !sort.StringsAreSorted(got) {
+		t.Errorf("SearchProvenanceExcludes() = %v, want sorted (golden-byte tests pin buildQuery output)", got)
+	}
+
+	// Derived, not hand-listed: exactly baseDocProperties minus title.
+	want := make([]string, 0, len(baseDocProperties))
+	for name := range baseDocProperties {
+		if name != "title" {
+			want = append(want, name)
+		}
+	}
+	sort.Strings(want)
+	if len(got) != len(want) {
+		t.Fatalf("SearchProvenanceExcludes() = %v, want %v (baseDocProperties minus title)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("SearchProvenanceExcludes()[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
 }

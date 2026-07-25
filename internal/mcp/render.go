@@ -3,7 +3,6 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"unicode"
 )
@@ -14,30 +13,42 @@ import (
 // A named constant per the plan (Produces), not a magic number.
 const leadSnippetRunes = 200
 
-// hitDisplayFields maps each hit source to the fields (beyond id/source/
-// score/gist) a compact-line result exposes, in header order. Episodic's fat
-// `text` is deliberately absent here — it becomes the gist (truncated),
-// never a raw display field. Mirrors internal/retrieval/opensearch.go's
-// allowedFields, minus the field that became the gist for each source.
-var hitDisplayFields = map[string][]string{
-	"episodic": {"kind", "occurred_at", "event_id"},
-	"semantic": {"subject", "predicate", "object", "valid_at"},
-	"graph":    {"subject", "predicate", "object", "hop"},
+// renderKnowledgeResult converts a budget-packed knowledge search into the
+// same rendered envelope memory produces, so both tools emit one line format.
+func renderKnowledgeResult(collection string, result searchResult[KnowledgeHit]) renderedResult {
+	return renderedResult{
+		Label:         "knowledge/" + collection,
+		Total:         result.Total,
+		Hits:          renderKnowledgeHits(collection, result.Hits),
+		Omitted:       result.Omitted,
+		OmittedFacets: result.OmittedFacets,
+		Hint:          result.Hint,
+		OverflowPath:  result.OverflowPath,
+	}
 }
 
-// renderedHit is one memory_search result: just enough to decide whether the
-// full record (fetched via Phase 2's memory_read) is worth the tokens. ID +
-// Source together are the addressing contract memory_read consumes, passed
-// through from the packed Hit unmodified so they always round-trip. Fields
-// is already the source's display allowlist, un-nested from fields_json into
-// a real object (a free win: it was already necessary to compute Gist from
-// parsed fields).
+// renderedHit is one search result — memory or knowledge — in the minimal
+// form a caller needs to decide whether the full record is worth the tokens.
+// Three fields, deliberately: an address, a date, and the matched text. The
+// full record is one memory_read away.
 type renderedHit struct {
-	ID     string         `json:"id"`
-	Source string         `json:"source"`
-	Score  float64        `json:"score"`
-	Gist   string         `json:"gist"`
-	Fields map[string]any `json:"fields,omitempty"`
+	// ID is self-addressing: "<source>:<record id>" for a memory tier,
+	// "<collection>:<doc id>" for knowledge. One field rather than an
+	// (id, source) pair because the source cannot live in a block header:
+	// the memory block mixes tiers in one ranked list, and memory_read needs
+	// the EXACT tier — "memory" is not a valid source. A caller hands this
+	// string straight back to memory_read, which splits it itself.
+	ID string `json:"id"`
+	// Date is the hit's own date (YYYY-MM-DD), not the harvest date: the one
+	// signal a text excerpt cannot carry. Empty when the record has none —
+	// graph hits have no date field at all, and not every harvested document
+	// declares one.
+	Date string `json:"date,omitempty"`
+	// Text is the whole payload: an episodic lead snippet, a semantic/graph
+	// statement, or a knowledge document's matched fragments. Everything else
+	// a record holds is a memory_read away, deliberately — search decides
+	// "drill or not", it does not answer.
+	Text string `json:"text"`
 }
 
 // renderedResult is the rendered memory_search envelope: mirrors
@@ -47,6 +58,12 @@ type renderedHit struct {
 // graph expansions that rode along beside the matched hits, present only when
 // there are any (DW-6.3) and never merged into Hits (DW-6.2).
 type renderedResult struct {
+	// Label names the block this result renders as — "memory" for the fused
+	// memory tiers, "knowledge/<collection>" for one collection.
+	Label string `json:"label"`
+	// Total is the exact match count when the backend reports one (knowledge
+	// tracks it; memory does not), so a block header can say "3 of 9".
+	Total           int64             `json:"total,omitempty"`
 	Hits            []renderedHit     `json:"hits"`
 	Omitted         int               `json:"omitted,omitempty"`
 	OmittedFacets   map[string]string `json:"omitted_facets,omitempty"`
@@ -63,6 +80,8 @@ type renderedResult struct {
 // stays byte-identical after this call.
 func renderSearchResult(result searchResult[Hit]) renderedResult {
 	return renderedResult{
+		Label:           "memory",
+		Total:           result.Total,
 		Hits:            renderHits(result.Hits),
 		Omitted:         result.Omitted,
 		OmittedFacets:   result.OmittedFacets,
@@ -86,19 +105,77 @@ func renderHits(hits []Hit) []renderedHit {
 	return out
 }
 
-// renderHit converts one packed Hit into its compact-line result: id+source
-// pass through unmodified (the round-trippable addressing pair), Fields is
-// parsed and projected to the source's display allowlist, and Gist is the
-// source-appropriate one-line summary.
+// renderHit converts one packed memory Hit into its minimal line form,
+// folding the tier into the id so the row is self-addressing.
 func renderHit(h Hit) renderedHit {
 	fields := parseFields(h.Fields)
 	return renderedHit{
-		ID:     h.ID,
-		Source: h.Source,
-		Score:  h.Score,
-		Gist:   gistFor(h.Source, fields),
-		Fields: displayFields(h.Source, fields),
+		ID:   h.Source + ":" + h.ID,
+		Date: dateOf(fields),
+		Text: gistFor(h.Source, fields),
 	}
+}
+
+// renderKnowledgeHits renders one block of knowledge hits, always returning a
+// non-nil slice so an empty block marshals as `[]`, never `null`.
+func renderKnowledgeHits(collection string, hits []KnowledgeHit) []renderedHit {
+	out := make([]renderedHit, len(hits))
+	for i, h := range hits {
+		out[i] = renderKnowledgeHit(collection, h)
+	}
+	return out
+}
+
+// renderKnowledgeHit converts one knowledge hit to the same minimal shape a
+// memory hit renders to, so one line format spans both sources. Its Text is
+// the joined highlight fragments — the matched excerpts that already replaced
+// the document body at query time. A filter-only search matches no terms and
+// so carries no fragments; it falls back to the document title rather than
+// rendering a blank row.
+func renderKnowledgeHit(collection string, h KnowledgeHit) renderedHit {
+	fields := parseFields(h.Fields)
+	text := normalizeToSingleLine(strings.Join(h.Fragments, fragmentSep))
+	if text == "" {
+		title, _ := fields["title"].(string)
+		text = normalizeToSingleLine(title)
+	}
+	return renderedHit{
+		ID:   collection + ":" + h.ID,
+		Date: dateOf(fields),
+		Text: text,
+	}
+}
+
+// fragmentSep joins a hit's separate highlight fragments into one line. A
+// pilcrow, not a space: the fragments are discontiguous excerpts, and running
+// them together would read as continuous prose that the document never
+// contained.
+const fragmentSep = " ¶ "
+
+// dateFieldNames are the field names dateOf will accept as a hit's date, in
+// precedence order. Memory tiers are fixed (occurred_at/valid_at); knowledge
+// collections declare their own vocabulary at runtime, so the knowledge names
+// here are a convention, not a contract — a collection that dates its
+// documents under some other key renders with an empty date rather than a
+// wrong one.
+var dateFieldNames = []string{"occurred_at", "valid_at", "date", "published", "created_at", "updated_at"}
+
+// dateOf extracts a hit's date as YYYY-MM-DD. It reads the first populated
+// entry of dateFieldNames and truncates to the date component — a timestamp's
+// time-of-day is noise at search-scan altitude. Absent or non-string values
+// yield "", which renders as an empty column rather than a fabricated date.
+func dateOf(fields map[string]any) string {
+	for _, name := range dateFieldNames {
+		v, ok := fields[name].(string)
+		if !ok || v == "" {
+			continue
+		}
+		if len(v) >= 10 {
+			return v[:10]
+		}
+		return v
+	}
+	return ""
 }
 
 // parseFields unmarshals a hit's fields_json into a map, tolerating empty or
@@ -132,27 +209,6 @@ func gistFor(source string, fields map[string]any) string {
 	}
 	text, _ := fields["text"].(string)
 	return leadSnippet(text, leadSnippetRunes)
-}
-
-// displayFields projects fields to source's key display fields (hitDisplayFields),
-// dropping absent/nil entries rather than inventing them. Returns nil when
-// there is nothing to show (unregistered source, or no fields present) so it
-// marshals as an absent/omitted field, not an empty object.
-func displayFields(source string, fields map[string]any) map[string]any {
-	keys := hitDisplayFields[source]
-	if len(keys) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(keys))
-	for _, k := range keys {
-		if v, present := fields[k]; present && v != nil {
-			out[k] = v
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // normalizeToSingleLine collapses s to one line: newlines, tabs, and every
@@ -197,13 +253,6 @@ func leadSnippet(text string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "…"
 }
 
-// formatScore renders a score as a fixed 3-decimal string: stable and
-// compact regardless of the float's actual precision, so repeated renders of
-// the same score are byte-identical.
-func formatScore(score float64) string {
-	return strconv.FormatFloat(score, 'f', 3, 64)
-}
-
 // formatHitLine renders one renderedHit as a single tab-separated line:
 // id, source, score, gist, then any key display fields as key=value tokens.
 // id and source are copied through verbatim; every other value passes
@@ -211,15 +260,22 @@ func formatScore(score float64) string {
 // the first two tab-separated tokens are always exactly (id, source) with no
 // possible ambiguity from hit content (DW-1.4).
 func formatHitLine(h renderedHit) string {
-	parts := []string{h.ID, h.Source, formatScore(h.Score), h.Gist}
-	for _, k := range hitDisplayFields[h.Source] {
-		v, ok := h.Fields[k]
-		if !ok {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s=%s", k, normalizeToSingleLine(fmt.Sprintf("%v", v))))
-	}
-	return strings.Join(parts, "\t")
+	// Three tab-separated columns, grep's shape: address, date, matched text.
+	// Score is deliberately absent — the list is already ranked, so position
+	// carries it, and RRF's 1/(60+rank) renders as a column of near-identical
+	// numbers that reads as a bug. The date column is emitted even when empty
+	// so column positions never shift between rows.
+	//
+	// ID is sanitized here, not just the content: knowledge document ids are
+	// harvester-supplied (store/knowledge.go only checks non-empty), so a tab
+	// inside one would otherwise split a row into phantom columns. Memory ids
+	// are server-generated and already safe; this costs nothing and closes the
+	// case for both.
+	return strings.Join([]string{
+		normalizeToSingleLine(h.ID),
+		h.Date,
+		h.Text,
+	}, "\t")
 }
 
 // compactLines renders a renderedResult's full memory_search text-content
@@ -236,23 +292,45 @@ func formatHitLine(h renderedHit) string {
 // the block unambiguous, and it is emitted only when expansions survived the
 // budget (DW-6.3).
 func compactLines(r renderedResult) string {
-	lines := make([]string, 0, len(r.Hits)+len(r.Expanded)+2)
+	lines := make([]string, 0, len(r.Hits)+len(r.Expanded)+3)
+	lines = append(lines, blockHeader(r.Label, len(r.Hits), r.Total))
 	for _, h := range r.Hits {
 		lines = append(lines, formatHitLine(h))
 	}
 	if r.Omitted > 0 {
-		lines = append(lines, fmt.Sprintf("... %s", r.Hint))
+		// The spill path rides in the text, not just a dropped structured
+		// field: with no structuredContent to carry it, a path left out here
+		// is a written file nobody can reach.
+		omission := "... " + r.Hint
+		if r.OverflowPath != "" {
+			omission += " overflow_path=" + r.OverflowPath
+		}
+		lines = append(lines, omission)
 	}
-	if len(r.Expanded) == 0 {
+	// A header is still owed when the budget dropped EVERY expansion: with no
+	// structuredContent to carry expanded_omitted, returning early here would
+	// silently erase the fact that neighbors existed at all.
+	if len(r.Expanded) == 0 && r.ExpandedOmitted == 0 {
 		return strings.Join(lines, "\n")
 	}
-	header := fmt.Sprintf("-- expanded: %d graph hit(s) reached from the matches above; context only, not counted against k", len(r.Expanded))
+	header := fmt.Sprintf("graph (%d, reached from the hits above; not counted against k", len(r.Expanded))
 	if r.ExpandedOmitted > 0 {
-		header += fmt.Sprintf(" (%d more dropped to stay within the response size budget)", r.ExpandedOmitted)
+		header += fmt.Sprintf("; %d more dropped for size", r.ExpandedOmitted)
 	}
-	lines = append(lines, header+" --")
+	lines = append(lines, header+")")
 	for _, h := range r.Expanded {
 		lines = append(lines, formatHitLine(h))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// blockHeader labels one source's block, ripgrep-style: the source is named
+// once above its rows instead of repeated on every line. It carries the page
+// size and, when the backend reports one, the exact total — so "3 of 9" tells
+// a caller there is more to page without spending a row on it.
+func blockHeader(label string, shown int, total int64) string {
+	if total > int64(shown) {
+		return fmt.Sprintf("%s (%d of %d)", label, shown, total)
+	}
+	return fmt.Sprintf("%s (%d)", label, shown)
 }

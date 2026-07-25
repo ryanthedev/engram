@@ -1,0 +1,74 @@
+# Override: reach a BGE-M3 embedder running natively on the macOS host, on the GPU.
+#
+# Layer this OVER docker-compose.yml:
+#
+#   ./embed-real/run-host.sh & disown
+#   podman compose -p local -f docker-compose.yml -f docker-compose.host-embed.yml up -d
+#
+# WHY THE HOST: macOS does not pass Metal through to the podman VM. Anything
+# running in a container is CPU-bound on the VM's cores no matter how many the
+# VM is given — which on this machine meant BGE-M3 embedding at ~13 records per
+# minute before the container was OOM-killed partway through a backfill. The
+# same model on the host's GPU is not marginally faster, it is a different
+# order of magnitude.
+#
+# This mirrors cmd/engram-extract-shim, which already runs on the host for its
+# own reasons and is reached at host.docker.internal (see the -extract-url
+# comment in docker-compose.yml).
+#
+# WHY A PROXY RATHER THAN REPOINTING ENGRAMD: engramd's -embed-url could be
+# aimed at host.docker.internal directly, but its `command` is a long list and
+# compose replaces lists wholesale — the override would have to copy every
+# other flag, including -extractor-version, and would silently go stale the
+# next time the base file changes. Forwarding the `embed` service instead keeps
+# `http://embed:8081` meaning exactly one thing, and keeps engramd's config in
+# one place.
+#
+# It also keeps the healthcheck honest: the probe below travels through the
+# forwarder to the host model, so `depends_on: embed: service_healthy` still
+# means "the real embedder answered", not "a container is up".
+#
+# The base file is untouched, so `make e2e` keeps the deterministic stub it
+# depends on. Choose exactly one of these overrides — this one, or
+# docker-compose.real-embed.yml for the in-container CPU build.
+services:
+  # In the base file, `embed` is the ONLY service carrying a build for the
+  # shared engram-local image — stub-llm and engramd merely reference it. This
+  # override replaces that build with the forwarder's, which would leave
+  # `up --build` with nothing to build engram-local from, quietly running
+  # whatever stale image happened to be on disk. Moving the build to another
+  # service that uses the image keeps --build honest. The base file is
+  # unaffected, so `make e2e` still builds it via embed.
+  stub-llm:
+    build:
+      context: ../..
+      dockerfile: deploy/local/Dockerfile
+
+  embed:
+    build:
+      context: embed-host-proxy
+      dockerfile: Dockerfile
+    image: engram-embed-host-proxy
+    # The base image runs an engram binary; this one forwards TCP.
+    entrypoint: []
+    command:
+      ["socat", "TCP-LISTEN:8081,fork,reuseaddr", "TCP:host.docker.internal:8081"]
+    extra_hosts:
+      # The base file only puts this on engramd; the forwarder needs it too.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # Deliberately probes /health end to end rather than just checking that
+      # socat bound the port. The host service answers 503 until the weights are
+      # resident, so this gates engramd on a model that can actually embed.
+      #
+      # 127.0.0.1, not localhost: TCP-LISTEN binds v4 only (0.0.0.0:8081) while
+      # localhost resolves to ::1 first in this image, so the probe gets
+      # ECONNREFUSED against a perfectly healthy forwarder. The base file's
+      # healthchecks can say localhost because the Go servers bind dual-stack.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8081/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      # run-host.sh may still be downloading ~2GB of weights on a cold start;
+      # 30 retries at 10s gives it five minutes before compose calls it dead.
+      retries: 30
+      start_period: 15s

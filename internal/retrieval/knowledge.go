@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ryanthedev/engram/internal/knowledge"
+	"github.com/ryanthedev/engram/internal/store"
 )
 
 // Predicate is one generic knowledge-search filter: Field must name a
@@ -170,6 +171,14 @@ func (r *KnowledgeRetriever) Search(ctx context.Context, spec knowledge.Collecti
 	if !fullBody {
 		opts.fragmentSize, opts.numberOfFragments = spec.FragmentSizing()
 		opts.highlightPreTag, opts.highlightPostTag = spec.HighlightPreTag, spec.HighlightPostTag
+		// Harvest bookkeeping is dead weight in a search result: no caller
+		// reads it back off a hit, and it is neither filterable nor sortable
+		// (buildFilterClauses/buildSortClauses validate against spec.Mappings
+		// only, and reserved names can't be declared) — so dropping it cannot
+		// make a filter unverifiable. Gated with fullBody for one reason: the
+		// vault exporter drains documents through fullBody=true and DOES read
+		// these fields.
+		opts.sourceExcludes = store.SearchProvenanceExcludes()
 	}
 	body, _ := buildQuery(opts)
 

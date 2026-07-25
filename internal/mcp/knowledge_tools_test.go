@@ -37,7 +37,8 @@ type knowledgeFake struct {
 	lastDelete struct {
 		collection, source, currentHarvestID string
 	}
-	lastSpec CollectionSpec
+	lastReadID, lastReadSource string
+	lastSpec                   CollectionSpec
 
 	searchHits  []KnowledgeHit
 	searchTotal int64
@@ -88,6 +89,21 @@ func callTool(t *testing.T, c *refClient, name string, args map[string]any) map[
 	return result
 }
 
+// searchLines parses a search tool's TEXT-ONLY response back into the field
+// names these tests assert on. memory_search and knowledge_search emit no
+// structuredContent — the compact-line block is the whole response — so a
+// test reading a structured copy would assert on something no caller sees.
+func searchLines(t *testing.T, result map[string]any) map[string]any {
+	t.Helper()
+	content, ok := result["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("search result has no content block: %v", result)
+	}
+	block, _ := content[0].(map[string]any)
+	text, _ := block["text"].(string)
+	return parseCompactLines(t, text)
+}
+
 // structured returns a tool result's structuredContent payload.
 func structured(t *testing.T, result map[string]any) map[string]any {
 	t.Helper()
@@ -136,8 +152,10 @@ func TestDW_6_1_KnowledgeToolsDispatchThroughBackend(t *testing.T) {
 		if result["isError"] != false {
 			t.Fatalf("isError = %v: %v", result["isError"], result)
 		}
-		hits := structured(t, result)["hits"].([]any)
-		if len(hits) != 1 || hits[0].(map[string]any)["id"] != "d1" {
+		hits := searchLines(t, result)["hits"].([]any)
+		// Self-addressing id: the collection travels with the row, so a
+		// caller hands it straight back to memory_read.
+		if len(hits) != 1 || !strings.HasPrefix(fmt.Sprint(hits[0]), "papers:d1\t") {
 			t.Errorf("hits = %v", hits)
 		}
 		if b.lastSearch.collection != "papers" || b.lastSearch.query != "transformers" || b.lastSearch.k != 5 {
@@ -215,7 +233,7 @@ func TestDW_3_1_KnowledgeSearchToolThreadsOffsetAndTotal(t *testing.T) {
 	if b.lastSearch.offset != 100 {
 		t.Errorf("backend got offset %d, want 100", b.lastSearch.offset)
 	}
-	sc := structured(t, result)
+	sc := searchLines(t, result)
 	if got := sc["total"]; got != float64(250) {
 		t.Errorf("total = %v, want 250", got)
 	}
@@ -286,7 +304,7 @@ func TestDW_6_1_KnowledgeSearchBudgetPackAndSpill(t *testing.T) {
 	c.call("initialize", nil)
 
 	result := callTool(t, c, ToolKnowledgeSearch, map[string]any{"collection": "papers", "query": "q"})
-	sc := structured(t, result)
+	sc := searchLines(t, result)
 	packed := sc["hits"].([]any)
 	if len(packed) == 0 || len(packed) >= len(hits) {
 		t.Fatalf("expected a shrunken non-empty page, got %d of %d hits", len(packed), len(hits))
@@ -384,12 +402,19 @@ func TestDW_6_5_MemoryToolsUnchanged(t *testing.T) {
 		t.Fatalf("memory_ingest id = %v, want ep-e1", got)
 	}
 	res := callTool(t, c, ToolSearch, map[string]any{"query": "alpha"})
-	hits := structured(t, res)["hits"].([]any)
-	if len(hits) != 1 || hits[0].(map[string]any)["source"] != "episodic" {
+	hits := searchLines(t, res)["hits"].([]any)
+	if len(hits) != 1 || !strings.HasPrefix(fmt.Sprint(hits[0]), "episodic:ep-e1\t") {
 		t.Errorf("memory_search hits = %v", hits)
 	}
 	st := callTool(t, c, ToolStatus, map[string]any{})
 	if got := structured(t, st)["healthy"]; got != true {
 		t.Errorf("memory_status healthy = %v", got)
 	}
+}
+
+// Read records the (id, source) pair the tool edge resolved, so a test can
+// assert how a self-addressing search id was split before dispatch.
+func (f *knowledgeFake) Read(_ context.Context, id, source string) (ReadResult, error) {
+	f.lastReadID, f.lastReadSource = id, source
+	return ReadResult{ID: id, Source: source, Fields: map[string]any{"text": "x"}}, nil
 }

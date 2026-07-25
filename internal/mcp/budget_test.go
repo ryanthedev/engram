@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -57,12 +59,11 @@ func semanticHit(id, subject, predicate, object string, pad int) Hit {
 }
 
 // searchViaWire drives memory_search end to end through the JSON-RPC wire
-// (refClient) and returns the raw compact-line text (exactly what
-// toolResultWithText rendered as the tool's content block) plus the
-// structured result. Since Phase 1 (DW-1.1), the text block is no longer
-// JSON — decoded comes from structuredContent instead, which the JSON-RPC
-// layer already parsed into a map (no re-unmarshal needed) and carries the
-// same field names (hits/omitted/omitted_facets/hint/overflow_path).
+// and returns the compact-line text — the tool response in full, since search
+// is text-only — plus that text parsed back into the field names these tests
+// assert on. It fails outright if a structuredContent copy reappears: two
+// surfaces let the client pick the JSON, which is exactly how the line format
+// came to be rendered and then discarded.
 func searchViaWire(t *testing.T, backend Backend, args map[string]any) (text string, decoded map[string]any) {
 	t.Helper()
 	c := startServer(t, backend)
@@ -78,11 +79,80 @@ func searchViaWire(t *testing.T, backend Backend, args map[string]any) (text str
 	}
 	block, _ := content[0].(map[string]any)
 	text, _ = block["text"].(string)
-	decoded, _ = res["structuredContent"].(map[string]any)
-	if decoded == nil {
-		t.Fatalf("memory_search returned no structuredContent: %v", res)
+	if _, present := res["structuredContent"]; present {
+		t.Fatalf("memory_search must be text-only: a structuredContent copy means clients render JSON and the line format is never read: %v", res)
 	}
-	return text, decoded
+	return text, parseCompactLines(t, text)
+}
+
+// omissionCounts/omissionFacets read the omission footer, which is the only
+// carrier of the budget signals now that search emits no structuredContent.
+var (
+	omissionCounts = regexp.MustCompile(`(\d+) more hit\(s\) omitted`)
+	omissionFacets = regexp.MustCompile(`(\w+)="([^"]*)"`)
+	blockHeaderRE  = regexp.MustCompile(`^\S+ \((\d+)(?: of (\d+))?\)$`)
+)
+
+// parseCompactLines projects the compact-line block back into the field names
+// these tests already assert on (hits/omitted/omitted_facets/hint/
+// overflow_path). It parses the TEXT deliberately: the text block is now the
+// entire response contract, so a test that read a structured copy would be
+// testing something the caller never sees.
+func parseCompactLines(t *testing.T, text string) map[string]any {
+	t.Helper()
+	out := map[string]any{}
+	hits, expanded := []any{}, []any{}
+	inExpanded := false
+	for i, line := range strings.Split(text, "\n") {
+		switch {
+		case line == "":
+		case i == 0 && blockHeaderRE.MatchString(line):
+			// "label (N of T)" — T is the exact total the backend reported.
+			if m := blockHeaderRE.FindStringSubmatch(line); m[2] != "" {
+				n, _ := strconv.Atoi(m[2])
+				out["total"] = float64(n)
+			}
+		case strings.HasPrefix(line, "graph ("):
+			// Everything below the graph header belongs to the expansion
+			// block, never the matched hits (DW-6.2).
+			inExpanded = true
+			if m := regexp.MustCompile(`(\d+) more dropped`).FindStringSubmatch(line); m != nil {
+				n, _ := strconv.Atoi(m[1])
+				out["expanded_omitted"] = float64(n)
+			}
+		case strings.HasPrefix(line, "... "):
+			hint := strings.TrimPrefix(line, "... ")
+			if hint, path, found := strings.Cut(hint, " overflow_path="); found {
+				out["overflow_path"] = path
+				out["hint"] = hint
+			} else {
+				out["hint"] = hint
+			}
+			if m := omissionCounts.FindStringSubmatch(line); m != nil {
+				n, _ := strconv.Atoi(m[1])
+				out["omitted"] = float64(n)
+			}
+			if open, rest, found := strings.Cut(line, "(top omitted "); found {
+				_ = open
+				facets := map[string]any{}
+				for _, kv := range omissionFacets.FindAllStringSubmatch(rest, -1) {
+					facets[kv[1]] = kv[2]
+				}
+				if len(facets) > 0 {
+					out["omitted_facets"] = facets
+				}
+			}
+		case inExpanded:
+			expanded = append(expanded, line)
+		default:
+			hits = append(hits, line)
+		}
+	}
+	out["hits"] = hits
+	if len(expanded) > 0 {
+		out["expanded"] = expanded
+	}
+	return out
 }
 
 // TestDW_2_1_DefaultSearchFitsBudget: a default memory_search (no explicit k)

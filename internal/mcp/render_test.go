@@ -39,13 +39,21 @@ func graphHit(id, statement, subject, predicate, object string, hop int) Hit {
 // parseIDSource recovers the (id, source) pair from one compact-line result,
 // exactly as a caller/Phase 2 would: split on tabs, take the first two
 // tokens. Fails the test if the line doesn't have at least two fields.
+// parseIDSource recovers the (id, source) pair from a result line's first
+// column, which is the self-addressing "<source>:<id>" form memory_read
+// consumes. Splitting on the FIRST colon mirrors callRead exactly, so this
+// helper proves the same round trip the tool performs.
 func parseIDSource(t *testing.T, line string) (id, source string) {
 	t.Helper()
 	parts := strings.SplitN(line, "\t", 3)
-	if len(parts) < 2 {
-		t.Fatalf("line has fewer than 2 tab-separated fields: %q", line)
+	if len(parts) < 3 {
+		t.Fatalf("line has fewer than 3 tab-separated fields: %q", line)
 	}
-	return parts[0], parts[1]
+	source, id, found := strings.Cut(parts[0], ":")
+	if !found {
+		t.Fatalf("first column %q is not a self-addressing \"<source>:<id>\" pair: %q", parts[0], line)
+	}
+	return id, source
 }
 
 // TestDW_1_1_MultiHitSearchReturnsCompactLineText: a multi-hit memory_search
@@ -67,9 +75,14 @@ func TestDW_1_1_MultiHitSearchReturnsCompactLineText(t *testing.T) {
 	if strings.Contains(text, "fields_json") {
 		t.Errorf("content text still mentions fields_json: %q", text)
 	}
+	// One block header ("memory (N)") plus one line per hit — the ripgrep
+	// grouping: the source is named once above its rows, never per row.
 	lines := strings.Split(text, "\n")
-	if len(lines) != len(hits) {
-		t.Fatalf("got %d lines, want %d (one per hit): %q", len(lines), len(hits), text)
+	if len(lines) != len(hits)+1 {
+		t.Fatalf("got %d lines, want %d (a block header plus one per hit): %q", len(lines), len(hits)+1, text)
+	}
+	if !strings.HasPrefix(lines[0], "memory (") {
+		t.Errorf("first line = %q, want the memory block header", lines[0])
 	}
 
 	gotHits, _ := decoded["hits"].([]any)
@@ -87,11 +100,11 @@ func TestDW_1_2_EpisodicLeadSnippetNormalizedAndCapped(t *testing.T) {
 		short := "the deploy key rotates weekly"
 		h := episodicHit("ep-1", short, "note", "2026-07-01T00:00:00Z", "evt-1")
 		rh := renderHit(h)
-		if rh.Gist != short {
-			t.Errorf("Gist = %q, want unmodified %q", rh.Gist, short)
+		if rh.Text != short {
+			t.Errorf("Text = %q, want unmodified %q", rh.Text, short)
 		}
-		if strings.HasSuffix(rh.Gist, "…") {
-			t.Errorf("Gist has a dangling ellipsis on text under the cap: %q", rh.Gist)
+		if strings.HasSuffix(rh.Text, "…") {
+			t.Errorf("Text has a dangling ellipsis on text under the cap: %q", rh.Text)
 		}
 	})
 
@@ -99,15 +112,15 @@ func TestDW_1_2_EpisodicLeadSnippetNormalizedAndCapped(t *testing.T) {
 		long := strings.Repeat("a", leadSnippetRunes+50)
 		h := episodicHit("ep-2", long, "note", "2026-07-01T00:00:00Z", "evt-2")
 		rh := renderHit(h)
-		if !strings.HasSuffix(rh.Gist, "…") {
-			t.Errorf("Gist over the cap missing ellipsis: %q", rh.Gist)
+		if !strings.HasSuffix(rh.Text, "…") {
+			t.Errorf("Text over the cap missing ellipsis: %q", rh.Text)
 		}
-		gistRunes := []rune(rh.Gist)
-		if len(gistRunes) != leadSnippetRunes+1 { // +1 for the ellipsis rune
-			t.Errorf("Gist rune length = %d, want %d (cap + ellipsis)", len(gistRunes), leadSnippetRunes+1)
+		textRunes := []rune(rh.Text)
+		if len(textRunes) != leadSnippetRunes+1 { // +1 for the ellipsis rune
+			t.Errorf("Text rune length = %d, want %d (cap + ellipsis)", len(textRunes), leadSnippetRunes+1)
 		}
-		if strings.Contains(rh.Gist, "\n") {
-			t.Errorf("Gist is not single-line: %q", rh.Gist)
+		if strings.Contains(rh.Text, "\n") {
+			t.Errorf("Text is not single-line: %q", rh.Text)
 		}
 	})
 }
@@ -124,11 +137,11 @@ func TestDW_1_3_RuneSafeTruncationOnEmojiBody(t *testing.T) {
 			h := episodicHit("ep-ghost", body, "note", "2026-07-01T00:00:00Z", "evt-ghost")
 			rh := renderHit(h)
 
-			if !utf8.ValidString(rh.Gist) {
-				t.Fatalf("Gist is not valid UTF-8 for pad=%d: %q", pad, rh.Gist)
+			if !utf8.ValidString(rh.Text) {
+				t.Fatalf("Text is not valid UTF-8 for pad=%d: %q", pad, rh.Text)
 			}
-			if strings.ContainsRune(rh.Gist, '�') {
-				t.Errorf("Gist contains the UTF-8 replacement character (split rune) for pad=%d: %q", pad, rh.Gist)
+			if strings.ContainsRune(rh.Text, '�') {
+				t.Errorf("Text contains the UTF-8 replacement character (split rune) for pad=%d: %q", pad, rh.Text)
 			}
 		})
 	}
@@ -172,18 +185,17 @@ func TestDW_1_4_IDSourceRoundTripSurvivesAdversarialContent(t *testing.T) {
 }
 
 // TestDW_1_5_SemanticGraphGistIsFullStatement: semantic/graph hits render
-// their full statement as the gist (content identical to today's data, only
-// the format changed — no truncation for these tiers), and subject/
-// predicate/object surface as display fields.
+// their full statement as the line text — untruncated, since for these tiers
+// the statement already IS the whole memory — under a self-addressing id.
 func TestDW_1_5_SemanticGraphGistIsFullStatement(t *testing.T) {
 	t.Run("semantic", func(t *testing.T) {
 		h := semanticHit("sem-1", "alice", "knows", "bob", 1)
 		rh := renderHit(h)
-		if rh.Gist == "" {
-			t.Fatal("Gist is empty for a semantic hit")
+		if rh.Text == "" {
+			t.Fatal("Text is empty for a semantic hit")
 		}
-		if rh.Fields["subject"] != "alice" || rh.Fields["predicate"] != "knows" || rh.Fields["object"] != "bob" {
-			t.Errorf("Fields = %+v, want subject=alice predicate=knows object=bob", rh.Fields)
+		if rh.ID != "semantic:sem-1" {
+			t.Errorf("ID = %q, want the self-addressing pair %q", rh.ID, "semantic:sem-1")
 		}
 	})
 
@@ -191,14 +203,11 @@ func TestDW_1_5_SemanticGraphGistIsFullStatement(t *testing.T) {
 		statement := "alice manages the infra team"
 		h := graphHit("gr-1", statement, "alice", "manages", "infra-team", 2)
 		rh := renderHit(h)
-		if rh.Gist != statement {
-			t.Errorf("Gist = %q, want the untruncated statement %q", rh.Gist, statement)
+		if rh.Text != statement {
+			t.Errorf("Text = %q, want the untruncated statement %q", rh.Text, statement)
 		}
-		if rh.Fields["subject"] != "alice" || rh.Fields["predicate"] != "manages" || rh.Fields["object"] != "infra-team" {
-			t.Errorf("Fields = %+v, want subject=alice predicate=manages object=infra-team", rh.Fields)
-		}
-		if fmt.Sprintf("%v", rh.Fields["hop"]) != "2" {
-			t.Errorf("Fields[hop] = %v, want 2", rh.Fields["hop"])
+		if rh.ID != "graph:gr-1" {
+			t.Errorf("ID = %q, want the self-addressing pair %q", rh.ID, "graph:gr-1")
 		}
 	})
 }
@@ -230,11 +239,10 @@ func TestDW_1_6_BackendHitsNotMutated(t *testing.T) {
 	// including the marker that a truncated snippet would have dropped.
 	gotHits, _ := decoded["hits"].([]any)
 	if len(gotHits) != 1 {
-		t.Fatalf("structuredContent hits = %d, want 1", len(gotHits))
+		t.Fatalf("rendered hits = %d, want 1", len(gotHits))
 	}
-	gist, _ := gotHits[0].(map[string]any)["gist"].(string)
-	if strings.Contains(gist, "END-OF-BODY-MARKER") {
-		t.Errorf("rendered gist contains the tail marker, want it truncated: %q", gist)
+	if row := fmt.Sprint(gotHits[0]); strings.Contains(row, "END-OF-BODY-MARKER") {
+		t.Errorf("rendered row contains the tail marker, want it truncated: %q", row)
 	}
 	if !strings.Contains(backend.hits[0].Fields, "END-OF-BODY-MARKER") {
 		t.Fatal("Backend's source Fields lost the tail marker — full text was not preserved untruncated")
@@ -268,11 +276,11 @@ func TestDW_1_7_EmptyShortNewlineTextRendersCleanly(t *testing.T) {
 				rh = renderHit(h)
 			}()
 
-			if strings.Contains(rh.Gist, "\n") || strings.Contains(rh.Gist, "\t") || strings.Contains(rh.Gist, "\r") {
-				t.Errorf("Gist not single-line for %q: %q", tc.text, rh.Gist)
+			if strings.Contains(rh.Text, "\n") || strings.Contains(rh.Text, "\t") || strings.Contains(rh.Text, "\r") {
+				t.Errorf("Text not single-line for %q: %q", tc.text, rh.Text)
 			}
-			if hasEllipsis := strings.HasSuffix(rh.Gist, "…"); hasEllipsis != tc.wantEll {
-				t.Errorf("Gist ellipsis = %v, want %v for %q -> %q", hasEllipsis, tc.wantEll, tc.text, rh.Gist)
+			if hasEllipsis := strings.HasSuffix(rh.Text, "…"); hasEllipsis != tc.wantEll {
+				t.Errorf("Text ellipsis = %v, want %v for %q -> %q", hasEllipsis, tc.wantEll, tc.text, rh.Text)
 			}
 
 			// The full hit-line render (and the top-level compact renderer)
@@ -312,28 +320,10 @@ func TestRenderHitMissingOrMalformedFieldsNoPanic(t *testing.T) {
 				}()
 				rh = renderHit(h)
 			}()
-			if rh.ID != h.ID || rh.Source != h.Source {
-				t.Errorf("renderHit lost identity: got %+v, want id=%s source=%s", rh, h.ID, h.Source)
+			if want := h.Source + ":" + h.ID; rh.ID != want {
+				t.Errorf("renderHit lost identity: got %+v, want id=%s", rh, want)
 			}
 		})
-	}
-}
-
-// TestFormatScoreStable: the same score formats to the same byte-identical
-// string across repeated calls, and the format is compact (fixed 3
-// decimals), matching the "score formatting stable/compact" edge case.
-func TestFormatScoreStable(t *testing.T) {
-	scores := []float64{0, 0.5, 0.869999999, 1, 12.3456}
-	for _, s := range scores {
-		first := formatScore(s)
-		for i := 0; i < 3; i++ {
-			if got := formatScore(s); got != first {
-				t.Errorf("formatScore(%v) not stable: %q vs %q", s, got, first)
-			}
-		}
-		if strings.Count(first, ".") != 1 {
-			t.Errorf("formatScore(%v) = %q, want exactly one decimal point", s, first)
-		}
 	}
 }
 
@@ -342,13 +332,13 @@ func TestFormatScoreStable(t *testing.T) {
 // buildSearchResult's gating in budget.go, so the format change doesn't
 // silently drop that signal.
 func TestCompactLinesOmissionFooterOnlyWhenOmitted(t *testing.T) {
-	fit := renderedResult{Hits: []renderedHit{{ID: "a", Source: "episodic", Gist: "g"}}}
+	fit := renderedResult{Hits: []renderedHit{{ID: "episodic:a", Text: "g"}}}
 	if got := compactLines(fit); strings.Contains(got, "...") {
 		t.Errorf("compactLines with no omission has a footer: %q", got)
 	}
 
 	omitted := renderedResult{
-		Hits:    []renderedHit{{ID: "a", Source: "episodic", Gist: "g"}},
+		Hits:    []renderedHit{{ID: "episodic:a", Text: "g"}},
 		Omitted: 3,
 		Hint:    "3 more hit(s) omitted to stay within the response size budget; narrow your query.",
 	}
