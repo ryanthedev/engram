@@ -14,3 +14,7 @@ docs/vision/preview.png
 .claude/worktrees/
 .code-foundations/wave-worktrees/
 .e2e-bin/
+
+# Host-side embedder venv: ~830MB of torch, recreated on demand by
+# deploy/local/embed-real/run-host.sh. The script is the artifact, not this.
+deploy/local/embed-real/.venv/

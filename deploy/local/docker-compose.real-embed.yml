@@ -1,0 +1,41 @@
+# Override: swap the deterministic stand-in embedder for a real BGE-M3.
+#
+# Layer this OVER docker-compose.yml for the stack you actually use day to day:
+#
+#   podman compose -p local -f docker-compose.yml -f docker-compose.real-embed.yml up -d
+#
+# The base file is deliberately left alone. Its embedder hashes text into a
+# seeded random vector — deterministic, which is exactly what `make e2e` needs
+# and exactly what makes vector search meaningless on real data. Keeping the
+# swap in an override means e2e stays reproducible while a live stack gets
+# actual semantic retrieval.
+#
+# Same service name, so engramd's "-embed-url http://embed:8081" is unchanged;
+# only what answers on that port differs. Same 1024 dimensions as the fake and
+# as the index mappings, so no reindex.
+services:
+  embed:
+    build:
+      context: embed-real
+      dockerfile: Dockerfile
+    image: engram-embed-real
+    # Override the base image's entrypoint/command: this image runs the python
+    # service directly, not an engram binary.
+    entrypoint: ["python", "-u", "/app/server.py"]
+    command: []
+    volumes:
+      # Model weights (~2GB) persist here across image rebuilds. Without this,
+      # every rebuild re-downloads BGE-M3.
+      - hf-cache:/hf-cache
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8081/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      # First boot downloads the weights before /health turns 200. 60 retries
+      # at 10s gives a 10-minute budget so a cold start on a slow link doesn't
+      # get killed as unhealthy.
+      retries: 60
+      start_period: 30s
+
+volumes:
+  hf-cache:
