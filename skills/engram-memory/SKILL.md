@@ -27,7 +27,7 @@ three MCP tools:
 | Tool | Purpose | Key args | Returns |
 |------|---------|----------|---------|
 | `memory_search` | Recall — hybrid BM25+vector search over memory | `query` (req), `k` | `{ hits: [{ id, score, source, fields_json }] }` |
-| `memory_ingest` | Remember — append one durable event | `event_id` (req), `text` (req), `source` | `{ id }` |
+| `memory_ingest` | Remember — append one durable event | `event_id` (req), `text` (req), `source`, `scope`, `team` | `{ id }` |
 | `memory_status` | Health + identity + per-tier counts | — | `{ healthy, tenant_id, user_id, agent_id, episodic_count, semantic_count, opensearch_version }` |
 
 The core discipline is simple: **search before you assume, ingest after you
@@ -93,6 +93,25 @@ a fresh unique id when you genuinely mean "this is a new, distinct event".
 `source` is optional provenance — set it to where the fact came from
 (`chat`, a filename, a PR) when that lineage would help a future reader trust
 or trace it.
+
+### Who can read it (`scope`)
+
+The same user runs separate agents on separate machines (a work laptop, a
+personal machine), and each one's memory is private to it by default. `scope`
+decides whether a memory crosses that line:
+
+- **Omit it (private)** for anything about a specific project, employer,
+  codebase, person, or account — and whenever you're unsure. Private is the
+  safe default; a work machine must never leak into a personal one or back.
+- **`org`** for general, portable know-how that is true on every machine:
+  how a tool or framework works, editor and shell configuration (nvim, zsh,
+  tmux), language idioms, and the user's general working preferences. Ask
+  yourself "would this be useful and harmless on every machine the user
+  owns?" — only then use `org`.
+- **`team`** (with `team`) only when the user names a team to share with.
+
+If the server rejects an `org` write, this identity has no org grant; fall
+back to private and tell the user.
 
 Ingestion is **asynchronous**: extraction and reconciliation happen after the
 call returns the durable id, so a fact you just ingested may take a few seconds

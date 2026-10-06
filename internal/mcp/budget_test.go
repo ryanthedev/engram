@@ -23,7 +23,7 @@ type fixedHitsBackend struct {
 	expanded []Hit
 }
 
-func (b *fixedHitsBackend) Ingest(context.Context, string, string, string) (string, error) {
+func (b *fixedHitsBackend) IngestScoped(context.Context, string, string, string, string, string) (string, error) {
 	return "", nil
 }
 
@@ -579,7 +579,7 @@ type recordingKBackend struct {
 	onSearch func(k int)
 }
 
-func (b *recordingKBackend) Ingest(context.Context, string, string, string) (string, error) {
+func (b *recordingKBackend) IngestScoped(context.Context, string, string, string, string, string) (string, error) {
 	return "", nil
 }
 func (b *recordingKBackend) Search(_ context.Context, _ string, k int, _ SearchFilter) (SearchResult, error) {

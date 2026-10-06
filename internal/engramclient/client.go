@@ -52,7 +52,7 @@ func (c *Client) Ingest(ctx context.Context, eventID, text, source string) (stri
 // IngestScoped appends one episodic event at an explicit scope (private/team/
 // org) and team, subject to the server's write-time ACL guard. An empty scope
 // defaults to private server-side. This is the CLI's scoped-write surface
-// (Phase 4); the MCP tool uses the default-scope Ingest.
+// (Phase 4) and backs the memory_ingest MCP tool's optional scope/team.
 func (c *Client) IngestScoped(ctx context.Context, eventID, text, source, scope, team string) (string, error) {
 	req := &engrampb.IngestRequest{EventId: eventID, Text: text, Kind: "mcp", Scope: scope, TeamId: team}
 	if source != "" {

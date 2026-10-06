@@ -222,8 +222,11 @@ type SearchFilter struct {
 // Backend is the Engram capability the MCP tools map onto (consumer-defined
 // seam). The gRPC client adapter satisfies it; tests use a fake.
 type Backend interface {
-	// Ingest appends one episodic event and returns its storage id.
-	Ingest(ctx context.Context, eventID, text, source string) (id string, err error)
+	// IngestScoped appends one episodic event at scope (""/private, team, or
+	// org; team names the team for team scope) and returns its storage id.
+	// The server's write guard is the authority: a scope the caller's
+	// identity does not reach is denied there.
+	IngestScoped(ctx context.Context, eventID, text, source, scope, team string) (id string, err error)
 	// Search runs one hybrid query under f and returns the matched hits and
 	// the graph expansions in separate blocks (see SearchResult): matched hits
 	// are capped at k, expansions are not counted against it. f is validated at
