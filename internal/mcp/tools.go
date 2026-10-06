@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -54,6 +55,12 @@ func toolSchemas() []toolSchema {
 					"event_id": strProp("Client-supplied idempotency id (required)."),
 					"text":     strProp("Raw event text to remember (required)."),
 					"source":   strProp("Optional source identifier for provenance."),
+					"scope": map[string]any{
+						"type":        "string",
+						"enum":        []any{"private", "team", "org"},
+						"description": "Who may read it: private (default, this agent only), team (members of `team`), or org (every agent of this user, across machines).",
+					},
+					"team": strProp("Team id; required when scope is team, rejected otherwise."),
 				},
 				"required": []any{"event_id", "text"},
 			},
@@ -277,6 +284,8 @@ func (s *Server) callIngest(ctx context.Context, raw json.RawMessage) (any, *rpc
 		EventID string `json:"event_id"`
 		Text    string `json:"text"`
 		Source  string `json:"source"`
+		Scope   string `json:"scope"`
+		Team    string `json:"team"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: "invalid memory_ingest arguments"}
@@ -284,11 +293,34 @@ func (s *Server) callIngest(ctx context.Context, raw json.RawMessage) (any, *rpc
 	if args.EventID == "" || args.Text == "" {
 		return toolError("memory_ingest requires non-empty event_id and text"), nil
 	}
-	id, err := s.backend.Ingest(ctx, args.EventID, args.Text, args.Source)
+	if err := validateIngestScope(args.Scope, args.Team); err != nil {
+		return toolError(err.Error()), nil
+	}
+	id, err := s.backend.IngestScoped(ctx, args.EventID, args.Text, args.Source, args.Scope, args.Team)
 	if err != nil {
 		return toolError(fmt.Sprintf("ingest failed: %v", err)), nil
 	}
 	return toolResult(map[string]any{"id": id}), nil
+}
+
+// validateIngestScope is the memory_ingest scope barricade: it rejects a
+// scope outside the vocabulary and a team/scope mismatch before the backend
+// is touched, naming the valid values so the agent can self-correct. Whether
+// the identity may write that scope is the server's write guard's call.
+func validateIngestScope(scope, team string) error {
+	switch scope {
+	case "", "private", "org":
+		if team != "" {
+			return fmt.Errorf("memory_ingest: team is only valid with scope \"team\" (got scope %q)", scope)
+		}
+	case "team":
+		if team == "" {
+			return errors.New("memory_ingest: scope \"team\" requires a team")
+		}
+	default:
+		return fmt.Errorf("memory_ingest: unknown scope %q (valid: private, team, org)", scope)
+	}
+	return nil
 }
 
 func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpcError) {

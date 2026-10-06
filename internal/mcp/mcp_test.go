@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,9 @@ import (
 type fakeBackend struct {
 	knowledgeStubs
 	ingested    map[string]string // event_id -> text
+	ingestCalls int
+	lastScope   string
+	lastTeam    string
 	failNext    bool
 	searchCalls int
 	lastFilter  SearchFilter
@@ -27,7 +31,9 @@ type fakeBackend struct {
 
 func newFakeBackend() *fakeBackend { return &fakeBackend{ingested: map[string]string{}} }
 
-func (b *fakeBackend) Ingest(_ context.Context, eventID, text, _ string) (string, error) {
+func (b *fakeBackend) IngestScoped(_ context.Context, eventID, text, _, scope, team string) (string, error) {
+	b.ingestCalls++
+	b.lastScope, b.lastTeam = scope, team
 	b.ingested[eventID] = text
 	return "ep-" + eventID, nil
 }
@@ -232,6 +238,62 @@ func TestDW_3_5_ConformanceCallTool(t *testing.T) {
 	hits, _ := searchLines(t, sres)["hits"].([]any)
 	if len(hits) != 1 {
 		t.Fatalf("search returned %d hits, want 1", len(hits))
+	}
+}
+
+// TestCallIngest_ScopeBarricade: memory_ingest forwards a valid scope/team to
+// the backend unchanged (empty = private, the server default), and rejects an
+// unknown scope or a team/scope mismatch as a tool error that never reaches
+// the backend.
+func TestCallIngest_ScopeBarricade(t *testing.T) {
+	tests := []struct {
+		name      string
+		scope     string
+		team      string
+		wantErr   string // substring of the tool error; "" = must succeed
+		wantScope string
+	}{
+		{"omitted scope stays empty (private server-side)", "", "", "", ""},
+		{"private", "private", "", "", "private"},
+		{"org", "org", "", "", "org"},
+		{"team with team id", "team", "projects", "", "team"},
+		{"team without team id", "team", "", "requires a team", ""},
+		{"team id on org scope", "org", "projects", "only valid with scope", ""},
+		{"unknown scope", "public", "", "unknown scope", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newFakeBackend()
+			c := startServer(t, b)
+			c.call("initialize", nil)
+			args := map[string]any{"event_id": "e1", "text": "nvim: <leader>ff opens telescope"}
+			if tt.scope != "" {
+				args["scope"] = tt.scope
+			}
+			if tt.team != "" {
+				args["team"] = tt.team
+			}
+			resp := c.call("tools/call", map[string]any{"name": ToolIngest, "arguments": args})
+			res, _ := resp["result"].(map[string]any)
+			if tt.wantErr != "" {
+				if res["isError"] != true {
+					t.Fatalf("expected a tool error containing %q, got %v", tt.wantErr, res)
+				}
+				if got := fmt.Sprint(res["content"]); !strings.Contains(got, tt.wantErr) {
+					t.Errorf("tool error = %s, want it to contain %q", got, tt.wantErr)
+				}
+				if b.ingestCalls != 0 {
+					t.Errorf("backend called %d times despite the barricade", b.ingestCalls)
+				}
+				return
+			}
+			if res["isError"] == true {
+				t.Fatalf("ingest reported error: %v", res)
+			}
+			if b.lastScope != tt.wantScope || b.lastTeam != tt.team {
+				t.Errorf("backend got scope=%q team=%q, want scope=%q team=%q", b.lastScope, b.lastTeam, tt.wantScope, tt.team)
+			}
+		})
 	}
 }
 

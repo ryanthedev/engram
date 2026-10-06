@@ -6,7 +6,7 @@ API:
 
 | Tool | Arguments | Returns |
 |------|-----------|---------|
-| `memory_ingest` | `event_id` (req), `text` (req), `source` | `{ id }` |
+| `memory_ingest` | `event_id` (req), `text` (req), `source`, `scope` (`private` default, `team`, `org`), `team` (required for `team` scope) | `{ id }` |
 | `memory_search` | `query` (req), `k`, and the optional filters `kind`, `subject`, `predicate`, `object`, `extractor_version`, `since`, `until`, `include_superseded`, `sources` | `{ hits[] }` |
 | `memory_status` | — | `{ healthy, tenant_id, user_id, agent_id, episodic_count, semantic_count, opensearch_version }` |
 
