@@ -16,8 +16,19 @@ services:
       - DISABLE_SECURITY_PLUGIN=true
       - DISABLE_INSTALL_DEMO_CONFIG=true
       - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx1g
+      - path.repo=/usr/share/opensearch/snapshots
+    # This cluster doubles as the live personal memory store, so its data lives
+    # on named volumes, never in the container's writable layer (where it sat
+    # until 2026-10-06: any container recreate would have wiped it). Both are
+    # `external` (declared at the bottom), so `down -v` / `make e2e-down` can't
+    # delete them; `make e2e-up` creates them if missing.
+    volumes:
+      - engram-os-data:/usr/share/opensearch/data
+      - engram-os-snapshots:/usr/share/opensearch/snapshots
     ports:
-      - "9201:9200"
+      # Loopback only: anyone who reaches :9201 can mint tokens (security is
+      # disabled on this cluster). Remote machines use engramd on :7071.
+      - "127.0.0.1:9201:9200"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/ || exit 1"]
       interval: 10s
@@ -104,3 +115,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+volumes:
+  engram-os-data:
+    external: true
+  engram-os-snapshots:
+    external: true

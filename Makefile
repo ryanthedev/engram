@@ -136,9 +136,14 @@ e2e: e2e-up
 # e2e-up builds the images and starts the stack, blocking until every service
 # is healthy (compose --wait honors the healthchecks / depends_on gating).
 e2e-up:
+	@for v in engram-os-data engram-os-snapshots; do \
+		$(firstword $(COMPOSE)) volume inspect $$v >/dev/null 2>&1 || $(firstword $(COMPOSE)) volume create $$v ; \
+	done
 	$(COMPOSE) -f $(COMPOSE_FILE) up -d --build --wait
 
-# e2e-down tears the stack down and removes its volumes.
+# e2e-down tears the stack down and removes its non-external volumes. The
+# OpenSearch data and snapshot volumes are external (the live memory store),
+# so they survive; `podman volume rm` them by hand to truly start clean.
 e2e-down:
 	$(COMPOSE) -f $(COMPOSE_FILE) down -v
 

@@ -74,6 +74,27 @@ podman machine ssh sudo systemctl enable podman-restart.service
 
 Tradeoff accepted: with `always`, a container you deliberately stopped comes back on the next VM boot.
 
+**4. Memory data on named volumes, with snapshots.**
+
+Until 2026-10-06 `engram-e2e-os` had **no volume at all**: the live store sat in the container's writable layer, so any container recreate (a compose config change, an image bump, not only `down -v`) would have wiped it. It now mounts two named volumes, both declared `external` in `deploy/local/docker-compose.yml` so no compose command can delete them:
+
+| Volume | Mount | Holds |
+|---|---|---|
+| `engram-os-data` | `/usr/share/opensearch/data` | the indices |
+| `engram-os-snapshots` | `/usr/share/opensearch/snapshots` | the `fs` snapshot repository `local` (`path.repo`) |
+
+`:9201` is bound to `127.0.0.1` only. Security is disabled on this cluster, so anyone who reaches it can mint tokens; remote machines use engramd on `:7071`.
+
+Take a snapshot with `scripts/snapshot-local.sh`. It snapshots `engram-*` and `knowledge-*`, keeps the newest 14, and mirrors the repository to `~/engram-backups/os-snapshots/repo` on the host. The mirror is the copy that survives losing the podman VM, because the snapshot volume lives inside it. To restore, follow `05-restore-from-snapshot.md`: restore under a new name, verify, cut over, and never restore in place.
+
+Recreating the container is now safe, but stop engramd first so nothing writes mid-swap:
+
+```
+podman stop local-engramd-1
+podman compose -p local -f deploy/local/docker-compose.yml -f deploy/local/docker-compose.host-embed.yml up -d --no-deps --no-build opensearch
+podman compose -p local -f deploy/local/docker-compose.yml -f deploy/local/docker-compose.host-embed.yml up -d --no-build engramd
+```
+
 ## Remediation
 
 ```
@@ -84,7 +105,7 @@ launchctl kickstart -k gui/$(id -u)/com.r.engram-embed  # restart the embedder
 
 `podman update --restart` changes policy in place — it does not recreate or bounce the container, so it is safe to run against the live memory store.
 
-**Never** reach for `make e2e` / `make e2e-down` to fix this. `e2e-down` is `docker compose down -v`, and it destroys the live memory store's volume (`docs/mcp.md` carries the same warning).
+**Never** reach for `make e2e` / `make e2e-down` to fix this. `e2e-down` is `docker compose down -v`. Since 2026-10-06 the store's volumes are `external`, so `down -v` no longer deletes the data, but it still tears down the running stack, and `make e2e` runs its test suite against the live store.
 
 ## Known gaps
 
