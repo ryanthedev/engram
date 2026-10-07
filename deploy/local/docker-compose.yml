@@ -7,8 +7,13 @@
 #
 # Cold-start ordering is gated by healthchecks: engramd waits for OpenSearch,
 # the embedding server, and the stub LLM to be healthy before it starts.
+# Every service is `restart: always` so the stack comes back after a podman VM
+# restart (see docs/runbooks/local-stack-restart-durability.md section 3). It
+# lives here, not only in `podman update`, because a recreate resets the
+# policy to the compose file's value.
 services:
   opensearch:
+    restart: always
     image: opensearchproject/opensearch:3.1.0 # pinned — D14
     container_name: engram-e2e-os
     environment:
@@ -36,6 +41,7 @@ services:
       retries: 30
 
   embed:
+    restart: always
     build:
       context: ../..
       dockerfile: deploy/local/Dockerfile
@@ -48,6 +54,7 @@ services:
       retries: 20
 
   stub-llm:
+    restart: always
     image: engram-local
     command: ["engram-stub-llm", "-addr", ":8082"]
     healthcheck:
@@ -57,6 +64,7 @@ services:
       retries: 20
 
   engramd:
+    restart: always
     image: engram-local
     command:
       - "engram-server"

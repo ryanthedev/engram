@@ -40,7 +40,7 @@ echo "snapshot $name: $state"
 
 # Prune: snapshots come back oldest first.
 all=()
-while IFS= read -r id; do all+=("$id"); done < <(curl -sf "$OS_URL/_cat/snapshots/$REPO?h=id")
+while IFS= read -r id; do all+=("$id"); done < <(curl -sf "$OS_URL/_cat/snapshots/$REPO?h=id&s=start_epoch")
 excess=$(( ${#all[@]} - KEEP ))
 for (( i = 0; i < excess; i++ )); do
 	curl -sf -XDELETE "$OS_URL/_snapshot/$REPO/${all[$i]}" >/dev/null
