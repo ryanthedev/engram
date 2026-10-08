@@ -98,6 +98,8 @@ Until 2026-10-06 `engram-e2e-os` had **no volume at all**: the live store sat in
 
 `:9201` is bound to `127.0.0.1` only. Security is disabled on this cluster, so anyone who reaches it can mint tokens; remote machines use engramd on `:7071`.
 
+The dev cluster `engram-dev-os` (`:9200`, created by `scripts/dev-cluster.sh`) got the same treatment on 2026-10-08: loopback only, data on the named volume `engram-dev-os-data`, `--restart always`. All 28 data indices matched their doc counts after the move.
+
 Take a snapshot with `scripts/snapshot-local.sh`. It snapshots `engram-*` and `knowledge-*`, keeps the newest 14, and mirrors the repository to `~/engram-backups/os-snapshots/repo` on the host. The mirror is the copy that survives losing the podman VM, because the snapshot volume lives inside it. To restore, follow `05-restore-from-snapshot.md`: restore under a new name, verify, cut over, and never restore in place.
 
 **5. `~/Library/LaunchAgents/com.r.engram-snapshot.plist`** — runs that script daily.
