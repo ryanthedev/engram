@@ -20,7 +20,13 @@ if "$RUNTIME" ps --format '{{.Names}}' | grep -qx "$NAME"; then
   echo "$NAME already running"
 else
   "$RUNTIME" rm -f "$NAME" >/dev/null 2>&1 || true
-  "$RUNTIME" run -d --name "$NAME" -p "${PORT}:9200" \
+  # Loopback only: security is disabled, so anyone who reaches the port can
+  # read every index and mint tokens. Data lives on a named volume so a
+  # recreate keeps it, and `always` is the only policy podman-restart.service
+  # brings back after a VM restart.
+  "$RUNTIME" run -d --name "$NAME" --restart always \
+    -p "127.0.0.1:${PORT}:9200" \
+    -v engram-dev-os-data:/usr/share/opensearch/data \
     -e discovery.type=single-node \
     -e DISABLE_SECURITY_PLUGIN=true \
     -e DISABLE_INSTALL_DEMO_CONFIG=true \
