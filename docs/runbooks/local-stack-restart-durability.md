@@ -24,7 +24,7 @@ The embedder check is the one that fails quietly. A dead embedder does not make 
 
 ## What is in place
 
-Two launchd user agents (they are not in this repo — they carry absolute `/Users/<you>` paths; the content is reproduced below) plus container restart policies.
+Three launchd user agents (they are not in this repo — they carry absolute `/Users/<you>` paths; the content is reproduced below) plus container restart policies.
 
 **1. `~/Library/LaunchAgents/com.r.engram-embed.plist`** — keeps the host embedder alive.
 
@@ -99,6 +99,22 @@ Until 2026-10-06 `engram-e2e-os` had **no volume at all**: the live store sat in
 `:9201` is bound to `127.0.0.1` only. Security is disabled on this cluster, so anyone who reaches it can mint tokens; remote machines use engramd on `:7071`.
 
 Take a snapshot with `scripts/snapshot-local.sh`. It snapshots `engram-*` and `knowledge-*`, keeps the newest 14, and mirrors the repository to `~/engram-backups/os-snapshots/repo` on the host. The mirror is the copy that survives losing the podman VM, because the snapshot volume lives inside it. To restore, follow `05-restore-from-snapshot.md`: restore under a new name, verify, cut over, and never restore in place.
+
+**5. `~/Library/LaunchAgents/com.r.engram-snapshot.plist`** — runs that script daily.
+
+```xml
+<key>ProgramArguments</key>
+<array><string>/bin/bash</string><string>/Users/r/repos/engram/scripts/snapshot-local.sh</string></array>
+<key>WorkingDirectory</key><string>/Users/r/repos/engram</string>
+<key>EnvironmentVariables</key>
+<dict><key>PATH</key><string>/Users/r/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+<key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
+```
+
+- **One-shot, 03:30 daily.** No `RunAtLoad` or `KeepAlive`. If the Mac is asleep at 03:30, launchd runs the missed job on wake.
+- **PATH must include `/opt/homebrew/bin`** for `podman` (the host mirror step) and `python3`.
+- Logs: `~/.config/services/logs/engram-snapshot.log`. A good run prints `snapshot auto-…: SUCCESS` and `mirrored repository to …`. Run it now with `launchctl kickstart gui/$(id -u)/com.r.engram-snapshot`.
+- **The prune step was verified on 2026-10-08** against a throwaway repository (`KEEP=2`, three runs): it deleted exactly the oldest snapshot.
 
 Recreating the container is now safe, but stop engramd first so nothing writes mid-swap:
 
