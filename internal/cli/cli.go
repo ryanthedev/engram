@@ -159,7 +159,7 @@ func runTokenCreate(ctx context.Context, args []string, env Env, out io.Writer) 
 	roles := fs.String("roles", "", "comma-separated role list (e.g. admin,harvester)")
 	ttl := fs.Duration("ttl", 720*time.Hour, "token lifetime")
 	url := fs.String("url", "", "OpenSearch URL")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return err
 	}
 	id := auth.Identity{TenantID: *tenant, UserID: *user, AgentID: *agent, Roles: parseRoles(*roles)}
@@ -198,7 +198,7 @@ func runTokenList(ctx context.Context, args []string, env Env, out io.Writer) er
 	tenant := fs.String("tenant", "", "tenant id (required)")
 	user := fs.String("user", "", "user id (required)")
 	url := fs.String("url", "", "OpenSearch URL")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return err
 	}
 	id := auth.Identity{TenantID: *tenant, UserID: *user}
@@ -230,13 +230,10 @@ func runTokenRevoke(ctx context.Context, args []string, env Env, out io.Writer) 
 	fs := flag.NewFlagSet("token revoke", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	url := fs.String("url", "", "OpenSearch URL")
-	if err := fs.Parse(args); err != nil {
+	handle, err := parseOnePositional(fs, args, "<handle>")
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
-		return errors.New("token revoke: expected exactly one <handle>")
-	}
-	handle := fs.Arg(0)
 	if err := tokenIssuer(env, *url).Revoke(ctx, handle); err != nil {
 		return err
 	}
@@ -264,7 +261,7 @@ func runIngest(ctx context.Context, args []string, env Env, out, errW io.Writer)
 	team := fs.String("team", "", "team id (required for --scope team)")
 	addr := fs.String("addr", "", "engramd address")
 	token := fs.String("token", "", "bearer token")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return err
 	}
 	if *eventID == "" || *text == "" {
@@ -294,13 +291,19 @@ func runSearch(ctx context.Context, args []string, env Env, out io.Writer) error
 	k := fs.Int("k", 10, "max hits")
 	addr := fs.String("addr", "", "engramd address")
 	token := fs.String("token", "", "bearer token")
-	if err := fs.Parse(args); err != nil {
+	// Flags are accepted on either side of QUERY (the usage banner shows them
+	// after it). Exactly one positional: an unquoted multi-word query used to
+	// silently search only its first word.
+	pos, err := parseInterleaved(fs, args)
+	switch {
+	case err != nil:
 		return err
+	case len(pos) == 0:
+		return errors.New("search: expected a QUERY")
+	case len(pos) > 1:
+		return errors.New("search: expected exactly one QUERY (quote a multi-word query)")
 	}
-	if fs.NArg() == 0 {
-		return errors.New("search: expected a query")
-	}
-	query := fs.Arg(0)
+	query := pos[0]
 	client, err := dialClient(env, *addr, *token)
 	if err != nil {
 		return err
@@ -342,7 +345,7 @@ func runStatus(ctx context.Context, args []string, env Env, out io.Writer) error
 	fs.SetOutput(io.Discard)
 	addr := fs.String("addr", "", "engramd address")
 	token := fs.String("token", "", "bearer token")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return err
 	}
 	client, err := dialClient(env, *addr, *token)
@@ -364,18 +367,16 @@ func runAudit(ctx context.Context, args []string, env Env, out io.Writer) error 
 	fs.SetOutput(io.Discard)
 	addr := fs.String("addr", "", "engramd address")
 	token := fs.String("token", "", "bearer token")
-	if err := fs.Parse(args); err != nil {
+	factID, err := parseOnePositional(fs, args, "<fact-id>")
+	if err != nil {
 		return err
-	}
-	if fs.NArg() != 1 {
-		return errors.New("audit: expected exactly one <fact-id>")
 	}
 	client, err := dialClient(env, *addr, *token)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-	res, err := client.Audit(ctx, fs.Arg(0))
+	res, err := client.Audit(ctx, factID)
 	if err != nil {
 		return err
 	}
@@ -419,7 +420,7 @@ func aclEdgeFromFlags(args []string) (acl.Edge, string, error) {
 	team := fs.String("team", "", "team id (member edge)")
 	org := fs.Bool("org", false, "org write grant (org_grant edge)")
 	url := fs.String("url", "", "OpenSearch URL")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return acl.Edge{}, "", err
 	}
 	if *tenant == "" || *user == "" {
@@ -476,7 +477,7 @@ func runACLList(ctx context.Context, args []string, env Env, out io.Writer) erro
 	tenant := fs.String("tenant", "", "tenant id (required)")
 	user := fs.String("user", "", "user id (required)")
 	url := fs.String("url", "", "OpenSearch URL")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return err
 	}
 	id := auth.Identity{TenantID: *tenant, UserID: *user}
@@ -526,7 +527,7 @@ func runQuarantineList(ctx context.Context, args []string, env Env, out io.Write
 	fs.SetOutput(io.Discard)
 	tenant := fs.String("tenant", "", "tenant id (required)")
 	url := fs.String("url", "", "OpenSearch URL")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return err
 	}
 	if *tenant == "" {
@@ -556,11 +557,9 @@ func runQuarantineRelease(ctx context.Context, args []string, env Env, out io.Wr
 	fs.SetOutput(io.Discard)
 	tenant := fs.String("tenant", "", "tenant id (required)")
 	url := fs.String("url", "", "OpenSearch URL")
-	if err := fs.Parse(args); err != nil {
+	fingerprint, err := parseOnePositional(fs, args, "<fingerprint>")
+	if err != nil {
 		return err
-	}
-	if fs.NArg() != 1 {
-		return errors.New("quarantine release: expected exactly one <fingerprint>")
 	}
 	if *tenant == "" {
 		return errors.New("quarantine release: --tenant is required")
@@ -569,10 +568,10 @@ func runQuarantineRelease(ctx context.Context, args []string, env Env, out io.Wr
 	if err != nil {
 		return err
 	}
-	if err := es.Release(ctx, *tenant, fs.Arg(0)); err != nil {
+	if err := es.Release(ctx, *tenant, fingerprint); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "released %s from quarantine into the admitted tier\n", fs.Arg(0))
+	fmt.Fprintf(out, "released %s from quarantine into the admitted tier\n", fingerprint)
 	return nil
 }
 

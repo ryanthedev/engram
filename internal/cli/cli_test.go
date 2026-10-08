@@ -138,6 +138,124 @@ func TestRunIngest_AdvisoryNamesEachMalformedLine(t *testing.T) {
 	}
 }
 
+// searchCaptureServer is an in-process engrampb.EngramServer that records
+// the last SearchRequest it received, so flag-parsing tests can assert on
+// the k and query the CLI actually sent rather than on printed output.
+type searchCaptureServer struct {
+	engrampb.UnimplementedEngramServer
+	mu   sync.Mutex
+	last *engrampb.SearchRequest
+}
+
+func (s *searchCaptureServer) Search(_ context.Context, req *engrampb.SearchRequest) (*engrampb.SearchResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.last = req
+	return &engrampb.SearchResponse{}, nil
+}
+
+func (s *searchCaptureServer) lastRequest() *engrampb.SearchRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.last
+}
+
+// startSearchCaptureServer serves searchCaptureServer on an ephemeral
+// loopback port (the same in-process gRPC stub convention as
+// startStubEngramd).
+func startSearchCaptureServer(t *testing.T) (string, *searchCaptureServer) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	stub := &searchCaptureServer{}
+	srv := grpc.NewServer()
+	engrampb.RegisterEngramServer(srv, stub)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	return lis.Addr().String(), stub
+}
+
+// TestRunSearch_FlagsOnEitherSideOfQuery is the regression test for the
+// documented-order bug: `engram --help` shows `search QUERY [-k 10] ...`,
+// but Go's flag package stops at the first positional, so `search QUERY -k 3`
+// silently ignored -k (and -addr/-token) and searched with the default k.
+// Both orders must now send k=3, an unknown trailing flag must be an error
+// rather than silently dropped, and "--" must still end flag parsing.
+func TestRunSearch_FlagsOnEitherSideOfQuery(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string // everything after "search"; ADDR is replaced by the stub address
+		wantQuery string
+		wantK     int32
+		wantErr   string // substring of stderr when the invocation must fail
+	}{
+		{"flags before query", []string{"-k", "3", "-addr", "ADDR", "upublish publish flow"}, "upublish publish flow", 3, ""},
+		{"flags after query (documented order)", []string{"upublish publish flow", "-k", "3", "-addr", "ADDR"}, "upublish publish flow", 3, ""},
+		{"flags on both sides", []string{"-addr", "ADDR", "upublish publish flow", "-k", "3"}, "upublish publish flow", 3, ""},
+		{"default k when omitted", []string{"upublish publish flow", "-addr", "ADDR"}, "upublish publish flow", 10, ""},
+		{"double-dash ends flags", []string{"-k", "3", "-addr", "ADDR", "--", "-k"}, "-k", 3, ""},
+		{"unknown trailing flag is an error", []string{"upublish publish flow", "-addr", "ADDR", "-bogus"}, "", 0, "flag provided but not defined: -bogus"},
+		{"unquoted multi-word query is an error", []string{"upublish", "publish", "-addr", "ADDR"}, "", 0, "expected exactly one QUERY"},
+		{"missing query is an error", []string{"-k", "3", "-addr", "ADDR"}, "", 0, "expected a QUERY"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			addr, stub := startSearchCaptureServer(t)
+			args := []string{"search"}
+			for _, a := range tt.args {
+				if a == "ADDR" {
+					a = addr
+				}
+				args = append(args, a)
+			}
+			var out, errW bytes.Buffer
+			code := cli.Run(context.Background(), args, noopEnv, &out, &errW)
+			if tt.wantErr != "" {
+				if code == 0 {
+					t.Fatalf("exit code = 0, want non-zero; stdout=%q", out.String())
+				}
+				if !strings.Contains(errW.String(), tt.wantErr) {
+					t.Errorf("stderr = %q, want it to contain %q", errW.String(), tt.wantErr)
+				}
+				if stub.lastRequest() != nil {
+					t.Errorf("a search was sent despite the parse error: %v", stub.lastRequest())
+				}
+				return
+			}
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr=%q", code, errW.String())
+			}
+			req := stub.lastRequest()
+			if req == nil {
+				t.Fatal("no SearchRequest reached the server")
+			}
+			if req.GetQuery() != tt.wantQuery {
+				t.Errorf("query = %q, want %q", req.GetQuery(), tt.wantQuery)
+			}
+			if req.GetK() != tt.wantK {
+				t.Errorf("k = %d, want %d", req.GetK(), tt.wantK)
+			}
+		})
+	}
+}
+
+// TestRunStatus_RejectsStrayPositional covers the no-positional half of the
+// interleaved-parse fix: a stray positional used to be a silent point past
+// which every later flag was ignored (`status junk -addr X` never read
+// -addr); it is now an error.
+func TestRunStatus_RejectsStrayPositional(t *testing.T) {
+	var out, errW bytes.Buffer
+	code := cli.Run(context.Background(), []string{"status", "junk", "-addr", "127.0.0.1:1"}, noopEnv, &out, &errW)
+	if code == 0 {
+		t.Fatal("exit code = 0, want non-zero for a stray positional")
+	}
+	if !strings.Contains(errW.String(), `unexpected argument "junk"`) {
+		t.Errorf("stderr = %q, want it to name the unexpected argument", errW.String())
+	}
+}
+
 // TestUsageDocumentsDirectiveGrammar covers DW-4.2: `engram help` documents
 // the pipe-delimited fact:/retract:/experience: grammar.
 func TestUsageDocumentsDirectiveGrammar(t *testing.T) {

@@ -47,7 +47,7 @@ func runPurge(ctx context.Context, args []string, env Env, out io.Writer) error 
 	confirm := fs.Bool("confirm", false, "actually purge; without it the run is a dry run that mutates nothing")
 	addr := fs.String("addr", "", "engramd address")
 	token := fs.String("token", "", "bearer token")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return err
 	}
 	if len(eventIDs.ids) == 0 {

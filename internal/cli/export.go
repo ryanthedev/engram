@@ -80,20 +80,11 @@ func runExport(ctx context.Context, args []string, env Env, out io.Writer) error
 	force := flags.Bool("force", false, "clobber a non-empty directory not created by engram export")
 	addr := flags.String("addr", "", "engramd address")
 	token := flags.String("token", "", "bearer token")
-	if err := flags.Parse(args); err != nil {
+	// Interleaved parse: `export <dir> --force` works as well as
+	// `export --force <dir>`.
+	dir, err := parseOnePositional(flags, args, "target <dir>")
+	if err != nil {
 		return err
-	}
-	if flags.NArg() < 1 {
-		return errors.New("export: expected a target <dir>")
-	}
-	dir := flags.Arg(0)
-	// flag stops at the first positional; re-parse the tail so
-	// `export <dir> --force` works as well as `export --force <dir>`.
-	if err := flags.Parse(flags.Args()[1:]); err != nil {
-		return err
-	}
-	if flags.NArg() != 0 {
-		return errors.New("export: expected exactly one <dir>")
 	}
 
 	// Fail fast on a foreign target before dialing anything.
