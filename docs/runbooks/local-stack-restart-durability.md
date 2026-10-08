@@ -50,9 +50,22 @@ Two launchd user agents (they are not in this repo — they carry absolute `/Use
 <array><string>/opt/homebrew/bin/podman</string><string>machine</string><string>start</string></array>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><false/>
+<key>AbandonProcessGroup</key><true/>
 ```
 
 One-shot on purpose. `podman machine start` exits **125 / "already running"** when the VM is already up; with `KeepAlive` that benign case would look like a crash and respawn forever. Seeing `last exit code = 125` in `launchctl print` is normal.
+
+**`AbandonProcessGroup` is load-bearing, and this agent did nothing at all without it.** `podman machine start` forks `vfkit` (the VM) and `gvproxy` (the network) and then returns. launchd counts those survivors as part of the finished job and SIGKILLs the whole process group once the main program exits — so the VM boots, writes `Machine "podman-machine-default" started successfully` to the log, and is dead moments later. The failure is maximally deceptive: the log says success, `launchctl print` shows `last exit code = 0`, and the VM is gone.
+
+Measured on a real login (5 s sampling), before the fix:
+
+| Sample | launchd job | `vfkit` / `gvproxy` |
+|---|---|---|
+| T+15s | `running` | both alive |
+| T+20s | `notrunning` | `gvproxy` already reaped |
+| T+25s | `notrunning` | **both gone** |
+
+After adding `AbandonProcessGroup`, both survive indefinitely with the job long exited. If the VM is ever down again after a reboot, check this key **first** — `podman machine inspect` reporting `"State": "stopped"` while the agent's log ends in `started successfully` is this bug and nothing else.
 
 **3. Container restart policies — must be `always`, not `unless-stopped`.**
 

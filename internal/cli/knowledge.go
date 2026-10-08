@@ -43,7 +43,7 @@ func runKnowledgeCollections(ctx context.Context, args []string, env Env, out io
 	fs.SetOutput(io.Discard)
 	addr := fs.String("addr", "", "engramd address")
 	token := fs.String("token", "", "bearer token")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return err
 	}
 	client, err := dialClient(env, *addr, *token)
@@ -71,7 +71,7 @@ func runKnowledgeCreateCollection(ctx context.Context, args []string, env Env, o
 	roles := fs.String("roles", "", "comma-separated read roles when not public")
 	var fields fieldSpecFlag
 	fs.Var(&fields, "field", "field mapping NAME:TYPE[:filterable][:sortable] (repeatable)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsOnly(fs, args); err != nil {
 		return err
 	}
 	if strings.TrimSpace(*name) == "" {
