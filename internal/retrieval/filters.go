@@ -324,6 +324,23 @@ func (m *MultiRetriever) validateFilterableSources(preds []Predicate, sel source
 	return nil
 }
 
+// expansionRequested reports whether this search runs graph expansion: the
+// query opted in (Query.Expand), OR the caller EXPLICITLY named the expansion
+// source (ExpandedSource) in Filter.Sources.
+//
+// Naming "graph" is itself an unambiguous request for expansions — it is the
+// only thing that source produces — so it implies Expand rather than being
+// silently dropped (Sources: [semantic, graph] returning no expansions) or
+// rejected as a contradiction (which would break every caller that selected
+// graph before Expand existed). Expand remains the one switch for the
+// IMPLICIT case: nil Sources selects every source but expands only on opt-in.
+// This decides only whether the hook may run; selectSources still excludes it
+// from any filtered search, and validateFilterableSources still rejects naming
+// it alongside a filter.
+func expansionRequested(sel sourceSet, expand bool) bool {
+	return expand || (sel != nil && sel.selected(ExpandedSource))
+}
+
 // selectSources partitions the registered sources into the ones this search
 // runs. It is the single place Filter.Sources is applied — the built-in tier
 // fan-out, the registered tier-source fan-out, and the post-hook chain all
@@ -343,10 +360,32 @@ func (m *MultiRetriever) validateFilterableSources(preds []Predicate, sel source
 // field — its surface is declared, visible in every error message, and
 // excludable by name. See DW-4.2.)
 //
+// expand reports whether the query opted in to graph expansion (Query.Expand).
+// When it did not, the post-hook registered under ExpandedSource is dropped
+// HERE, alongside every other source exclusion, so the traversal never starts
+// — gating its output after the fact would still pay its latency. Post-hooks
+// under any other name are untouched: expand governs expansion only.
+//
 // It does not touch the ACL: the returned sources still run under the compiled
 // filter, and their hits are still re-verified. Narrowing sources can only
 // REMOVE results from a search, never admit one the ACL would have denied.
-func (m *MultiRetriever) selectSources(sel sourceSet, filtered bool) ([]*tierRetriever, []namedTierSource, []namedPostHook) {
+func (m *MultiRetriever) selectSources(sel sourceSet, filtered, expand bool) ([]*tierRetriever, []namedTierSource, []namedPostHook) {
+	tiers, srcs, hooks := m.selectBySources(sel, filtered)
+	if expand {
+		return tiers, srcs, hooks
+	}
+	kept := make([]namedPostHook, 0, len(hooks))
+	for _, h := range hooks {
+		if h.name != ExpandedSource {
+			kept = append(kept, h)
+		}
+	}
+	return tiers, srcs, kept
+}
+
+// selectBySources is selectSources' Filter.Sources/predicate half (see there):
+// the partition before the expansion gate is applied.
+func (m *MultiRetriever) selectBySources(sel sourceSet, filtered bool) ([]*tierRetriever, []namedTierSource, []namedPostHook) {
 	if sel == nil && !filtered { // nil Sources, no filter: every source, no work at all.
 		return m.tiers, m.tierSrcs, m.postHooks
 	}

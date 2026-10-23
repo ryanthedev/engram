@@ -365,7 +365,8 @@ func TestTooManyPredicatesRejected(t *testing.T) {
 // fan-out/chain sites, not just whichever one someone remembered to gate.
 func TestDW_4_5_SourcesSkipsEpisodicTierAndGraphPostHook(t *testing.T) {
 	r, captured, tier, hook := newFilterRetriever(t, emptyResults)
-	_, err := r.Search(context.Background(), retrieval.Query{Text: "x"}, retrieval.Filter{Sources: []string{"semantic"}})
+	// Expand on: the hook must be skipped by Sources, not by the expand gate.
+	_, err := r.Search(context.Background(), retrieval.Query{Text: "x", Expand: true}, retrieval.Filter{Sources: []string{"semantic"}})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -387,7 +388,7 @@ func TestSourcesSelectsRegisteredTierSourceAndPostHook(t *testing.T) {
 	r, captured, tier, hook := newFilterRetriever(t, emptyResults)
 	tier.hits = []retrieval.Hit{{ID: "x1", Score: 1, Source: "experience", Fields: map[string]any{"text": "t"}}}
 
-	hits, err := r.Search(context.Background(), retrieval.Query{Text: "x"},
+	hits, err := r.Search(context.Background(), retrieval.Query{Text: "x", Expand: true},
 		retrieval.Filter{Sources: []string{"experience", "graph"}})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -437,7 +438,7 @@ func TestDW_4_7_UnknownSourceErrorNamesValidSources(t *testing.T) {
 
 	t.Run("nil means every source", func(t *testing.T) {
 		r, captured, tier, hook := newFilterRetriever(t, emptyResults)
-		if _, err := r.Search(context.Background(), retrieval.Query{Text: "x"}, retrieval.Filter{Sources: nil}); err != nil {
+		if _, err := r.Search(context.Background(), retrieval.Query{Text: "x", Expand: true}, retrieval.Filter{Sources: nil}); err != nil {
 			t.Fatalf("Search: %v", err)
 		}
 		if idx := searchedIndices(captured()); len(idx) != 2 {

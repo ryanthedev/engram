@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -100,7 +101,7 @@ func TestDW_6_1_HonestKAtDepth2(t *testing.T) {
 	r := expandingRetriever(t, chainStore(t), seeds)
 
 	const k = 2
-	hits, err := r.Search(ctx, retrieval.Query{Text: "q", K: k},
+	hits, err := r.Search(ctx, retrieval.Query{Text: "q", Expand: true, K: k},
 		retrieval.Filter{Identity: auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -143,7 +144,7 @@ func TestSourcesExcludingGraphYieldsNoExpansion(t *testing.T) {
 	seeds := []retrieval.Hit{tripleHit("fact-ab", "A", "works_at", "B")}
 	r := expandingRetriever(t, chainStore(t), seeds)
 
-	hits, err := r.Search(ctx, retrieval.Query{Text: "q", K: 10}, retrieval.Filter{
+	hits, err := r.Search(ctx, retrieval.Query{Text: "q", Expand: true, K: 10}, retrieval.Filter{
 		Identity: auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"},
 		Sources:  []string{"seed"}, // graph deliberately not named
 	})
@@ -178,5 +179,39 @@ func TestDW_6_5_PostHookContractCommentIsCurrent(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("expand.go does not mention %q: the new post-hook contract is undocumented where the old one lived", want)
 		}
+	}
+}
+
+// TestExpandFalseRunsNoExpansion: the same depth-2 pipeline that expands with
+// Query.Expand set, run with it left false. The real expander is never
+// consulted, so there is no expanded block at all — and the caller loses none
+// of its matches (they equal the expand=true ones).
+func TestExpandFalseRunsNoExpansion(t *testing.T) {
+	ctx := context.Background()
+	seeds := []retrieval.Hit{
+		tripleHit("fact-ab", "A", "works_at", "B"), // would anchor a traversal
+		tripleHit("fact-2", "X", "likes", "Y"),
+	}
+	caller := retrieval.Filter{Identity: auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}}
+
+	withExpand, err := expandingRetriever(t, chainStore(t), seeds).Search(ctx, retrieval.Query{Text: "q", K: 10, Expand: true}, caller)
+	if err != nil {
+		t.Fatalf("Search(expand=true): %v", err)
+	}
+	wantMatched, wantExpanded := retrieval.SplitExpanded(withExpand, 10)
+	if len(wantExpanded) == 0 {
+		t.Fatal("precondition: expand=true produced no expansions, so expand=false would prove nothing")
+	}
+
+	hits, err := expandingRetriever(t, chainStore(t), seeds).Search(ctx, retrieval.Query{Text: "q", K: 10}, caller)
+	if err != nil {
+		t.Fatalf("Search(expand=false): %v", err)
+	}
+	matched, expanded := retrieval.SplitExpanded(hits, 10)
+	if expanded != nil {
+		t.Fatalf("expanded = %+v, want nil with expand=false", expanded)
+	}
+	if !reflect.DeepEqual(matched, wantMatched) {
+		t.Errorf("matched = %+v, want the expand=true matches %+v", matched, wantMatched)
 	}
 }

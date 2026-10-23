@@ -16,10 +16,11 @@ import (
 // searchRequestNonFilterFields are the SearchRequest fields that are NOT part
 // of the caller-facing filter vocabulary: query text, result size, and the
 // tenancy scope pinned from the verified identity (never a caller-supplied
-// filter). Everything else on the message is a filter field and must be named
-// in searchFilterFields.
+// filter), and expand — which opts in to the graph post-hook rather than
+// narrowing any tier, so it is not filter vocabulary. Everything else on the
+// message is a filter field and must be named in searchFilterFields.
 var searchRequestNonFilterFields = map[string]bool{
-	"query": true, "k": true, "tenant_id": true, "user_id": true,
+	"query": true, "k": true, "tenant_id": true, "user_id": true, "expand": true,
 }
 
 // TestSearchFilterFieldsMatchesProtoFilterFields pins the hand-written

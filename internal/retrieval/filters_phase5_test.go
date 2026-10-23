@@ -307,7 +307,7 @@ func filterClausesOf(t *testing.T, body map[string]any) []map[string]any {
 func TestFilteredSearchExcludesUnfilterableSources(t *testing.T) {
 	t.Run("unfiltered: both run", func(t *testing.T) {
 		r, _, tier, hook := newFilterRetriever(t, emptyResults)
-		if _, err := r.Search(context.Background(), retrieval.Query{Text: "x"}, retrieval.Filter{}); err != nil {
+		if _, err := r.Search(context.Background(), retrieval.Query{Text: "x", Expand: true}, retrieval.Filter{}); err != nil {
 			t.Fatalf("Search: %v", err)
 		}
 		if tier.calls != 1 || hook.calls != 1 {
@@ -316,7 +316,8 @@ func TestFilteredSearchExcludesUnfilterableSources(t *testing.T) {
 	})
 	t.Run("filtered: neither runs", func(t *testing.T) {
 		r, captured, tier, hook := newFilterRetriever(t, emptyResults)
-		_, err := r.Search(context.Background(), retrieval.Query{Text: "x"}, retrieval.Filter{
+		// Expand on: the hook must be excluded by the filter, not the expand gate.
+		_, err := r.Search(context.Background(), retrieval.Query{Text: "x", Expand: true}, retrieval.Filter{
 			Predicates: []retrieval.Predicate{{Field: "kind", Op: "term", Value: "decision"}},
 		})
 		if err != nil {
