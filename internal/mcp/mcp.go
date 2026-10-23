@@ -59,11 +59,6 @@ type KnowledgeHit struct {
 	Fragments []string `json:"fragments,omitempty"`
 }
 
-// fieldsJSON lets the byte-budget packer read a hit's stored fields without
-// caring which hit DTO it is packing (see packable in budget.go).
-func (h Hit) fieldsJSON() string          { return h.Fields }
-func (h KnowledgeHit) fieldsJSON() string { return h.Fields }
-
 // SearchResult is one memory_search answer in two labeled blocks. Hits are the
 // query's MATCHED hits — at most k of them, and never a graph expansion. Expanded
 // carries the graph expansions reached by traversing out of those matched hits:
@@ -217,6 +212,13 @@ type SearchFilter struct {
 	// source. An empty (non-nil) slice is a validation error, not a silent
 	// "all".
 	Sources []string
+	// Expand asks for graph expansions — the neighbors reached by traversing
+	// out of the matched hits. It is a request option, not a filter: it
+	// narrows nothing, and rides here only because SearchFilter is the flat
+	// per-request surface the adapter maps field for field onto SearchRequest.
+	// False (the zero value) asks the server to skip graph traversal entirely:
+	// expansions were ~half of a search's tokens and almost never used.
+	Expand bool
 }
 
 // Backend is the Engram capability the MCP tools map onto (consumer-defined

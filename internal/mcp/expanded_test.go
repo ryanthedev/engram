@@ -8,9 +8,9 @@ package mcp
 // cosmetic.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 )
@@ -37,7 +37,7 @@ func TestDW_6_2_SearchResultRendersExpandedSection(t *testing.T) {
 		hits:     []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 10)},
 		expanded: []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 10)},
 	}
-	text, decoded := searchViaWire(t, backend, map[string]any{"query": "q"})
+	text, decoded := searchViaWire(t, backend, map[string]any{"query": "q", "expand": true})
 
 	// Structured: two blocks, never merged.
 	hits, _ := decoded["hits"].([]any)
@@ -45,15 +45,15 @@ func TestDW_6_2_SearchResultRendersExpandedSection(t *testing.T) {
 	if len(hits) != 1 || len(expanded) != 1 {
 		t.Fatalf("hits/expanded = %d/%d, want 1/1 — the blocks must stay separate", len(hits), len(expanded))
 	}
-	// The tier now travels inside the self-addressing id ("<source>:<id>"),
-	// so a graph hit is identifiable by its id prefix rather than a field.
-	// Rows are compact lines; the tier travels in the self-addressing id, so a
-	// graph hit is identifiable by its first column's prefix.
+	// Matched rows are self-addressing "<source>:<id>\tdate\ttext"; an
+	// expansion row is its bare statement — no id (graph has no drill-down)
+	// and no date (graph records carry none).
 	if h := fmt.Sprint(hits[0]); strings.HasPrefix(h, "graph:") {
 		t.Fatalf("a graph hit was rendered into the matched hits array: %v", h)
 	}
-	if e := fmt.Sprint(expanded[0]); !strings.HasPrefix(e, "graph:g1\t") {
-		t.Fatalf("expanded[0] = %v, want the graph hit graph:g1", e)
+	statement := strings.Repeat("g", 10)
+	if e := fmt.Sprint(expanded[0]); e != statement {
+		t.Fatalf("expanded[0] = %q, want the bare statement %q", e, statement)
 	}
 
 	// Text: the compact-line block an agent actually reads. The expansion must
@@ -71,36 +71,45 @@ func TestDW_6_2_SearchResultRendersExpandedSection(t *testing.T) {
 	if !strings.HasPrefix(lines[2], "graph (") || !strings.Contains(lines[2], "not counted against k") {
 		t.Errorf("line 2 = %q, want a header naming the block and stating it is not counted against k", lines[2])
 	}
-	if !strings.HasPrefix(lines[3], "graph:g1\t") {
-		t.Errorf("line 3 = %q, want the graph expansion below the header", lines[3])
+	if lines[3] != statement {
+		t.Errorf("line 3 = %q, want the graph expansion's bare statement below the header", lines[3])
+	}
+	if strings.Contains(lines[3], "\t") || strings.Contains(lines[3], "graph:") {
+		t.Errorf("expansion row %q carries an id/date column", lines[3])
 	}
 }
 
-// TestDW_6_3_ZeroExpansionsOmitsExpandedKey: with no expansions the key is
-// ABSENT from the response — not present-and-empty. An empty array still costs
-// tokens and still reads as "expansion ran"; absence is the honest encoding.
-func TestDW_6_3_ZeroExpansionsOmitsExpandedKey(t *testing.T) {
+// TestDW_6_3_ZeroExpansionsOmitsExpandedBlock: with no expansions the block is
+// ABSENT from the response — not present-and-empty. An empty header still
+// costs tokens and still reads as "expansion ran"; absence is the honest
+// encoding.
+func TestDW_6_3_ZeroExpansionsOmitsExpandedBlock(t *testing.T) {
 	backend := &fixedHitsBackend{hits: []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 10)}}
-	text, decoded := searchViaWire(t, backend, map[string]any{"query": "q"})
+	text, decoded := searchViaWire(t, backend, map[string]any{"query": "q", "expand": true})
 
 	if _, present := decoded["expanded"]; present {
-		t.Errorf("structuredContent carries an `expanded` key with zero expansions: %v", decoded["expanded"])
+		t.Errorf("response carries an expanded block with zero expansions: %v", decoded["expanded"])
 	}
 	if _, present := decoded["expanded_omitted"]; present {
-		t.Errorf("structuredContent carries `expanded_omitted` with zero expansions: %v", decoded["expanded_omitted"])
+		t.Errorf("response reports dropped expansions with zero expansions: %v", decoded["expanded_omitted"])
 	}
-	if strings.Contains(text, "expanded") {
-		t.Errorf("compact lines mention an expanded block that does not exist:\n%s", text)
+	if strings.Contains(text, "graph (") {
+		t.Errorf("compact lines carry a graph header for a block that does not exist:\n%s", text)
 	}
 
-	// And the packed envelope itself marshals without the key at all.
-	b, err := json.Marshal(packSearchResult([]Hit{semanticHit("s1", "a", "b", "c", 10)}, 16384, memoryFacetFields))
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	// And an empty (non-nil) expansion slice from the backend renders the same
+	// as nil: absent.
+	packed := packRendered(renderSearchResult(SearchResult{Hits: []Hit{semanticHit("s1", "a", "b", "c", 10)}, Expanded: []Hit{}}), 16384)
+	if packed.Expanded != nil || packed.ExpandedOmitted != 0 {
+		t.Errorf("empty expansions packed to %v / %d, want nil / 0", packed.Expanded, packed.ExpandedOmitted)
 	}
-	if strings.Contains(string(b), `"expanded"`) {
-		t.Errorf("searchResult marshaled an empty `expanded` key: %s", b)
-	}
+}
+
+// renderedLen is the byte length of the text a SearchResult renders to with
+// nothing cut — the measure every budget below is sized against, because it
+// is the measure packRendered itself uses.
+func renderedLen(res SearchResult) int {
+	return len(compactLines(renderSearchResult(res)))
 }
 
 // TestDW_6_4_MatchedHitsPackFirstExpansionsDroppedFirst: under a budget that
@@ -117,11 +126,9 @@ func TestDW_6_4_MatchedHitsPackFirstExpansionsDroppedFirst(t *testing.T) {
 	}
 
 	// Budget sized to hold both matched hits and nothing more.
-	full := packSearchResult(matched, 100000, memoryFacetFields)
-	fullBytes, _ := json.Marshal(full)
-	budget := len(fullBytes)
+	budget := renderedLen(SearchResult{Hits: matched})
 
-	result := packExpanded(full, expanded, budget)
+	result := packRendered(renderSearchResult(SearchResult{Hits: matched, Expanded: expanded}), budget)
 
 	if len(result.Hits) != 2 {
 		t.Fatalf("len(hits) = %d, want 2: an expansion evicted a matched hit", len(result.Hits))
@@ -139,7 +146,7 @@ func TestDW_6_4_MatchedHitsPackFirstExpansionsDroppedFirst(t *testing.T) {
 
 // TestDW_6_4_ExpandedFillsLeftoverBudget: the block is budgeted separately —
 // given room for some but not all expansions, the fitting prefix is kept, the
-// rest counted, and the serialized whole still respects the budget.
+// rest counted, and the rendered whole still respects the budget.
 func TestDW_6_4_ExpandedFillsLeftoverBudget(t *testing.T) {
 	matched := []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 100)}
 	expanded := []Hit{
@@ -148,15 +155,13 @@ func TestDW_6_4_ExpandedFillsLeftoverBudget(t *testing.T) {
 		padGraphHit("g3", "de", "part_of", "eu", 100),
 	}
 
-	// A budget that holds the matched hit plus exactly one expansion.
-	base := packSearchResult(matched, 100000, memoryFacetFields)
-	oneExpansion := base
-	oneExpansion.Expanded = expanded[:1]
+	// A budget that holds the matched hit plus exactly one expansion, with the
+	// header reporting the other two dropped.
+	oneExpansion := renderSearchResult(SearchResult{Hits: matched, Expanded: expanded[:1]})
 	oneExpansion.ExpandedOmitted = 2
-	sized, _ := json.Marshal(oneExpansion)
-	budget := len(sized)
+	budget := len(compactLines(oneExpansion))
 
-	result := packExpanded(base, expanded, budget)
+	result := packRendered(renderSearchResult(SearchResult{Hits: matched, Expanded: expanded}), budget)
 
 	if len(result.Hits) != 1 {
 		t.Fatalf("len(hits) = %d, want 1", len(result.Hits))
@@ -164,28 +169,22 @@ func TestDW_6_4_ExpandedFillsLeftoverBudget(t *testing.T) {
 	if len(result.Expanded) != 1 {
 		t.Fatalf("len(expanded) = %d, want 1 (the prefix that fits)", len(result.Expanded))
 	}
-	if result.Expanded[0].ID != "g1" {
-		t.Errorf("kept expansion = %q, want g1: the kept block must be a PREFIX (nearest hop first)", result.Expanded[0].ID)
+	if result.Expanded[0].ID != "graph:g1" { // the row prints no id, but the packed value keeps it
+		t.Errorf("kept expansion = %q, want graph:g1: the kept block must be a PREFIX (nearest hop first)", result.Expanded[0].ID)
 	}
 	if result.ExpandedOmitted != 2 {
 		t.Errorf("expanded_omitted = %d, want 2", result.ExpandedOmitted)
 	}
-	got, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if len(got) > budget {
-		t.Errorf("packed result is %d bytes, over the %d-byte budget: the expanded block is not being budgeted", len(got), budget)
+	if got := len(compactLines(result)); got > budget {
+		t.Errorf("rendered result is %d bytes, over the %d-byte budget: the expanded block is not being budgeted", got, budget)
 	}
 }
 
-// TestDW_6_4_MatchedOverflowStillSpills: the expanded block does not disturb the
-// existing spill path. With more matched hits than the budget holds, the matched
-// overflow still spills to disk and still reports overflow_path — and expansions
-// get only what is left after all of that.
-func TestDW_6_4_MatchedOverflowStillSpills(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv(spillDirEnv, dir)
+// TestDW_6_4_MatchedOverflowStillReportsOmission: the expanded block does not
+// disturb the matched omission signal. With more matched hits than the budget
+// holds, the matched overflow is still counted on the omission line — and
+// expansions get only what is left after all of that.
+func TestDW_6_4_MatchedOverflowStillReportsOmission(t *testing.T) {
 	t.Setenv(searchBudgetBytesEnv, "700")
 
 	matched := make([]Hit, 0, 6)
@@ -196,18 +195,11 @@ func TestDW_6_4_MatchedOverflowStillSpills(t *testing.T) {
 		hits:     matched,
 		expanded: []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 120)},
 	}
-	_, decoded := searchViaWire(t, backend, map[string]any{"query": "q"})
+	_, decoded := searchViaWire(t, backend, map[string]any{"query": "q", "expand": true})
 
 	omitted, _ := decoded["omitted"].(float64)
 	if omitted == 0 {
 		t.Fatalf("nothing was omitted — the budget is not under pressure, so this test proves nothing: %v", decoded)
-	}
-	path, _ := decoded["overflow_path"].(string)
-	if path == "" {
-		t.Fatalf("overflow_path missing: the existing spill path broke when `expanded` was added: %v", decoded)
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("spill file %q not written: %v", path, err)
 	}
 
 	// Matched hits packed FIRST: at least one survived, and under this pressure
@@ -229,13 +221,13 @@ func TestDW_6_4_MatchedOverflowStillSpills(t *testing.T) {
 // all expansions, the compact-line header says so — the caller can tell the
 // block is partial rather than assuming it saw every neighbor.
 func TestExpandedHeaderReportsDroppedExpansions(t *testing.T) {
-	result := searchResult[Hit]{
-		Hits:            []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 5)},
-		Expanded:        []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 5)},
-		ExpandedOmitted: 3,
-	}
+	result := renderSearchResult(SearchResult{
+		Hits:     []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 5)},
+		Expanded: []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 5)},
+	})
+	result.ExpandedOmitted = 3
 	// block header, hit, graph header, expansion
-	lines := strings.Split(compactLines(renderSearchResult(result)), "\n")
+	lines := strings.Split(compactLines(result), "\n")
 	if len(lines) != 4 {
 		t.Fatalf("lines = %d, want 4: %q", len(lines), lines)
 	}
@@ -244,26 +236,89 @@ func TestExpandedHeaderReportsDroppedExpansions(t *testing.T) {
 	}
 }
 
-// TestPackExpandedNeverPanicsOnEmptyInputs: no expansions, no matched hits —
+// TestPackRenderedNeverPanicsOnEmptyInputs: no expansions, no matched hits —
 // ordinary states (expansion off, empty query), not edge cases that blow up.
-func TestPackExpandedNeverPanicsOnEmptyInputs(t *testing.T) {
+func TestPackRenderedNeverPanicsOnEmptyInputs(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		result searchResult[Hit]
-		expand []Hit
+		name string
+		res  SearchResult
 	}{
-		{"no expansions", searchResult[Hit]{Hits: []Hit{semanticHit("s1", "a", "b", "c", 5)}}, nil},
-		{"no matched hits", searchResult[Hit]{Hits: []Hit{}}, []Hit{padGraphHit("g1", "a", "b", "c", 5)}},
-		{"neither", searchResult[Hit]{Hits: []Hit{}}, nil},
+		{"no expansions", SearchResult{Hits: []Hit{semanticHit("s1", "a", "b", "c", 5)}}},
+		{"no matched hits", SearchResult{Hits: []Hit{}, Expanded: []Hit{padGraphHit("g1", "a", "b", "c", 5)}}},
+		{"neither", SearchResult{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := packExpanded(tc.result, tc.expand, 16384)
-			if len(got.Expanded) != len(tc.expand) {
-				t.Errorf("len(expanded) = %d, want %d", len(got.Expanded), len(tc.expand))
+			got := packRendered(renderSearchResult(tc.res), 16384)
+			if len(got.Hits) != len(tc.res.Hits) || got.Omitted != 0 {
+				t.Errorf("hits/omitted = %d/%d, want %d/0", len(got.Hits), got.Omitted, len(tc.res.Hits))
+			}
+			if len(got.Expanded) != len(tc.res.Expanded) {
+				t.Errorf("len(expanded) = %d, want %d", len(got.Expanded), len(tc.res.Expanded))
 			}
 			if got.ExpandedOmitted != 0 {
 				t.Errorf("expanded_omitted = %d, want 0 (everything fit)", got.ExpandedOmitted)
 			}
 		})
+	}
+}
+
+// expandRecordingBackend is a fixedHitsBackend that records the filter each
+// Search received, so a test can see what reached the seam.
+type expandRecordingBackend struct {
+	fixedHitsBackend
+	lastFilter SearchFilter
+}
+
+func (b *expandRecordingBackend) Search(ctx context.Context, q string, k int, f SearchFilter) (SearchResult, error) {
+	b.lastFilter = f
+	return b.fixedHitsBackend.Search(ctx, q, k, f)
+}
+
+// TestExpandFalseDiscardsServerExpansions: expansion is opt-in. Without
+// expand=true the request asks the server to skip graph traversal, AND any
+// expansions that come back anyway are dropped — the fake here always returns
+// them, exactly as a server predating SearchRequest.expand would, since it
+// ignores the unknown field. With expand=true they ride through, and so they do
+// when sources names "graph" — the server's own rule for asking for expansion.
+func TestExpandFalseDiscardsServerExpansions(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      map[string]any
+		wantAsked bool
+		wantGraph bool
+	}{
+		{"omitted", map[string]any{"query": "q"}, false, false},
+		{"explicit false", map[string]any{"query": "q", "expand": false}, false, false},
+		{"true", map[string]any{"query": "q", "expand": true}, true, true},
+		{"sources names graph", map[string]any{"query": "q", "sources": []any{"semantic", "graph"}}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &expandRecordingBackend{fixedHitsBackend: fixedHitsBackend{
+				hits:     []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 10)},
+				expanded: []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 10)},
+			}}
+			text, decoded := searchViaWire(t, backend, tc.args)
+			if backend.lastFilter.Expand != tc.wantAsked {
+				t.Errorf("SearchFilter.Expand = %v, want %v", backend.lastFilter.Expand, tc.wantAsked)
+			}
+			_, gotGraph := decoded["expanded"]
+			if gotGraph != tc.wantGraph || strings.Contains(text, "graph (") != tc.wantGraph {
+				t.Errorf("graph block present = %v, want %v:\n%s", gotGraph, tc.wantGraph, text)
+			}
+		})
+	}
+}
+
+// TestExpandRejectsNonBoolean: expand is a boolean, and the barricade says so
+// in caller terms rather than letting a string through as truthy.
+func TestExpandRejectsNonBoolean(t *testing.T) {
+	res := callSearchTool(t, newFakeBackend(), map[string]any{"query": "q", "expand": "yes"})
+	if res["isError"] != true {
+		t.Fatalf("expand:\"yes\" accepted: %v", res)
+	}
+	content, _ := res["content"].([]any)
+	block, _ := content[0].(map[string]any)
+	if msg, _ := block["text"].(string); !strings.Contains(msg, "expand must be a boolean") {
+		t.Errorf("error = %q, want it to name expand's shape", msg)
 	}
 }

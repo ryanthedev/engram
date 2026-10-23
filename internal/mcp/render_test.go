@@ -165,6 +165,31 @@ func TestDW_1_4_IDSourceRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSemanticIDsRenderAsShortPrefix: a semantic row shows the first 12 hex
+// chars of its 64-hex id, and nothing else is shortened — an episodic id is a
+// 20-char OpenSearch id with no prefix resolution behind it, and a knowledge
+// doc id is harvester-chosen. A semantic id already at or under 12 chars is
+// shown whole rather than padded.
+func TestSemanticIDsRenderAsShortPrefix(t *testing.T) {
+	const fullSemantic = "6485d017480030ee3cf100054c6753b3508159829627e1532f9e454dce223768"
+	const episodicID = "_a1su58Bj9q7QSuwse43"
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"semantic 64-hex", renderHit(semanticHit(fullSemantic, "s", "p", "o", 5)).ID, "semantic:6485d0174800"},
+		{"semantic already short", renderHit(semanticHit("abc123", "s", "p", "o", 5)).ID, "semantic:abc123"},
+		{"episodic stays whole", renderHit(episodicHit(episodicID, "t", "note", "2026-07-01T00:00:00Z", "e")).ID, "episodic:" + episodicID},
+		{"knowledge stays whole", renderKnowledgeHit("notes", KnowledgeHit{ID: strings.Repeat("d", 40)}).ID, "notes:" + strings.Repeat("d", 40)},
+	}
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s: id = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 // TestDW_1_4_IDSourceRoundTripSurvivesAdversarialContent: a statement/text
 // body containing embedded tab and newline characters (an attempt to forge
 // extra delimiter fields) must not corrupt the id+source round trip — the
@@ -306,7 +331,7 @@ func TestRenderHitMissingOrMalformedFieldsNoPanic(t *testing.T) {
 	tests := []Hit{
 		{ID: "no-fields", Source: "episodic", Score: 0.1, Fields: ""},
 		{ID: "bad-json", Source: "episodic", Score: 0.1, Fields: "not json"},
-		{ID: "no-fields-semantic", Source: "semantic", Score: 0.1, Fields: ""},
+		{ID: "nofields-sem", Source: "semantic", Score: 0.1, Fields: ""},
 		{ID: "unregistered-source", Source: "experience", Score: 0.1, Fields: `{"text":"hello"}`},
 	}
 	for _, h := range tests {
@@ -328,9 +353,8 @@ func TestRenderHitMissingOrMalformedFieldsNoPanic(t *testing.T) {
 }
 
 // TestCompactLinesOmissionFooterOnlyWhenOmitted: the omission summary
-// footer line appears only when hits were actually left out — mirroring
-// buildSearchResult's gating in budget.go, so the format change doesn't
-// silently drop that signal.
+// footer line appears only when hits were actually left out, so the format
+// never silently drops that signal.
 func TestCompactLinesOmissionFooterOnlyWhenOmitted(t *testing.T) {
 	fit := renderedResult{Hits: []renderedHit{{ID: "episodic:a", Text: "g"}}}
 	if got := compactLines(fit); strings.Contains(got, "...") {
@@ -340,10 +364,9 @@ func TestCompactLinesOmissionFooterOnlyWhenOmitted(t *testing.T) {
 	omitted := renderedResult{
 		Hits:    []renderedHit{{ID: "episodic:a", Text: "g"}},
 		Omitted: 3,
-		Hint:    "3 more hit(s) omitted to stay within the response size budget; narrow your query.",
 	}
 	got := compactLines(omitted)
-	if !strings.Contains(got, "3 more hit(s) omitted") {
-		t.Errorf("compactLines with omission missing the hint text: %q", got)
+	if !strings.Contains(got, "\n... 3 more omitted for size") {
+		t.Errorf("compactLines with omission missing the omission line: %q", got)
 	}
 }

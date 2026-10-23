@@ -65,6 +65,7 @@ func TestDW_5_1_SearchFilterTravelsFlatOnTheWire(t *testing.T) {
 		Until:             until,
 		IncludeSuperseded: true,
 		Sources:           []string{"semantic"},
+		Expand:            true,
 	})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -89,6 +90,9 @@ func TestDW_5_1_SearchFilterTravelsFlatOnTheWire(t *testing.T) {
 	}
 	if got := req.GetSources(); len(got) != 1 || got[0] != "semantic" {
 		t.Errorf("sources = %v, want [semantic]", got)
+	}
+	if !req.GetExpand() {
+		t.Error("expand was dropped in translation")
 	}
 }
 
@@ -116,6 +120,9 @@ func TestDW_5_6_ZeroFilterSendsNoFilterFields(t *testing.T) {
 	}
 	if req.GetSources() != nil {
 		t.Errorf("sources = %v, want nil (nil means every source; an empty list is an error)", req.GetSources())
+	}
+	if req.GetExpand() {
+		t.Error("expand must default to false — the server skips graph traversal unless asked")
 	}
 }
 

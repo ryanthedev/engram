@@ -13,17 +13,20 @@ import (
 // A named constant per the plan (Produces), not a magic number.
 const leadSnippetRunes = 200
 
-// renderKnowledgeResult converts a budget-packed knowledge search into the
-// same rendered envelope memory produces, so both tools emit one line format.
-func renderKnowledgeResult(collection string, result searchResult[KnowledgeHit]) renderedResult {
+// renderKnowledgeResult converts one knowledge search page — every hit the
+// backend returned, before any budget cut — into the same rendered envelope
+// memory produces, so both tools emit one line format and pack through the
+// same packRendered. total is the exact match count, set BEFORE packing so the
+// "(3 of 9)" header is part of what the budget measures. offset is the page's
+// starting rank: knowledge_search pages, so its omission line can name the
+// exact offset that resumes where this page stopped.
+func renderKnowledgeResult(collection string, offset int, total int64, hits []KnowledgeHit) renderedResult {
 	return renderedResult{
-		Label:         "knowledge/" + collection,
-		Total:         result.Total,
-		Hits:          renderKnowledgeHits(collection, result.Hits),
-		Omitted:       result.Omitted,
-		OmittedFacets: result.OmittedFacets,
-		Hint:          result.Hint,
-		OverflowPath:  result.OverflowPath,
+		Label:  "knowledge/" + collection,
+		Total:  total,
+		Hits:   renderKnowledgeHits(collection, hits),
+		Paged:  true,
+		Offset: offset,
 	}
 }
 
@@ -51,52 +54,51 @@ type renderedHit struct {
 	Text string `json:"text"`
 }
 
-// renderedResult is the rendered memory_search envelope: mirrors
-// searchResult's shape and its omitted/omitted_facets/hint/overflow_path
-// gating (present only when hits were actually left out), but with hits
-// rendered to their compact-line form. Expanded mirrors the same gating: the
-// graph expansions that rode along beside the matched hits, present only when
-// there are any (DW-6.3) and never merged into Hits (DW-6.2).
+// renderedResult is one search response in rendered form: the hits as
+// compact-line rows plus what the budget cut. It is both what packRendered
+// packs and what compactLines prints, so the budget is measured on exactly the
+// text that ships. Omitted counts matched hits the budget cut (zero when none
+// were). Expanded carries the graph expansions that rode along beside the
+// matched hits, present only when there are any (DW-6.3) and never merged
+// into Hits (DW-6.2).
 type renderedResult struct {
 	// Label names the block this result renders as — "memory" for the fused
 	// memory tiers, "knowledge/<collection>" for one collection.
-	Label string `json:"label"`
+	Label string
 	// Total is the exact match count when the backend reports one (knowledge
 	// tracks it; memory does not), so a block header can say "3 of 9".
-	Total           int64             `json:"total,omitempty"`
-	Hits            []renderedHit     `json:"hits"`
-	Omitted         int               `json:"omitted,omitempty"`
-	OmittedFacets   map[string]string `json:"omitted_facets,omitempty"`
-	Hint            string            `json:"hint,omitempty"`
-	OverflowPath    string            `json:"overflow_path,omitempty"`
-	Expanded        []renderedHit     `json:"expanded,omitempty"`
-	ExpandedOmitted int               `json:"expanded_omitted,omitempty"`
+	Total   int64
+	Hits    []renderedHit
+	Omitted int
+	// Paged marks a source that accepts an offset (knowledge_search), and
+	// Offset is this page's starting rank. Together they let the omission
+	// line name the exact resume point — Offset plus the hits shown — instead
+	// of a generic "narrow the query". A flag rather than sniffing Label: the
+	// line's wording follows what the tool accepts, not what it is called.
+	Paged           bool
+	Offset          int
+	Expanded        []renderedHit
+	ExpandedOmitted int
 }
 
-// renderSearchResult converts a packed searchResult into its rendered form.
-// It never mutates result or the Hits it packed (DW-1.6): every field is
-// copied into new renderedHit/renderedResult values, so the caller's
-// original Hit slice (and, upstream, whatever engramclient/gRPC decoded)
-// stays byte-identical after this call.
-func renderSearchResult(result searchResult[Hit]) renderedResult {
-	return renderedResult{
-		Label:           "memory",
-		Total:           result.Total,
-		Hits:            renderHits(result.Hits),
-		Omitted:         result.Omitted,
-		OmittedFacets:   result.OmittedFacets,
-		Hint:            result.Hint,
-		OverflowPath:    result.OverflowPath,
-		Expanded:        renderHits(result.Expanded),
-		ExpandedOmitted: result.ExpandedOmitted,
+// renderSearchResult converts one memory search answer — every hit the
+// backend returned, before any budget cut — into its rendered form, ready for
+// packRendered. It never mutates res or its Hits (DW-1.6): every field is
+// copied into new renderedHit/renderedResult values, so the caller's original
+// Hit slices (and, upstream, whatever engramclient/gRPC decoded) stay
+// byte-identical after this call.
+func renderSearchResult(res SearchResult) renderedResult {
+	r := renderedResult{Label: "memory", Hits: renderHits(res.Hits)}
+	if len(res.Expanded) > 0 {
+		r.Expanded = renderHits(res.Expanded)
 	}
+	return r
 }
 
-// renderHits renders one block of hits, always returning a non-nil slice so an
-// empty matched block still marshals as `"hits": []` (never `null`) exactly as
-// it did before there was a second block. The `expanded` block needs no such
-// care: its omitempty tag drops it whenever it is zero-LENGTH, nil or not
-// (DW-6.3).
+// renderHits renders one block of hits, always returning a non-nil slice, so
+// an empty block is an empty list rather than an absent one; whether an empty
+// expansion block is shown at all is renderSearchResult's and compactLines'
+// call (DW-6.3), not this function's.
 func renderHits(hits []Hit) []renderedHit {
 	out := make([]renderedHit, len(hits))
 	for i, h := range hits {
@@ -105,15 +107,35 @@ func renderHits(hits []Hit) []renderedHit {
 	return out
 }
 
+// semanticIDPrefixLen is how many leading characters of a semantic fact id a
+// search row shows. Semantic ids are 64-hex sha256 digests, and their full
+// column was ~12% of a typical search's bytes; 12 hex chars (48 bits) keeps a
+// collision within one tenant's fact set vanishingly unlikely. memory_read
+// forwards the prefix to the server unchanged, which resolves it.
+const semanticIDPrefixLen = 12
+
 // renderHit converts one packed memory Hit into its minimal line form,
 // folding the tier into the id so the row is self-addressing.
 func renderHit(h Hit) renderedHit {
 	fields := parseFields(h.Fields)
 	return renderedHit{
-		ID:   h.Source + ":" + h.ID,
+		ID:   h.Source + ":" + displayID(h.Source, h.ID),
 		Date: dateOf(fields),
 		Text: gistFor(h.Source, fields),
 	}
+}
+
+// displayID is the id a search row shows for a record of source: a semantic
+// id cut to semanticIDPrefixLen, every other id whole. Only semantic is
+// shortened because only semantic ids are long digests the server can resolve
+// by prefix; episodic ids are 20-char OpenSearch ids, and knowledge doc ids are
+// harvester-chosen strings with no prefix contract at all. Byte slicing is
+// safe here: semantic ids are server-generated ASCII hex.
+func displayID(source, id string) string {
+	if source == "semantic" && len(id) > semanticIDPrefixLen {
+		return id[:semanticIDPrefixLen]
+	}
+	return id
 }
 
 // renderKnowledgeHits renders one block of knowledge hits, always returning a
@@ -180,8 +202,8 @@ func dateOf(fields map[string]any) string {
 
 // parseFields unmarshals a hit's fields_json into a map, tolerating empty or
 // malformed input (external data that crossed the wire) by returning nil
-// rather than panicking or erroring — mirrors budget.go's topFacets handling
-// of the same data.
+// rather than panicking or erroring: one bad record degrades to an empty row,
+// never a failed search.
 func parseFields(fieldsJSON string) map[string]any {
 	if fieldsJSON == "" {
 		return nil
@@ -279,18 +301,17 @@ func formatHitLine(h renderedHit) string {
 }
 
 // compactLines renders a renderedResult's full memory_search text-content
-// block: one line per matched hit (formatHitLine), then an omission summary
-// line only when hits were actually left out — mirroring buildSearchResult's
-// (budget.go) omitted/hint gating, so the caller still sees why a hit is
-// missing rather than silently losing that signal to the format change.
+// block: one line per matched hit (formatHitLine), then an omission line
+// (omissionLine) only when hits were actually left out, so the caller still
+// sees that a hit is missing rather than silently losing that signal.
 //
 // Graph expansions follow BELOW a one-line header, never interleaved with the
 // matched hits (DW-6.2): they did not match the query, they were reached by
 // traversing out of something that did, and an LLM reading these lines must be
 // able to tell the difference at a glance. The header states outright that they
 // are not counted against k — that one line is the entire token cost of making
-// the block unambiguous, and it is emitted only when expansions survived the
-// budget (DW-6.3).
+// the block unambiguous, and it is emitted only when there were expansions at
+// all (DW-6.3). Below it, each row is a bare statement (formatExpandedLine).
 func compactLines(r renderedResult) string {
 	lines := make([]string, 0, len(r.Hits)+len(r.Expanded)+3)
 	lines = append(lines, blockHeader(r.Label, len(r.Hits), r.Total))
@@ -298,14 +319,7 @@ func compactLines(r renderedResult) string {
 		lines = append(lines, formatHitLine(h))
 	}
 	if r.Omitted > 0 {
-		// The spill path rides in the text, not just a dropped structured
-		// field: with no structuredContent to carry it, a path left out here
-		// is a written file nobody can reach.
-		omission := "... " + r.Hint
-		if r.OverflowPath != "" {
-			omission += " overflow_path=" + r.OverflowPath
-		}
-		lines = append(lines, omission)
+		lines = append(lines, omissionLine(r))
 	}
 	// A header is still owed when the budget dropped EVERY expansion: with no
 	// structuredContent to carry expanded_omitted, returning early here would
@@ -319,9 +333,40 @@ func compactLines(r renderedResult) string {
 	}
 	lines = append(lines, header+")")
 	for _, h := range r.Expanded {
-		lines = append(lines, formatHitLine(h))
+		lines = append(lines, formatExpandedLine(h))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// formatExpandedLine renders one graph expansion as its statement alone — no
+// id column, no date column. Both columns exist on a matched row to serve a
+// next step, and an expansion supports neither: graph records have no
+// drill-down (callRead refuses source "graph"; the statement already IS the
+// whole record), and they carry no date. The 64-hex "graph:<id>" column was a
+// quarter of a typical search's bytes for an address nothing could use. The
+// header above the block already says what these rows are, so a bare statement
+// cannot be mistaken for a match.
+func formatExpandedLine(h renderedHit) string {
+	return h.Text
+}
+
+// omissionLine is the one line a caller gets when the byte budget cut matched
+// hits: how many, and the one action that actually surfaces them. It is a
+// count plus an instruction and nothing else — the spill file and the
+// top-omitted-facet summary it replaced were never acted on (0 of 52 sampled
+// searches read an overflow_path), so they were bytes paid on every omitting
+// response for nothing.
+//
+// The instruction must be TRUE for a budget cut. "Raise k" is not: the backend
+// already returned these hits and the budget dropped them, so a larger k only
+// grows the omitted count. A paged source can resume exactly where this page
+// stopped — Offset plus the hits shown — so it names that offset; memory_search
+// has no offset, so narrowing is its only lever.
+func omissionLine(r renderedResult) string {
+	if r.Paged {
+		return fmt.Sprintf("... %d more omitted for size; page with offset=%d", r.Omitted, r.Offset+len(r.Hits))
+	}
+	return fmt.Sprintf("... %d more omitted for size; narrow the query", r.Omitted)
 }
 
 // blockHeader labels one source's block, ripgrep-style: the source is named

@@ -90,19 +90,15 @@ func (s *OpenSearchStore) Create(ctx context.Context, id string, f memory.Semant
 }
 ```
 
-### A knowledge tool handler: budget-pack, then spill on overflow
+### A search tool handler: render, budget-pack the rendered text, count what was cut
 ```go
-// DO — from internal/mcp/tools.go:317-340, shared by memory_search and knowledge_search.
-// Oversized result sets are packed against a byte budget; anything omitted spills to
-// disk and the tool returns overflow_path instead of truncating silently.
-result := packSearchResult(hits, searchByteBudget(), facetFields)
-if result.Omitted > 0 {
-    if path, spillErr := spillFullResult(hits); spillErr != nil {
-        result.Hint = refineHint(...) // spill failed — fall back to a narrower hint
-    } else {
-        result.OverflowPath = path
-    }
-}
+// DO — from internal/mcp/tools.go callSearch, shared by memory_search and knowledge_search.
+// Render first, then pack: the byte budget bounds the exact text the caller receives,
+// so it is measured on that text, never on an upstream form. Anything cut is COUNTED
+// on one omission line ("... 7 more omitted for size; narrow the query") instead of
+// truncating silently. No spill file: callers never read one.
+packed := packRendered(renderSearchResult(res), searchByteBudget())
+return toolResultLines(compactLines(packed)), nil
 ```
 
 ### A gRPC handler translating domain errors to status codes
@@ -217,7 +213,7 @@ var _ mcp.Backend = (*Client)(nil)
 Receivers are short and consistent per type, enforced by revive's `receiver-naming`.
 OpenSearch document/JSON fields are `snake_case` in struct tags. Domain terms are load-bearing:
 **episodic**/**semantic**/**knowledge** tiers, **fact**, **scope**, **outbox**, **ledger**,
-**tenant**/**owner_agent_id**, **overflow_path** (search spill), **honest k** (graph expansions
+**tenant**/**owner_agent_id**, **honest k** (graph expansions
 never count against `k`, and are `nil` — not empty — when absent, `internal/mcp/mcp.go:42-58`).
 Comments cite decision codes (`D12`, `DW-4.5`) that index the plan.
 

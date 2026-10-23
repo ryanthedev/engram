@@ -1,6 +1,7 @@
 package engramclient
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -118,5 +119,18 @@ func TestReadResultFromProtoKnowledgeMalformedJSONDegrades(t *testing.T) {
 	out := readResultFromProto("d1", &engrampb.ReadResponse{Source: "papers", FieldsJson: "not json"})
 	if out.Fields != nil {
 		t.Errorf("Fields = %+v, want nil for malformed fields_json", out.Fields)
+	}
+}
+
+// TestReadResultFromProtoPrefixReportsFullID: a semantic read requested by id
+// prefix reports the full id the server resolved it to, not the prefix.
+func TestReadResultFromProtoPrefixReportsFullID(t *testing.T) {
+	full := "ee40c25ff1e6fef3" + strings.Repeat("0", 48)
+	resp := &engrampb.ReadResponse{
+		Source: "semantic",
+		Fact:   &engrampb.FactVersion{Id: full, Statement: "svc owner team-a"},
+	}
+	if got := readResultFromProto("ee40c25ff1e6", resp).ID; got != full {
+		t.Fatalf("ID = %q, want the resolved full id %q", got, full)
 	}
 }

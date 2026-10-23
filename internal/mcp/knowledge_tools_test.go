@@ -1,17 +1,15 @@
 package mcp
 
 // Phase-6 tests for the six knowledge MCP tools: every tool dispatches
-// through the Backend seam (DW-6.1), knowledge_search budget-packs with an
-// overflow_path spill on overflow (DW-6.1), knowledge_collections surfaces
+// through the Backend seam (DW-6.1), knowledge_search budget-packs and names
+// the resume offset on overflow (DW-6.1), knowledge_collections surfaces
 // count + staleness (DW-6.4), argument validation fails as tool errors, and
 // the memory tool surface is behaviorally untouched (DW-6.5).
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -287,11 +285,12 @@ func TestDW_6_4_KnowledgeCollectionsToolSurfacesStaleness(t *testing.T) {
 	}
 }
 
-// TestDW_6_1_KnowledgeSearchBudgetPackAndSpill proves an oversized knowledge
-// result set is budget-packed and the FULL set spilled to overflow_path —
-// the same packer/spiller memory_search uses, with no facet fields.
-func TestDW_6_1_KnowledgeSearchBudgetPackAndSpill(t *testing.T) {
-	t.Setenv(spillDirEnv, t.TempDir())
+// TestDW_6_1_KnowledgeSearchBudgetPackNamesResumeOffset proves an oversized
+// knowledge page is budget-packed by the same packer memory_search uses, and
+// that its omission line names the exact offset that resumes where the page
+// stopped — the request offset plus the hits actually shown — since paging is
+// how a knowledge caller reaches the rest.
+func TestDW_6_1_KnowledgeSearchBudgetPackNamesResumeOffset(t *testing.T) {
 	t.Setenv(searchBudgetBytesEnv, "600")
 
 	hits := make([]KnowledgeHit, 20)
@@ -303,7 +302,8 @@ func TestDW_6_1_KnowledgeSearchBudgetPackAndSpill(t *testing.T) {
 	c := startServer(t, b)
 	c.call("initialize", nil)
 
-	result := callTool(t, c, ToolKnowledgeSearch, map[string]any{"collection": "papers", "query": "q"})
+	const offset = 40
+	result := callTool(t, c, ToolKnowledgeSearch, map[string]any{"collection": "papers", "query": "q", "offset": offset})
 	sc := searchLines(t, result)
 	packed := sc["hits"].([]any)
 	if len(packed) == 0 || len(packed) >= len(hits) {
@@ -312,29 +312,9 @@ func TestDW_6_1_KnowledgeSearchBudgetPackAndSpill(t *testing.T) {
 	if sc["omitted"] == nil || sc["omitted"].(float64) != float64(len(hits)-len(packed)) {
 		t.Errorf("omitted = %v, want %d", sc["omitted"], len(hits)-len(packed))
 	}
-	// Knowledge search passes nil facet fields: no omitted_facets, hint still present.
-	if _, ok := sc["omitted_facets"]; ok {
-		t.Errorf("knowledge_search must not report memory-shaped facets: %v", sc["omitted_facets"])
-	}
-	if hint, _ := sc["hint"].(string); !strings.Contains(hint, "omitted") {
-		t.Errorf("hint = %q", hint)
-	}
-	path, _ := sc["overflow_path"].(string)
-	if path == "" {
-		t.Fatal("overflow_path missing on an overflowing result")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading spill file: %v", err)
-	}
-	var spilled struct {
-		Hits []Hit `json:"hits"`
-	}
-	if err := json.Unmarshal(raw, &spilled); err != nil {
-		t.Fatalf("decoding spill file: %v", err)
-	}
-	if len(spilled.Hits) != len(hits) || spilled.Hits[0].ID != "d00" {
-		t.Errorf("spill file has %d hits, want the full %d in order", len(spilled.Hits), len(hits))
+	wantHint := fmt.Sprintf("%d more omitted for size; page with offset=%d", len(hits)-len(packed), offset+len(packed))
+	if hint, _ := sc["hint"].(string); hint != wantHint {
+		t.Errorf("hint = %q, want %q", hint, wantHint)
 	}
 }
 
@@ -414,7 +394,7 @@ func TestDW_6_5_MemoryToolsUnchanged(t *testing.T) {
 
 // Read records the (id, source) pair the tool edge resolved, so a test can
 // assert how a self-addressing search id was split before dispatch.
-func (f *knowledgeFake) Read(_ context.Context, id, source string) (ReadResult, error) {
-	f.lastReadID, f.lastReadSource = id, source
+func (b *knowledgeFake) Read(_ context.Context, id, source string) (ReadResult, error) {
+	b.lastReadID, b.lastReadSource = id, source
 	return ReadResult{ID: id, Source: source, Fields: map[string]any{"text": "x"}}, nil
 }
