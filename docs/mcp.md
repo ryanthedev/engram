@@ -1,14 +1,11 @@
 # Engram MCP server — registration & round-trip
 
 `engram-mcp` exposes Engram's memory to any MCP-capable agent host (Claude
-Code, etc.) over stdio JSON-RPC 2.0. It maps three tools onto the engramd gRPC
-API:
-
-| Tool | Arguments | Returns |
-|------|-----------|---------|
-| `memory_ingest` | `event_id` (req), `text` (req), `source`, `scope` (`private` default, `team`, `org`), `team` (required for `team` scope) | `{ id }` |
-| `memory_search` | `query` (req), `k`, and the optional filters `kind`, `subject`, `predicate`, `object`, `extractor_version`, `since`, `until`, `include_superseded`, `sources` | `{ hits[] }` |
-| `memory_status` | — | `{ healthy, tenant_id, user_id, agent_id, episodic_count, semantic_count, opensearch_version }` |
+Code, etc.) over stdio JSON-RPC 2.0. It maps ten tools onto the engramd gRPC
+API: `memory_ingest`, `memory_search`, `memory_read`, `memory_status`, and six
+`knowledge_*` tools. Arguments, output format, and the search byte budget are
+specified in [`api.md` §3](./api.md#3-mcp-tools--engram-mcp); this page covers
+registration and a manual round-trip.
 
 Every call is authenticated by a bearer token (`ENGRAM_TOKEN`), which binds the
 session to a `(tenant_id, user_id, agent_id)` identity. Logs go to stderr;
@@ -53,7 +50,7 @@ claude mcp add engram -- \
 
 (Use the absolute path to the built `engram-mcp` binary, or `go run
 ./cmd/engram-mcp`, if it is not on `PATH`.) Claude Code then spawns the server
-on demand and lists `memory_ingest`, `memory_search`, and `memory_status`.
+on demand and lists the ten tools.
 
 ## 4. Round-trip by hand (reference-client protocol)
 
@@ -72,9 +69,10 @@ export ENGRAM_TOKEN=egm_XXXX...
 ```
 
 Expected: `initialize` returns the protocol version and tools capability;
-`tools/list` returns the three tools; the `memory_ingest` call returns an id;
-the `memory_search` call returns a hit whose `fields_json` contains
-`dark-mode`.
+`tools/list` returns the ten tools; the `memory_ingest` call returns an id;
+the `memory_search` call returns a text block whose first line is
+`memory (N)`, followed by tab-separated `<source>:<id>`, date, and text rows,
+one of which mentions `dark-mode`.
 
 ## 5. Live Claude Code round-trip (manual verification step)
 

@@ -30,10 +30,15 @@ Ten tools over stdio: `memory_ingest` / `memory_search` / `memory_read` / `memor
 `knowledge_ingest` / `knowledge_search` / `knowledge_collections` / `knowledge_create_collection` /
 `knowledge_update_collection` / `knowledge_delete`.
 
-Search results are **text-only** — three tab-separated columns (id, date, matched text) under a
-source header, ripgrep-shaped. The id is self-addressing (`<source>:<id>`); pass it to
-`memory_read` for the full record. `memory_read` is the one tool that still returns structured
-JSON, because it returns a record to parse rather than a list to scan.
+Search results are **text-only**, sized for an agent's context: a source header (`memory (N)`),
+then one row per hit with three tab-separated columns (id, date, matched text), ranked by position.
+An episodic row carries a 200-character lead snippet and a semantic row its whole statement. The
+id is self-addressing (`<source>:<id>`, semantic ids cut to 12 hex chars that the server resolves),
+so an agent passes it unchanged to `memory_read` for the full record, which comes back as JSON.
+Graph neighbors are opt-in (`expand: true`) and render as a separate block of bare statements.
+Output is capped at about 6KB of rendered text (`ENGRAM_MCP_SEARCH_BUDGET_BYTES`). A cut page
+says how many hits were left out and to narrow the query. Full contract:
+[`docs/api.md`](docs/api.md#3-mcp-tools--engram-mcp).
 
 The client needs two environment variables:
 
