@@ -45,13 +45,15 @@ func TestDW_6_2_SearchResultRendersExpandedSection(t *testing.T) {
 	if len(hits) != 1 || len(expanded) != 1 {
 		t.Fatalf("hits/expanded = %d/%d, want 1/1 — the blocks must stay separate", len(hits), len(expanded))
 	}
-	// Rows are compact lines; the tier travels in the self-addressing id, so a
-	// graph hit is identifiable by its first column's prefix.
+	// Matched rows are self-addressing "<source>:<id>\tdate\ttext"; an
+	// expansion row is its bare statement — no id (graph has no drill-down)
+	// and no date (graph records carry none).
 	if h := fmt.Sprint(hits[0]); strings.HasPrefix(h, "graph:") {
 		t.Fatalf("a graph hit was rendered into the matched hits array: %v", h)
 	}
-	if e := fmt.Sprint(expanded[0]); !strings.HasPrefix(e, "graph:g1\t") {
-		t.Fatalf("expanded[0] = %v, want the graph hit graph:g1", e)
+	statement := strings.Repeat("g", 10)
+	if e := fmt.Sprint(expanded[0]); e != statement {
+		t.Fatalf("expanded[0] = %q, want the bare statement %q", e, statement)
 	}
 
 	// Text: the compact-line block an agent actually reads. The expansion must
@@ -69,8 +71,11 @@ func TestDW_6_2_SearchResultRendersExpandedSection(t *testing.T) {
 	if !strings.HasPrefix(lines[2], "graph (") || !strings.Contains(lines[2], "not counted against k") {
 		t.Errorf("line 2 = %q, want a header naming the block and stating it is not counted against k", lines[2])
 	}
-	if !strings.HasPrefix(lines[3], "graph:g1\t") {
-		t.Errorf("line 3 = %q, want the graph expansion below the header", lines[3])
+	if lines[3] != statement {
+		t.Errorf("line 3 = %q, want the graph expansion's bare statement below the header", lines[3])
+	}
+	if strings.Contains(lines[3], "\t") || strings.Contains(lines[3], "graph:") {
+		t.Errorf("expansion row %q carries an id/date column", lines[3])
 	}
 }
 
@@ -164,7 +169,7 @@ func TestDW_6_4_ExpandedFillsLeftoverBudget(t *testing.T) {
 	if len(result.Expanded) != 1 {
 		t.Fatalf("len(expanded) = %d, want 1 (the prefix that fits)", len(result.Expanded))
 	}
-	if result.Expanded[0].ID != "graph:g1" {
+	if result.Expanded[0].ID != "graph:g1" { // the row prints no id, but the packed value keeps it
 		t.Errorf("kept expansion = %q, want graph:g1: the kept block must be a PREFIX (nearest hop first)", result.Expanded[0].ID)
 	}
 	if result.ExpandedOmitted != 2 {

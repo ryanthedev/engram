@@ -290,8 +290,8 @@ func formatHitLine(h renderedHit) string {
 // traversing out of something that did, and an LLM reading these lines must be
 // able to tell the difference at a glance. The header states outright that they
 // are not counted against k — that one line is the entire token cost of making
-// the block unambiguous, and it is emitted only when expansions survived the
-// budget (DW-6.3).
+// the block unambiguous, and it is emitted only when there were expansions at
+// all (DW-6.3). Below it, each row is a bare statement (formatExpandedLine).
 func compactLines(r renderedResult) string {
 	lines := make([]string, 0, len(r.Hits)+len(r.Expanded)+3)
 	lines = append(lines, blockHeader(r.Label, len(r.Hits), r.Total))
@@ -313,9 +313,21 @@ func compactLines(r renderedResult) string {
 	}
 	lines = append(lines, header+")")
 	for _, h := range r.Expanded {
-		lines = append(lines, formatHitLine(h))
+		lines = append(lines, formatExpandedLine(h))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// formatExpandedLine renders one graph expansion as its statement alone — no
+// id column, no date column. Both columns exist on a matched row to serve a
+// next step, and an expansion supports neither: graph records have no
+// drill-down (callRead refuses source "graph"; the statement already IS the
+// whole record), and they carry no date. The 64-hex "graph:<id>" column was a
+// quarter of a typical search's bytes for an address nothing could use. The
+// header above the block already says what these rows are, so a bare statement
+// cannot be mistaken for a match.
+func formatExpandedLine(h renderedHit) string {
+	return h.Text
 }
 
 // omissionLine is the one line a caller gets when the byte budget cut matched
