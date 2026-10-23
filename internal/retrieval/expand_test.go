@@ -89,32 +89,47 @@ func TestExpandGatesOnlyTheGraphPostHook(t *testing.T) {
 	}
 }
 
-// TestNamingGraphSourceWithoutExpandErrors: Sources naming "graph" while
-// Expand is false asks for expansions and declines them in one request. It is
-// rejected as an invalid filter naming the fix, before any I/O — even for an
-// empty query, the same barricade ordering as every other filter check.
-func TestNamingGraphSourceWithoutExpandErrors(t *testing.T) {
-	r, captured, tier, hook := newFilterRetriever(t, emptyResults)
-	for _, q := range []retrieval.Query{{Text: "x"}, {}} {
-		for _, sources := range [][]string{{"graph"}, {"semantic", "graph"}} {
-			_, err := r.Search(context.Background(), q, retrieval.Filter{Sources: sources})
-			if !errors.Is(err, retrieval.ErrInvalidFilter) {
-				t.Fatalf("query=%q Sources=%v Expand=false: err = %v, want ErrInvalidFilter", q.Text, sources, err)
-			}
-			if !strings.Contains(err.Error(), "expand") {
-				t.Errorf("error does not name the fix (expand): %v", err)
-			}
+// TestNamingGraphSourceImpliesExpand: Sources explicitly naming "graph" is a
+// request for expansions, so it runs the hook even with Expand left false — the
+// pre-Expand behavior for every caller that selected graph by name. An
+// explicit list that omits graph keeps it off, even with Expand set.
+func TestNamingGraphSourceImpliesExpand(t *testing.T) {
+	for _, tc := range []struct {
+		sources   []string
+		expand    bool
+		wantCalls int
+	}{
+		{[]string{"semantic", "graph"}, false, 1},
+		{[]string{"graph"}, false, 1},
+		{[]string{"semantic", "graph"}, true, 1},
+		{[]string{"semantic"}, false, 0},
+		// An explicit list that omits graph never runs it: Sources wins.
+		{[]string{"semantic"}, true, 0},
+	} {
+		r, _, _, hook := newFilterRetriever(t, emptyResults)
+		if _, err := r.Search(context.Background(), retrieval.Query{Text: "x", Expand: tc.expand},
+			retrieval.Filter{Sources: tc.sources}); err != nil {
+			t.Fatalf("Sources=%v Expand=%v: %v", tc.sources, tc.expand, err)
+		}
+		if hook.calls != tc.wantCalls {
+			t.Errorf("Sources=%v Expand=%v: graph hook ran %d times, want %d", tc.sources, tc.expand, hook.calls, tc.wantCalls)
 		}
 	}
+}
+
+// TestNamingGraphWithAFilterStillErrors: implying Expand does not let graph
+// past the unfilterable-source barricade — naming it beside a filter is still
+// the validateFilterableSources contradiction, raised before any I/O.
+func TestNamingGraphWithAFilterStillErrors(t *testing.T) {
+	r, captured, tier, hook := newFilterRetriever(t, emptyResults)
+	_, err := r.Search(context.Background(), retrieval.Query{Text: "x"}, retrieval.Filter{
+		Sources:    []string{"semantic", "graph"},
+		Predicates: []retrieval.Predicate{{Field: "subject", Op: "term", Value: "s"}},
+	})
+	if !errors.Is(err, retrieval.ErrInvalidFilter) || !strings.Contains(err.Error(), "cannot be filtered") {
+		t.Fatalf("err = %v, want the unfilterable-source error", err)
+	}
 	if len(captured()) != 0 || tier.calls != 0 || hook.calls != 0 {
-		t.Error("a contradictory Sources/Expand request still ran part of the search")
-	}
-	// The same Sources with Expand=true is the honored, pre-Expand request.
-	if _, err := r.Search(context.Background(), retrieval.Query{Text: "x", Expand: true},
-		retrieval.Filter{Sources: []string{"semantic", "graph"}}); err != nil {
-		t.Errorf("Sources=[semantic graph] Expand=true: %v, want success", err)
-	}
-	if hook.calls != 1 {
-		t.Errorf("graph hook ran %d times with Expand=true and graph named, want 1", hook.calls)
+		t.Error("a rejected request still ran part of the search")
 	}
 }

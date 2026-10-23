@@ -23,6 +23,7 @@ type Query struct {
 	// read them, and the traversal is the costliest step after the tier
 	// queries. Matched hits, K, and every filter are unaffected either way, and
 	// post-hooks registered under any other name are not gated by it.
+	// Filter.Sources explicitly naming "graph" implies Expand.
 	Expand bool
 }
 

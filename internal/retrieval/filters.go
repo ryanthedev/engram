@@ -324,30 +324,21 @@ func (m *MultiRetriever) validateFilterableSources(preds []Predicate, sel source
 	return nil
 }
 
-// validateExpansionSources rejects a search that EXPLICITLY names the graph
-// expansion source (ExpandedSource) without opting in to expansion.
+// expansionRequested reports whether this search runs graph expansion: the
+// query opted in (Query.Expand), OR the caller EXPLICITLY named the expansion
+// source (ExpandedSource) in Filter.Sources.
 //
-// Since Query.Expand landed, "graph" in Filter.Sources no longer suffices to
-// run the expander: expansion is opt-in, and the zero value skips it. Naming
-// the source while leaving Expand false is therefore a contradictory request,
-// and honoring either half silently would be the quiet surprise this package
-// refuses to serve (the validateFilterableSources precedent): dropping "graph"
-// would return no expansions the caller plainly asked for — and Sources:
-// ["graph"] alone would return zero hits with no explanation — while running
-// it would make Sources a second, undocumented expand switch. The error names
-// both fixes. Implicit selection (nil Sources) needs no check: expand alone
-// decides.
-func (m *MultiRetriever) validateExpansionSources(sel sourceSet, expand bool) error {
-	if expand || sel == nil {
-		return nil
-	}
-	for _, h := range m.postHooks {
-		if h.name == ExpandedSource && sel.selected(h.name) {
-			return invalidFilterf("source %q is graph expansion, which runs only when expand is true; set expand or drop %q from sources",
-				ExpandedSource, ExpandedSource)
-		}
-	}
-	return nil
+// Naming "graph" is itself an unambiguous request for expansions — it is the
+// only thing that source produces — so it implies Expand rather than being
+// silently dropped (Sources: [semantic, graph] returning no expansions) or
+// rejected as a contradiction (which would break every caller that selected
+// graph before Expand existed). Expand remains the one switch for the
+// IMPLICIT case: nil Sources selects every source but expands only on opt-in.
+// This decides only whether the hook may run; selectSources still excludes it
+// from any filtered search, and validateFilterableSources still rejects naming
+// it alongside a filter.
+func expansionRequested(sel sourceSet, expand bool) bool {
+	return expand || (sel != nil && sel.selected(ExpandedSource))
 }
 
 // selectSources partitions the registered sources into the ones this search
