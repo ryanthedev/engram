@@ -59,11 +59,6 @@ type KnowledgeHit struct {
 	Fragments []string `json:"fragments,omitempty"`
 }
 
-// fieldsJSON lets the byte-budget packer read a hit's stored fields without
-// caring which hit DTO it is packing (see packable in budget.go).
-func (h Hit) fieldsJSON() string          { return h.Fields }
-func (h KnowledgeHit) fieldsJSON() string { return h.Fields }
-
 // SearchResult is one memory_search answer in two labeled blocks. Hits are the
 // query's MATCHED hits — at most k of them, and never a graph expansion. Expanded
 // carries the graph expansions reached by traversing out of those matched hits:

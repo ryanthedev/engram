@@ -15,15 +15,16 @@ const leadSnippetRunes = 200
 
 // renderKnowledgeResult converts a budget-packed knowledge search into the
 // same rendered envelope memory produces, so both tools emit one line format.
-func renderKnowledgeResult(collection string, result searchResult[KnowledgeHit]) renderedResult {
+// offset is the page's starting rank: knowledge_search pages, so its omission
+// line can name the exact offset that resumes where this page stopped.
+func renderKnowledgeResult(collection string, offset int, result searchResult[KnowledgeHit]) renderedResult {
 	return renderedResult{
-		Label:         "knowledge/" + collection,
-		Total:         result.Total,
-		Hits:          renderKnowledgeHits(collection, result.Hits),
-		Omitted:       result.Omitted,
-		OmittedFacets: result.OmittedFacets,
-		Hint:          result.Hint,
-		OverflowPath:  result.OverflowPath,
+		Label:   "knowledge/" + collection,
+		Total:   result.Total,
+		Hits:    renderKnowledgeHits(collection, result.Hits),
+		Omitted: result.Omitted,
+		Paged:   true,
+		Offset:  offset,
 	}
 }
 
@@ -52,25 +53,29 @@ type renderedHit struct {
 }
 
 // renderedResult is the rendered memory_search envelope: mirrors
-// searchResult's shape and its omitted/omitted_facets/hint/overflow_path
-// gating (present only when hits were actually left out), but with hits
-// rendered to their compact-line form. Expanded mirrors the same gating: the
-// graph expansions that rode along beside the matched hits, present only when
-// there are any (DW-6.3) and never merged into Hits (DW-6.2).
+// searchResult's shape and its omitted gating (present only when hits were
+// actually left out), but with hits rendered to their compact-line form.
+// Expanded mirrors the same gating: the graph expansions that rode along
+// beside the matched hits, present only when there are any (DW-6.3) and never
+// merged into Hits (DW-6.2).
 type renderedResult struct {
 	// Label names the block this result renders as — "memory" for the fused
 	// memory tiers, "knowledge/<collection>" for one collection.
-	Label string `json:"label"`
+	Label string
 	// Total is the exact match count when the backend reports one (knowledge
 	// tracks it; memory does not), so a block header can say "3 of 9".
-	Total           int64             `json:"total,omitempty"`
-	Hits            []renderedHit     `json:"hits"`
-	Omitted         int               `json:"omitted,omitempty"`
-	OmittedFacets   map[string]string `json:"omitted_facets,omitempty"`
-	Hint            string            `json:"hint,omitempty"`
-	OverflowPath    string            `json:"overflow_path,omitempty"`
-	Expanded        []renderedHit     `json:"expanded,omitempty"`
-	ExpandedOmitted int               `json:"expanded_omitted,omitempty"`
+	Total   int64
+	Hits    []renderedHit
+	Omitted int
+	// Paged marks a source that accepts an offset (knowledge_search), and
+	// Offset is this page's starting rank. Together they let the omission
+	// line name the exact resume point — Offset plus the hits shown — instead
+	// of a generic "narrow the query". A flag rather than sniffing Label: the
+	// line's wording follows what the tool accepts, not what it is called.
+	Paged           bool
+	Offset          int
+	Expanded        []renderedHit
+	ExpandedOmitted int
 }
 
 // renderSearchResult converts a packed searchResult into its rendered form.
@@ -84,9 +89,6 @@ func renderSearchResult(result searchResult[Hit]) renderedResult {
 		Total:           result.Total,
 		Hits:            renderHits(result.Hits),
 		Omitted:         result.Omitted,
-		OmittedFacets:   result.OmittedFacets,
-		Hint:            result.Hint,
-		OverflowPath:    result.OverflowPath,
 		Expanded:        renderHits(result.Expanded),
 		ExpandedOmitted: result.ExpandedOmitted,
 	}
@@ -180,8 +182,8 @@ func dateOf(fields map[string]any) string {
 
 // parseFields unmarshals a hit's fields_json into a map, tolerating empty or
 // malformed input (external data that crossed the wire) by returning nil
-// rather than panicking or erroring — mirrors budget.go's topFacets handling
-// of the same data.
+// rather than panicking or erroring: one bad record degrades to an empty row,
+// never a failed search.
 func parseFields(fieldsJSON string) map[string]any {
 	if fieldsJSON == "" {
 		return nil
@@ -279,10 +281,9 @@ func formatHitLine(h renderedHit) string {
 }
 
 // compactLines renders a renderedResult's full memory_search text-content
-// block: one line per matched hit (formatHitLine), then an omission summary
-// line only when hits were actually left out — mirroring buildSearchResult's
-// (budget.go) omitted/hint gating, so the caller still sees why a hit is
-// missing rather than silently losing that signal to the format change.
+// block: one line per matched hit (formatHitLine), then an omission line
+// (omissionLine) only when hits were actually left out, so the caller still
+// sees that a hit is missing rather than silently losing that signal.
 //
 // Graph expansions follow BELOW a one-line header, never interleaved with the
 // matched hits (DW-6.2): they did not match the query, they were reached by
@@ -298,14 +299,7 @@ func compactLines(r renderedResult) string {
 		lines = append(lines, formatHitLine(h))
 	}
 	if r.Omitted > 0 {
-		// The spill path rides in the text, not just a dropped structured
-		// field: with no structuredContent to carry it, a path left out here
-		// is a written file nobody can reach.
-		omission := "... " + r.Hint
-		if r.OverflowPath != "" {
-			omission += " overflow_path=" + r.OverflowPath
-		}
-		lines = append(lines, omission)
+		lines = append(lines, omissionLine(r))
 	}
 	// A header is still owed when the budget dropped EVERY expansion: with no
 	// structuredContent to carry expanded_omitted, returning early here would
@@ -322,6 +316,25 @@ func compactLines(r renderedResult) string {
 		lines = append(lines, formatHitLine(h))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// omissionLine is the one line a caller gets when the byte budget cut matched
+// hits: how many, and the one action that actually surfaces them. It is a
+// count plus an instruction and nothing else — the spill file and the
+// top-omitted-facet summary it replaced were never acted on (0 of 52 sampled
+// searches read an overflow_path), so they were bytes paid on every omitting
+// response for nothing.
+//
+// The instruction must be TRUE for a budget cut. "Raise k" is not: the backend
+// already returned these hits and the budget dropped them, so a larger k only
+// grows the omitted count. A paged source can resume exactly where this page
+// stopped — Offset plus the hits shown — so it names that offset; memory_search
+// has no offset, so narrowing is its only lever.
+func omissionLine(r renderedResult) string {
+	if r.Paged {
+		return fmt.Sprintf("... %d more omitted for size; page with offset=%d", r.Omitted, r.Offset+len(r.Hits))
+	}
+	return fmt.Sprintf("... %d more omitted for size; narrow the query", r.Omitted)
 }
 
 // blockHeader labels one source's block, ripgrep-style: the source is named

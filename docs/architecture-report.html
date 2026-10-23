@@ -561,14 +561,14 @@ flowchart TB
               <tr><td><code>memory_read</code></td><td><code>id</code>* <code>source</code>* (<code>episodic</code> or <code>semantic</code>)</td><td>Full record · Read</td></tr>
               <tr><td><code>memory_status</code></td><td>None</td><td>Health, identity, counts, OpenSearch version · Status</td></tr>
               <tr><td><code>knowledge_ingest</code></td><td><code>collection</code>* <code>source</code>* <code>harvest_id</code>* <code>docs[]</code>*</td><td><code>{indexed}</code> · KnowledgeIngest</td></tr>
-              <tr><td><code>knowledge_search</code></td><td><code>collection</code>* <code>query filters[] sort[] k</code></td><td>Budget-packed hits, optional spill · KnowledgeSearch</td></tr>
+              <tr><td><code>knowledge_search</code></td><td><code>collection</code>* <code>query filters[] sort[] k</code></td><td>Budget-packed hits; a cut page names its resume offset · KnowledgeSearch</td></tr>
               <tr><td><code>knowledge_collections</code></td><td>None</td><td>Specs, counts, staleness · KnowledgeCollections</td></tr>
               <tr><td><code>knowledge_delete</code></td><td><code>collection</code>* <code>source</code>* <code>current_harvest_id</code>*</td><td><code>{deleted}</code> · KnowledgeDelete</td></tr>
               <tr><td><code>knowledge_create_collection</code></td><td><code>name</code>* <code>text_field mappings public roles[]</code></td><td><code>{created}</code> · CreateCollection</td></tr>
               <tr><td><code>knowledge_update_collection</code></td><td>Same collection spec</td><td><code>{updated}</code> · UpdateCollection</td></tr>
             </tbody>
           </table></div>
-          <p>Tool failures return <code>isError:true</code>; protocol misuse returns a JSON-RPC error. Search packing uses <code>ENGRAM_MCP_SEARCH_BUDGET_BYTES</code> and <code>ENGRAM_MCP_SPILL_DIR</code>.</p>
+          <p>Tool failures return <code>isError:true</code>; protocol misuse returns a JSON-RPC error. Search packing uses <code>ENGRAM_MCP_SEARCH_BUDGET_BYTES</code>.</p>
         </div>
 
         <div class="api-group">
@@ -607,7 +607,7 @@ flowchart TB
             <tr><td><code>ENGRAM_ADDR</code></td><td>CLI, harvester</td><td>gRPC address; default <code>localhost:7070</code>.</td></tr>
             <tr><td><code>ENGRAM_OPENSEARCH_URL</code></td><td>CLI admin, server</td><td>OpenSearch URL; default <code>http://localhost:9200</code>.</td></tr>
             <tr><td><code>ENGRAM_HARVESTER_TOKEN</code></td><td>Harvester</td><td>Required harvester token.</td></tr>
-            <tr><td><code>ENGRAM_MCP_SEARCH_BUDGET_BYTES</code>, <code>ENGRAM_MCP_SPILL_DIR</code></td><td>MCP</td><td>Search response budget and overflow directory.</td></tr>
+            <tr><td><code>ENGRAM_MCP_SEARCH_BUDGET_BYTES</code></td><td>MCP</td><td>Search response byte budget.</td></tr>
             <tr><td><code>ENGRAM_HALU_JUDGE_URL</code>, <code>ENGRAM_HALU_JUDGE_MODEL</code></td><td>engram-eval</td><td>Hallucination judge.</td></tr>
             <tr><td><code>SHIM_BACKEND</code>, <code>SHIM_MODEL</code>, <code>SHIM_TIMEOUT</code></td><td>extract shim</td><td>Backend agent CLI settings.</td></tr>
           </tbody></table></div>

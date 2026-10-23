@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 )
 
@@ -161,7 +160,7 @@ func knowledgeToolSchemas() []toolSchema {
 		},
 		{
 			Name:        ToolKnowledgeSearch,
-			Description: "BM25 search over one knowledge collection with generic field filters and sort. Each hit carries extracted text fragments instead of the document body; drill the full document with memory_read(id, <collection>). An empty query (filter-only) matches no terms, so its hits carry scalar fields only — no fragments and no body. Returns budget-packed ranked hits plus the exact total match count; page with offset to drain past k. Oversized result sets spill to overflow_path.",
+			Description: "BM25 search over one knowledge collection with generic field filters and sort. Each hit carries extracted text fragments instead of the document body; drill the full document with memory_read(id, <collection>). An empty query (filter-only) matches no terms, so its hits carry scalar fields only — no fragments and no body. Returns budget-packed ranked hits plus the exact total match count; page with offset to drain past k.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -338,45 +337,18 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	if err != nil {
 		return toolError(fmt.Sprintf("search failed: %v", err)), nil
 	}
-	// Matched hits are packed (and spilled) FIRST, against the whole budget and
-	// exactly as they were before expansions had a block of their own; only then
-	// do graph expansions get appended into whatever budget is left (DW-6.4).
-	// So an expansion can never evict a match, and is the first thing dropped
-	// under pressure. Zero expansions leaves the block absent entirely (DW-6.3).
+	// Matched hits are packed FIRST, against the whole budget; only then do
+	// graph expansions get appended into whatever budget is left (DW-6.4). So
+	// an expansion can never evict a match, and is the first thing dropped
+	// under pressure. Zero expansions leaves the block absent entirely
+	// (DW-6.3).
 	//
-	// memory_search renders the budget-packed result as compact lines: the
-	// text block is the compact-line form the agent reads; structuredContent
-	// carries the rendered envelope. (knowledge_search returns extracted
-	// fragments rather than the full body; the suppressed body is reachable
-	// via memory_read(id, <collection>) — see the knowledge drill-down.)
-	result := packAndSpill(res.Hits, memoryFacetFields, ToolSearch)
-	result = packExpanded(result, res.Expanded, searchByteBudget())
+	// The result ships as compact lines only: the text block is the whole
+	// response (see toolResultLines).
+	budget := searchByteBudget()
+	result := packSearchResult(res.Hits, budget)
+	result = packExpanded(result, res.Expanded, budget)
 	return toolResultLines(compactLines(renderSearchResult(result))), nil
-}
-
-// packAndSpill budget-packs hits (facet hints computed over facetFields) and,
-// when the page omitted anything, spills the FULL result set to disk and
-// attaches its overflow_path. hits (unsliced) is exactly the full slim result
-// set: packed and remainder are an order-preserving split of it (budget.go),
-// so no reconstruction is needed. A spill failure must never fail the search
-// (DW-3.4) — log and return the capped page without overflow_path rather than
-// propagating the error. Shared verbatim by memory_search and
-// knowledge_search (DW-6.1); toolName only labels the degradation log line.
-func packAndSpill[H packable](hits []H, facetFields []string, toolName string) searchResult[H] {
-	result := packSearchResult(hits, searchByteBudget(), facetFields)
-	if result.Omitted > 0 {
-		if path, spillErr := spillFullResult(hits); spillErr != nil {
-			slog.Warn(toolName+": spilling full result set to disk failed; returning capped response without overflow_path", "error", spillErr)
-			// buildSearchResult (budget.go) built Hint optimistically,
-			// assuming this spill would succeed; now that it hasn't,
-			// rebuild the hint so it doesn't dangle a path that was never
-			// written (DW-3.2).
-			result.Hint = refineHint(result.Omitted, result.OmittedFacets, facetFields, false)
-		} else {
-			result.OverflowPath = path
-		}
-	}
-	return result
 }
 
 // callRead is the memory_read tool: the deliberate full-record drill for an
@@ -483,18 +455,16 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 	if err != nil {
 		return toolError(fmt.Sprintf("knowledge search failed: %v", err)), nil
 	}
-	// nil facet fields: collections declare their own field vocabulary at
-	// runtime, so v1 reports the omitted count + hint without facet values.
-	// Total is attached AFTER packing (packAndSpill is shared with
+	// Total is attached AFTER packing (the packer is shared with
 	// memory_search, which has no total concept) — see searchResult.Total.
-	result := packAndSpill(hits, nil, ToolKnowledgeSearch)
+	result := packSearchResult(hits, searchByteBudget())
 	result.Total = total
 	// Same render path as memory_search: one line format across both sources,
 	// and the structured payload carries the SAME minimal hits the text block
 	// shows. Emitting the fat form in structuredContent while the text block
 	// showed compact lines is what made the render savings invisible — a
 	// client that consumes structuredContent got none of them.
-	return toolResultLines(compactLines(renderKnowledgeResult(args.Collection, result))), nil
+	return toolResultLines(compactLines(renderKnowledgeResult(args.Collection, args.Offset, result))), nil
 }
 
 func (s *Server) callKnowledgeCollections(ctx context.Context) (any, *rpcError) {

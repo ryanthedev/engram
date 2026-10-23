@@ -107,18 +107,18 @@ maps 1:1 to a gRPC RPC via the shared client. Authenticated by `$ENGRAM_TOKEN`.
 | Tool | Args | Returns | RPC |
 |---|---|---|---|
 | `memory_ingest` | `event_id`* `text`* `source` | `{id}` | Ingest |
-| `memory_search` | `query`* `k` `kind` `subject` `predicate` `object` `extractor_version` `since` `until` `include_superseded` `sources` | budget-packed ranked hits (spills oversized sets to `overflow_path`) | Search |
+| `memory_search` | `query`* `k` `kind` `subject` `predicate` `object` `extractor_version` `since` `until` `include_superseded` `sources` | budget-packed ranked hits; a cut page ends `... N more omitted for size` | Search |
 | `memory_read` | `id`* `source`* (`episodic`\|`semantic`; `graph` rejected) | full record (episodic text; or fact + provenance + history) | Read |
 | `memory_status` | — | `{healthy, tenant/user/agent, episodic_count, semantic_count, opensearch_version}` | Status |
 | `knowledge_ingest` | `collection`* `source`* `harvest_id`* `docs[]`* | `{indexed}` (harvester/admin) | KnowledgeIngest |
-| `knowledge_search` | `collection`* `query` `filters[]` `sort[]` `k` | budget-packed hits, spill to `overflow_path` | KnowledgeSearch |
+| `knowledge_search` | `collection`* `query` `filters[]` `sort[]` `k` | budget-packed hits; a cut page names the `offset` that resumes it | KnowledgeSearch |
 | `knowledge_collections` | — | `{collections[]}` (mappings, count, staleness) | KnowledgeCollections |
 | `knowledge_delete` | `collection`* `source`* `current_harvest_id`* | `{deleted}` (harvester/admin) | KnowledgeDelete |
 | `knowledge_create_collection` | `name`* `text_field` `mappings` `public` `roles[]` | `{created}` (admin) | CreateCollection |
 | `knowledge_update_collection` | (same spec) | `{updated}` (admin) | UpdateCollection |
 
 Tool-level failures return an `isError:true` result; protocol misuse returns a JSON-RPC
-error. Tuning env: `$ENGRAM_MCP_SEARCH_BUDGET_BYTES`, `$ENGRAM_MCP_SPILL_DIR`.
+error. Tuning env: `$ENGRAM_MCP_SEARCH_BUDGET_BYTES`.
 
 ---
 
@@ -194,7 +194,7 @@ need a token).
 | `ENGRAM_ADDR` | CLI, harvester | gRPC address (default `localhost:7070`) |
 | `ENGRAM_OPENSEARCH_URL` | CLI admin, server | OpenSearch base URL (default `http://localhost:9200`) |
 | `ENGRAM_HARVESTER_TOKEN` | harvester | Harvester's bearer token (required) |
-| `ENGRAM_MCP_SEARCH_BUDGET_BYTES`, `ENGRAM_MCP_SPILL_DIR` | engram-mcp | Search budget / overflow spill dir |
+| `ENGRAM_MCP_SEARCH_BUDGET_BYTES` | engram-mcp | Search response byte budget |
 | `ENGRAM_HALU_JUDGE_URL`, `ENGRAM_HALU_JUDGE_MODEL` | engram-eval | Hallucination judge |
 | `SHIM_BACKEND`, `SHIM_MODEL`, `SHIM_TIMEOUT` | engram-extract-shim | Backend agent CLI config |
 

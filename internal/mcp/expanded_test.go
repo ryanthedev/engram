@@ -10,7 +10,6 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 )
@@ -94,7 +93,7 @@ func TestDW_6_3_ZeroExpansionsOmitsExpandedKey(t *testing.T) {
 	}
 
 	// And the packed envelope itself marshals without the key at all.
-	b, err := json.Marshal(packSearchResult([]Hit{semanticHit("s1", "a", "b", "c", 10)}, 16384, memoryFacetFields))
+	b, err := json.Marshal(packSearchResult([]Hit{semanticHit("s1", "a", "b", "c", 10)}, 16384))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -117,7 +116,7 @@ func TestDW_6_4_MatchedHitsPackFirstExpansionsDroppedFirst(t *testing.T) {
 	}
 
 	// Budget sized to hold both matched hits and nothing more.
-	full := packSearchResult(matched, 100000, memoryFacetFields)
+	full := packSearchResult(matched, 100000)
 	fullBytes, _ := json.Marshal(full)
 	budget := len(fullBytes)
 
@@ -149,7 +148,7 @@ func TestDW_6_4_ExpandedFillsLeftoverBudget(t *testing.T) {
 	}
 
 	// A budget that holds the matched hit plus exactly one expansion.
-	base := packSearchResult(matched, 100000, memoryFacetFields)
+	base := packSearchResult(matched, 100000)
 	oneExpansion := base
 	oneExpansion.Expanded = expanded[:1]
 	oneExpansion.ExpandedOmitted = 2
@@ -179,13 +178,11 @@ func TestDW_6_4_ExpandedFillsLeftoverBudget(t *testing.T) {
 	}
 }
 
-// TestDW_6_4_MatchedOverflowStillSpills: the expanded block does not disturb the
-// existing spill path. With more matched hits than the budget holds, the matched
-// overflow still spills to disk and still reports overflow_path — and expansions
-// get only what is left after all of that.
-func TestDW_6_4_MatchedOverflowStillSpills(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv(spillDirEnv, dir)
+// TestDW_6_4_MatchedOverflowStillReportsOmission: the expanded block does not
+// disturb the matched omission signal. With more matched hits than the budget
+// holds, the matched overflow is still counted on the omission line — and
+// expansions get only what is left after all of that.
+func TestDW_6_4_MatchedOverflowStillReportsOmission(t *testing.T) {
 	t.Setenv(searchBudgetBytesEnv, "700")
 
 	matched := make([]Hit, 0, 6)
@@ -201,13 +198,6 @@ func TestDW_6_4_MatchedOverflowStillSpills(t *testing.T) {
 	omitted, _ := decoded["omitted"].(float64)
 	if omitted == 0 {
 		t.Fatalf("nothing was omitted — the budget is not under pressure, so this test proves nothing: %v", decoded)
-	}
-	path, _ := decoded["overflow_path"].(string)
-	if path == "" {
-		t.Fatalf("overflow_path missing: the existing spill path broke when `expanded` was added: %v", decoded)
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("spill file %q not written: %v", path, err)
 	}
 
 	// Matched hits packed FIRST: at least one survived, and under this pressure

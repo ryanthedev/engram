@@ -328,9 +328,8 @@ func TestRenderHitMissingOrMalformedFieldsNoPanic(t *testing.T) {
 }
 
 // TestCompactLinesOmissionFooterOnlyWhenOmitted: the omission summary
-// footer line appears only when hits were actually left out — mirroring
-// buildSearchResult's gating in budget.go, so the format change doesn't
-// silently drop that signal.
+// footer line appears only when hits were actually left out, so the format
+// never silently drops that signal.
 func TestCompactLinesOmissionFooterOnlyWhenOmitted(t *testing.T) {
 	fit := renderedResult{Hits: []renderedHit{{ID: "episodic:a", Text: "g"}}}
 	if got := compactLines(fit); strings.Contains(got, "...") {
@@ -340,10 +339,9 @@ func TestCompactLinesOmissionFooterOnlyWhenOmitted(t *testing.T) {
 	omitted := renderedResult{
 		Hits:    []renderedHit{{ID: "episodic:a", Text: "g"}},
 		Omitted: 3,
-		Hint:    "3 more hit(s) omitted to stay within the response size budget; narrow your query.",
 	}
 	got := compactLines(omitted)
-	if !strings.Contains(got, "3 more hit(s) omitted") {
-		t.Errorf("compactLines with omission missing the hint text: %q", got)
+	if !strings.Contains(got, "\n... 3 more omitted for size") {
+		t.Errorf("compactLines with omission missing the omission line: %q", got)
 	}
 }
