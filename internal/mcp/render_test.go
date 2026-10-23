@@ -181,7 +181,7 @@ func TestSemanticIDsRenderAsShortPrefix(t *testing.T) {
 		{"semantic 64-hex", renderHit(semanticHit(fullSemantic, "s", "p", "o", 5)).ID, "semantic:6485d0174800"},
 		{"semantic already short", renderHit(semanticHit("abc123", "s", "p", "o", 5)).ID, "semantic:abc123"},
 		{"episodic stays whole", renderHit(episodicHit(episodicID, "t", "note", "2026-07-01T00:00:00Z", "e")).ID, "episodic:" + episodicID},
-		{"knowledge stays whole", renderKnowledgeHit("notes", KnowledgeHit{ID: strings.Repeat("d", 40)}).ID, "notes:" + strings.Repeat("d", 40)},
+		{"knowledge stays whole", renderKnowledgeHit("notes", KnowledgeHit{ID: strings.Repeat("d", 40)}, false).ID, "notes:" + strings.Repeat("d", 40)},
 	}
 	for _, tc := range tests {
 		if tc.got != tc.want {
@@ -368,5 +368,44 @@ func TestCompactLinesOmissionFooterOnlyWhenOmitted(t *testing.T) {
 	got := compactLines(omitted)
 	if !strings.Contains(got, "\n... 3 more omitted for size") {
 		t.Errorf("compactLines with omission missing the omission line: %q", got)
+	}
+}
+
+// TestKnowledgeFullBodyRendersTheDocument: a full_body search carries no
+// fragments, and its row must show the stored document (body included), not
+// collapse to the title as it did before.
+func TestKnowledgeFullBodyRendersTheDocument(t *testing.T) {
+	h := KnowledgeHit{ID: "d1", Fields: `{"title":"T","text":"the whole body\nsecond line"}`}
+	got := renderKnowledgeHit("notes", h, true).Text
+	if !strings.Contains(got, "the whole body") || strings.ContainsAny(got, "\t\n") {
+		t.Fatalf("full_body row = %q, want the body on one line", got)
+	}
+	if got := renderKnowledgeHit("notes", h, false).Text; got != "T" {
+		t.Fatalf("filter-only row = %q, want the title fallback", got)
+	}
+}
+
+// TestDateColumnIsSanitizedAndRuneSafe: knowledge dates are harvester-supplied,
+// so a newline or tab inside one must not break the row, and a multi-byte rune
+// must never be split.
+func TestDateColumnIsSanitizedAndRuneSafe(t *testing.T) {
+	if got := dateOf(map[string]any{"date": "2026-01\n01T00"}); strings.ContainsAny(got, "\t\n") {
+		t.Fatalf("date = %q, want no control characters", got)
+	}
+	got := dateOf(map[string]any{"date": "２０２６年１月１日です、はい"})
+	if !utf8.ValidString(got) || utf8.RuneCountInString(got) != 10 {
+		t.Fatalf("date = %q, want 10 whole runes", got)
+	}
+}
+
+// TestBlankExpansionRowsAreDropped: an expansion renders as its statement
+// alone, so one without a statement is a blank line carrying nothing.
+func TestBlankExpansionRowsAreDropped(t *testing.T) {
+	r := renderSearchResult(SearchResult{
+		Hits:     []Hit{{ID: "e1", Source: "episodic", Fields: `{"text":"x"}`}},
+		Expanded: []Hit{{ID: "g1", Source: "graph", Fields: `{"statement":""}`}, {ID: "g2", Source: "graph", Fields: `{"statement":"kept"}`}},
+	})
+	if len(r.Expanded) != 1 || r.Expanded[0].Text != "kept" {
+		t.Fatalf("expanded = %+v, want only the non-blank row", r.Expanded)
 	}
 }

@@ -469,7 +469,7 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 	// Same render-then-pack path as memory_search: one line format across both
 	// sources, and one budget measured on the text that ships — total and
 	// offset included, since the header and omission line carry them.
-	packed := packRendered(renderKnowledgeResult(args.Collection, args.Offset, total, hits), searchByteBudget())
+	packed := packRendered(renderKnowledgeResult(args.Collection, args.Offset, total, hits, args.FullBody), searchByteBudget())
 	return toolResultLines(compactLines(packed)), nil
 }
 

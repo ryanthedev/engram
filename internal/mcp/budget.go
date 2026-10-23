@@ -75,7 +75,10 @@ func searchByteBudget() int {
 // The budget does not bound the graph header that reports dropped expansions:
 // when not one expansion fits, the header still ships, because a caller
 // silently missing its neighbors is worse than a response one line over — the
-// same best-effort-at-the-floor posture as the one-hit floor.
+// same best-effort-at-the-floor posture as the one-hit floor. The overshoot is
+// that one header line (under ~100 bytes), and only on a request that opted in
+// with expand; reserving room for it in the matched pass would instead let a
+// header evict a match.
 func packRendered(r renderedResult, budgetBytes int) renderedResult {
 	hits, expanded := r.Hits, r.Expanded
 	r.Expanded, r.ExpandedOmitted = nil, 0

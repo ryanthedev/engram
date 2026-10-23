@@ -20,11 +20,11 @@ const leadSnippetRunes = 200
 // "(3 of 9)" header is part of what the budget measures. offset is the page's
 // starting rank: knowledge_search pages, so its omission line can name the
 // exact offset that resumes where this page stopped.
-func renderKnowledgeResult(collection string, offset int, total int64, hits []KnowledgeHit) renderedResult {
+func renderKnowledgeResult(collection string, offset int, total int64, hits []KnowledgeHit, fullBody bool) renderedResult {
 	return renderedResult{
 		Label:  "knowledge/" + collection,
 		Total:  total,
-		Hits:   renderKnowledgeHits(collection, hits),
+		Hits:   renderKnowledgeHits(collection, hits, fullBody),
 		Paged:  true,
 		Offset: offset,
 	}
@@ -89,8 +89,12 @@ type renderedResult struct {
 // byte-identical after this call.
 func renderSearchResult(res SearchResult) renderedResult {
 	r := renderedResult{Label: "memory", Hits: renderHits(res.Hits)}
-	if len(res.Expanded) > 0 {
-		r.Expanded = renderHits(res.Expanded)
+	// An expansion row is its statement alone, so one with no statement would
+	// render as a blank line: such rows carry nothing and are dropped here.
+	for _, h := range renderHits(res.Expanded) {
+		if h.Text != "" {
+			r.Expanded = append(r.Expanded, h)
+		}
 	}
 	return r
 }
@@ -140,10 +144,10 @@ func displayID(source, id string) string {
 
 // renderKnowledgeHits renders one block of knowledge hits, always returning a
 // non-nil slice so an empty block marshals as `[]`, never `null`.
-func renderKnowledgeHits(collection string, hits []KnowledgeHit) []renderedHit {
+func renderKnowledgeHits(collection string, hits []KnowledgeHit, fullBody bool) []renderedHit {
 	out := make([]renderedHit, len(hits))
 	for i, h := range hits {
-		out[i] = renderKnowledgeHit(collection, h)
+		out[i] = renderKnowledgeHit(collection, h, fullBody)
 	}
 	return out
 }
@@ -154,9 +158,19 @@ func renderKnowledgeHits(collection string, hits []KnowledgeHit) []renderedHit {
 // the document body at query time. A filter-only search matches no terms and
 // so carries no fragments; it falls back to the document title rather than
 // rendering a blank row.
-func renderKnowledgeHit(collection string, h KnowledgeHit) renderedHit {
+//
+// A full_body search also carries no fragments, but for the opposite reason:
+// the caller asked for the whole document inline, and the server put it back
+// into Fields. The body lives under the collection's own text_field, a name
+// this edge does not know, so the row's text is the stored document itself
+// as one line of JSON — every field, the body included — rather than the
+// title-only row it used to collapse to.
+func renderKnowledgeHit(collection string, h KnowledgeHit, fullBody bool) renderedHit {
 	fields := parseFields(h.Fields)
 	text := normalizeToSingleLine(strings.Join(h.Fragments, fragmentSep))
+	if text == "" && fullBody && len(fields) > 0 {
+		text = normalizeToSingleLine(h.Fields)
+	}
 	if text == "" {
 		title, _ := fields["title"].(string)
 		text = normalizeToSingleLine(title)
@@ -192,8 +206,11 @@ func dateOf(fields map[string]any) string {
 		if !ok || v == "" {
 			continue
 		}
-		if len(v) >= 10 {
-			return v[:10]
+		// Knowledge dates are harvester-supplied, so the column is sanitized
+		// like every other value on the row, and cut by rune, never by byte.
+		v = normalizeToSingleLine(v)
+		if r := []rune(v); len(r) > 10 {
+			v = string(r[:10])
 		}
 		return v
 	}
