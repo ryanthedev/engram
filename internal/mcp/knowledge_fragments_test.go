@@ -117,6 +117,10 @@ func TestMemoryReadAcceptsSelfAddressingID(t *testing.T) {
 		wantID, wantSrc string
 	}{
 		{"memory row", map[string]any{"id": "episodic:ep-1"}, "ep-1", "episodic"},
+		// A semantic row shows a 12-hex id prefix; memory_read forwards it
+		// verbatim — never padded, guessed, or rejected — and the server
+		// resolves it.
+		{"short semantic row", map[string]any{"id": "semantic:6485d0174800"}, "6485d0174800", "semantic"},
 		{"knowledge row with slashes", map[string]any{"id": "notes:self/thegrid/a.md"}, "self/thegrid/a.md", "notes"},
 		{"doc id containing a colon", map[string]any{"id": "notes:self/a:b.md"}, "self/a:b.md", "notes"},
 		{"explicit source still wins", map[string]any{"id": "raw:id", "source": "episodic"}, "raw:id", "episodic"},

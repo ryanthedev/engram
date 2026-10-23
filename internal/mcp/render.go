@@ -107,15 +107,35 @@ func renderHits(hits []Hit) []renderedHit {
 	return out
 }
 
+// semanticIDPrefixLen is how many leading characters of a semantic fact id a
+// search row shows. Semantic ids are 64-hex sha256 digests, and their full
+// column was ~12% of a typical search's bytes; 12 hex chars (48 bits) keeps a
+// collision within one tenant's fact set vanishingly unlikely. memory_read
+// forwards the prefix to the server unchanged, which resolves it.
+const semanticIDPrefixLen = 12
+
 // renderHit converts one packed memory Hit into its minimal line form,
 // folding the tier into the id so the row is self-addressing.
 func renderHit(h Hit) renderedHit {
 	fields := parseFields(h.Fields)
 	return renderedHit{
-		ID:   h.Source + ":" + h.ID,
+		ID:   h.Source + ":" + displayID(h.Source, h.ID),
 		Date: dateOf(fields),
 		Text: gistFor(h.Source, fields),
 	}
+}
+
+// displayID is the id a search row shows for a record of source: a semantic
+// id cut to semanticIDPrefixLen, every other id whole. Only semantic is
+// shortened because only semantic ids are long digests the server can resolve
+// by prefix; episodic ids are 20-char OpenSearch ids, and knowledge doc ids are
+// harvester-chosen strings with no prefix contract at all. Byte slicing is
+// safe here: semantic ids are server-generated ASCII hex.
+func displayID(source, id string) string {
+	if source == "semantic" && len(id) > semanticIDPrefixLen {
+		return id[:semanticIDPrefixLen]
+	}
+	return id
 }
 
 // renderKnowledgeHits renders one block of knowledge hits, always returning a
