@@ -63,6 +63,14 @@ type Server struct {
 	// ACL authorizes audit and export reads (Phase 4); nil skips the scope
 	// check.
 	ACL ReadAuthorizer
+	// ACLClause compiles the same policy as ACL into its query clause, for
+	// reads that must authorize INSIDE a search (semantic id-prefix
+	// resolution, readprefix.go). With ACL set and this nil, prefix reads are
+	// refused rather than run under the tenant pin alone.
+	ACLClause ReadClauseCompiler
+	// FactPrefix backs Read's semantic id-prefix resolution; nil disables
+	// prefixes (a full id still reads). See readprefix.go.
+	FactPrefix FactPrefixResolver
 	// Exporter backs the Export RPC (the Phase 1 graph scan); nil disables
 	// exporting (UNIMPLEMENTED). See export.go.
 	Exporter Exporter

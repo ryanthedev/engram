@@ -208,7 +208,12 @@ Details:
 `Read` and `Audit` are the deliberate by-id drill-downs (full episodic text, or a
 semantic fact + provenance + bi-temporal history). They run the same fail-closed
 authorization as `Search`: an unknown id, a cross-tenant record, or an id/source
-mismatch all return `NOT_FOUND` — no existence oracle.
+mismatch all return `NOT_FOUND` — no existence oracle. A semantic `Read` also
+accepts a hex id prefix (8–63 chars): it is resolved by an `_id`-sorted
+`search_after` seek scoped by the tenant pin and the compiled ACL clause, so
+only facts the caller can read are matched or counted; one match then takes the
+full-id path, several return `INVALID_ARGUMENT` ("use more characters"), none
+returns the same `NOT_FOUND` (`internal/server/readprefix.go`).
 
 ---
 

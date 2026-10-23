@@ -281,6 +281,10 @@ func main() {
 	svc.Probe = st
 	svc.Auditor = st
 	svc.ACL = aclFilter
+	// Read's semantic id-prefix resolution authorizes inside its query with
+	// the same compiled clause search uses (internal/server/readprefix.go).
+	svc.ACLClause = aclFilter
+	svc.FactPrefix = st
 	// Knowledge platform (Phase 6): runtime collection registry, bulk
 	// document writer, and BM25-only retriever — all over the same cluster,
 	// never touching the memory tiers. Apply already PUT the
