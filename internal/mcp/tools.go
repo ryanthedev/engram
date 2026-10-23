@@ -47,54 +47,54 @@ func toolSchemas() []toolSchema {
 	return []toolSchema{
 		{
 			Name:        ToolIngest,
-			Description: "Append one event to Engram episodic memory. Extraction and reconciliation happen asynchronously; returns the durable episodic id.",
+			Description: "Append one event to Engram episodic memory; facts are extracted from it asynchronously. Returns the episodic id.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"event_id": strProp("Client-supplied idempotency id (required)."),
-					"text":     strProp("Raw event text to remember (required)."),
-					"source":   strProp("Optional source identifier for provenance."),
+					"event_id": strProp("Idempotency id (required)."),
+					"text":     strProp("Event text to remember (required)."),
+					"source":   strProp("Provenance label."),
 					"scope": map[string]any{
 						"type":        "string",
 						"enum":        []any{"private", "team", "org"},
 						"description": "Who may read it: private (default, this agent only), team (members of `team`), or org (every agent of this user, across machines).",
 					},
-					"team": strProp("Team id; required when scope is team, rejected otherwise."),
+					"team": strProp("Team id; only with scope team, where it is required."),
 				},
 				"required": []any{"event_id", "text"},
 			},
 		},
 		{
 			Name: ToolSearch,
-			// Every byte of this description is a per-call token cost on the
-			// caller's context: it says what a caller cannot infer from the
-			// parameter names (which filter narrows which tier, and what the
-			// defaults are) and nothing else.
-			Description: "Hybrid (BM25 + vector) search over Engram memory. Returns fused, ranked hits. All filters are optional; each narrows only the tier that owns it (kind: episodic; subject/predicate/object/extractor_version: semantic) and leaves the other tier unnarrowed.",
+			// Every byte of this schema is paid each time a client loads it: the
+			// description says what a caller cannot infer from the parameter
+			// names (which filter narrows which tier, that graph neighbors are
+			// opt-in) and nothing else. Defaults live on each parameter.
+			Description: "Hybrid (BM25 + vector) search over Engram memory; ranked hits. Filters are optional and each narrows only its own tier (kind: episodic; subject/predicate/object/extractor_version: semantic). Graph neighbors of the hits are opt-in via expand.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query":             strProp("Natural-language query (required)."),
 					"k":                 map[string]any{"type": "integer", "description": fmt.Sprintf("Max hits to return (default %d).", defaultRequestK)},
-					"kind":              strProp("Episodic event kind, exact match (e.g. conversation, tool_result)."),
-					"subject":           strProp("Semantic fact subject, exact match."),
-					"predicate":         strProp("Semantic fact predicate, exact match."),
-					"object":            strProp("Semantic fact object, exact match."),
-					"extractor_version": strProp("Semantic extractor version, exact match."),
+					"kind":              strProp("Episodic event kind, exact (e.g. conversation, tool_result)."),
+					"subject":           strProp("Fact subject, exact."),
+					"predicate":         strProp("Fact predicate, exact."),
+					"object":            strProp("Fact object, exact."),
+					"extractor_version": strProp("Fact extractor version, exact."),
 					"since":             strProp("Earliest event time, RFC 3339 (episodic occurred_at, semantic valid_at)."),
 					"until":             strProp("Latest event time, RFC 3339."),
 					"include_superseded": map[string]any{
 						"type":        "boolean",
-						"description": "Include superseded/retracted historical facts (default false: current facts only).",
+						"description": "Include superseded/retracted facts (default false).",
 					},
 					"sources": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"description": "Limit to these sources: " + strings.Join(memorySources, ", ") + " (default all). experience and graph cannot be filtered, so any filter above excludes them.",
+						"description": "Limit to these sources: " + strings.Join(memorySources, ", ") + " (default all). Any filter excludes experience and graph.",
 					},
 					"expand": map[string]any{
 						"type":        "boolean",
-						"description": "Also return graph neighbors of the hits, below them and not counted against k (default false).",
+						"description": "Add graph neighbors of the hits, not counted against k (default false).",
 					},
 				},
 				"required": []any{"query"},
@@ -102,19 +102,19 @@ func toolSchemas() []toolSchema {
 		},
 		{
 			Name:        ToolRead,
-			Description: "Read ONE record's full content by the id and source a search result exposes. Episodic returns the full untruncated text; semantic returns the fact plus its provenance and version history; a knowledge collection returns the full stored document a knowledge_search fragment came from. Spends your context on the whole record — drill deliberately.",
+			Description: "Read one search hit's full record: episodic's untruncated text; a semantic fact with provenance and version history; a knowledge collection's whole document. Costs context; drill deliberately.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":     strProp("Record id exactly as shown in a search result (required)."),
-					"source": strProp(`Where the id lives: "episodic", "semantic", or a knowledge collection name from a knowledge_search hit (required; "graph" has no drill-down).`),
+					"id":     strProp(`A search row's first column, e.g. "episodic:<id>" (required).`),
+					"source": strProp("Only for a bare id: episodic, semantic, or a knowledge collection."),
 				},
-				"required": []any{"id", "source"},
+				"required": []any{"id"},
 			},
 		},
 		{
 			Name:        ToolStatus,
-			Description: "Report Engram server health, the caller's identity, and per-tier document counts.",
+			Description: "Engram server health, the caller's identity, and per-tier document counts.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},

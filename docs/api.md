@@ -108,7 +108,7 @@ maps 1:1 to a gRPC RPC via the shared client. Authenticated by `$ENGRAM_TOKEN`.
 |---|---|---|---|
 | `memory_ingest` | `event_id`* `text`* `source` | `{id}` | Ingest |
 | `memory_search` | `query`* `k` `kind` `subject` `predicate` `object` `extractor_version` `since` `until` `include_superseded` `sources` `expand` | budget-packed ranked hits; a cut page ends `... N more omitted for size` | Search |
-| `memory_read` | `id`* `source`* (`episodic`\|`semantic`; `graph` rejected) | full record (episodic text; or fact + provenance + history) | Read |
+| `memory_read` | `id`* (a search row's `<source>:<id>`) `source` (only with a bare id: `episodic`\|`semantic`\|collection; `graph` rejected) | full record (episodic text; fact + provenance + history; or knowledge document) | Read |
 | `memory_status` | — | `{healthy, tenant/user/agent, episodic_count, semantic_count, opensearch_version}` | Status |
 | `knowledge_ingest` | `collection`* `source`* `harvest_id`* `docs[]`* | `{indexed}` (harvester/admin) | KnowledgeIngest |
 | `knowledge_search` | `collection`* `query` `filters[]` `sort[]` `k` | budget-packed hits; a cut page names the `offset` that resumes it | KnowledgeSearch |
