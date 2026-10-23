@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -105,6 +106,30 @@ func (c *MCPConn) CallTool(name string, args map[string]any) (map[string]any, er
 	}
 	sc, _ := r.Result["structuredContent"].(map[string]any)
 	return sc, nil
+}
+
+// CallToolText invokes a tool and returns its text content block. Search tools
+// return text only (no structuredContent), so CallTool's map is empty for them.
+func (c *MCPConn) CallToolText(name string, args map[string]any) (string, error) {
+	r, err := c.call("tools/call", map[string]any{"name": name, "arguments": args})
+	if err != nil {
+		return "", err
+	}
+	if r.Error != nil {
+		return "", fmt.Errorf("tools/call protocol error: %v", r.Error)
+	}
+	if isErr, _ := r.Result["isError"].(bool); isErr {
+		return "", fmt.Errorf("tool %s reported an error: %v", name, r.Result["content"])
+	}
+	blocks, _ := r.Result["content"].([]any)
+	var b strings.Builder
+	for _, blk := range blocks {
+		if m, ok := blk.(map[string]any); ok {
+			t, _ := m["text"].(string)
+			b.WriteString(t)
+		}
+	}
+	return b.String(), nil
 }
 
 // waitHTTP polls url until it returns 2xx or the deadline passes.

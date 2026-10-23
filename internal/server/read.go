@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -178,6 +179,12 @@ func (s *Server) readKnowledge(ctx context.Context, docID, source string) (*engr
 // exactly the path above — the prefix never reaches Audit, so Audit's own
 // by-id contract is unchanged.
 func (s *Server) readSemantic(ctx context.Context, docID string) (*engrampb.ReadResponse, error) {
+	// Fact ids are lowercase hex digests, so an uppercased copy of one (or of
+	// its prefix) can only mean the lowercase id: fold it rather than answer a
+	// pasted id with the opaque NOT_FOUND.
+	if lower := strings.ToLower(docID); isHex(lower) {
+		docID = lower
+	}
 	switch {
 	case isFactIDPrefix(docID):
 		full, err := s.resolveFactPrefix(ctx, docID)

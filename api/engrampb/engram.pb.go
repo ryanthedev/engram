@@ -358,8 +358,9 @@ type SearchRequest struct {
 	Sources []string `protobuf:"bytes,14,rep,name=sources,proto3" json:"sources,omitempty"`
 	// Run the graph post-hook and return its expansions. Default (false) skips
 	// graph traversal entirely: expansions are bonus context reached from the
-	// matched hits, not matches, and most callers never use them. It governs the
-	// graph post-hook only; matched hits, k, and every filter are unaffected.
+	// matched hits, not matches, and most callers never use them. Naming "graph"
+	// in sources also turns expansion on. It governs the graph post-hook only;
+	// matched hits, k, and every filter are unaffected.
 	Expand        bool `protobuf:"varint,15,opt,name=expand,proto3" json:"expand,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -180,7 +180,7 @@ flowchart TD
   E3 --> F
   F --> G[Cross-tier merge: stable score sort + top-k]
   G --> H[filterAuthorized BEFORE truncation]
-  H --> I[Post-hooks: graph expansion only if expand=true, re-authorized]
+  H --> I[Post-hooks: graph expansion only if expand=true or sources names graph, re-authorized]
   I --> J[projectFields: drop embeddings + ACL provenance]
   J --> K[SearchResponse hits]
 ```

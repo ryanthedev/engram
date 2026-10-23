@@ -111,9 +111,10 @@ func TestReadPrefix_ResolvesUnderTenantAndACLThenReadsFullID(t *testing.T) {
 
 // TestReadPrefix_FullIDKeepsExactPath: a full 64-char id (and anything not
 // shaped like a hex prefix) never touches the resolver — today's realtime-GET
-// read, byte for byte.
+// read, byte for byte. (Uppercase hex is folded to lowercase first; see
+// TestReadPrefix_UppercaseHexFoldsToLowercase.)
 func TestReadPrefix_FullIDKeepsExactPath(t *testing.T) {
-	for _, id := range []string{fullFactID, "AB12CD34EF56", "v1-not-hex", fullFactID + "00"} {
+	for _, id := range []string{fullFactID, "v1-not-hex", fullFactID + "00"} {
 		res := &fakePrefixResolver{ids: []string{fullFactID}}
 		svc, aud := prefixServer(res, true)
 		_, _ = readSemantic(svc, id)
@@ -234,5 +235,25 @@ func TestReadPrefix_EpisodicUntouched(t *testing.T) {
 	_, err := svc.Read(authedCtx("t1", "u1", "a1"), &engrampb.ReadRequest{Id: prefix12, Source: "episodic"})
 	if status.Code(err) != codes.NotFound || res.calls != 0 {
 		t.Errorf("code=%v resolver=%d, want NotFound with no resolution", status.Code(err), res.calls)
+	}
+}
+
+// TestReadPrefix_UppercaseHexFoldsToLowercase: fact ids are lowercase hex, so
+// a pasted uppercase id or prefix resolves as its lowercase form instead of
+// falling through to the opaque NOT_FOUND.
+func TestReadPrefix_UppercaseHexFoldsToLowercase(t *testing.T) {
+	res := &fakePrefixResolver{ids: []string{fullFactID}}
+	svc, aud := prefixServer(res, true)
+	if _, err := readSemantic(svc, strings.ToUpper(prefix12)); err != nil {
+		t.Fatalf("read uppercase prefix: %v", err)
+	}
+	if res.prefix != prefix12 {
+		t.Errorf("resolver asked for %q, want the lowercase prefix %q", res.prefix, prefix12)
+	}
+	if _, err := readSemantic(svc, strings.ToUpper(fullFactID)); err != nil {
+		t.Fatalf("read uppercase full id: %v", err)
+	}
+	if last := aud.ids[len(aud.ids)-1]; last != fullFactID {
+		t.Errorf("Audit fetched %q, want the lowercase full id", last)
 	}
 }

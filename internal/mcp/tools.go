@@ -236,7 +236,7 @@ func knowledgeToolSchemas() []toolSchema {
 	}
 }
 
-// handleToolsList returns the advertised tool schemas: the three memory tools
+// handleToolsList returns the advertised tool schemas: the four memory tools
 // followed by the six knowledge tools.
 func (s *Server) handleToolsList() (any, *rpcError) {
 	return map[string]any{"tools": append(toolSchemas(), knowledgeToolSchemas()...)}, nil
@@ -563,20 +563,6 @@ func toolResult(payload any) map[string]any {
 	text, _ := json.Marshal(payload)
 	return map[string]any{
 		"content":           []any{map[string]any{"type": "text", "text": string(text)}},
-		"structuredContent": payload,
-		"isError":           false,
-	}
-}
-
-// toolResultWithText wraps a structured payload as an MCP tool result whose
-// content text block is the caller-supplied rendering (memory_search's
-// compact-line format) rather than a straight marshal of payload — while
-// structuredContent still carries the full structured payload for clients
-// that consume it. toolResult stays the JSON-marshal-both-ways default;
-// this is the divergent case.
-func toolResultWithText(payload any, text string) map[string]any {
-	return map[string]any{
-		"content":           []any{map[string]any{"type": "text", "text": text}},
 		"structuredContent": payload,
 		"isError":           false,
 	}
