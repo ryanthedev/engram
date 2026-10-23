@@ -208,6 +208,11 @@ message SearchRequest {
   // declare no filterable fields cannot honor a filter, so they are excluded
   // from any search that sets one.
   repeated string sources = 14;
+  // Run the graph post-hook and return its expansions. Default (false) skips
+  // graph traversal entirely: expansions are bonus context reached from the
+  // matched hits, not matches, and most callers never use them. It governs the
+  // graph post-hook only; matched hits, k, and every filter are unaffected.
+  bool expand = 15;
 }
 
 // Hit is one fused result.
