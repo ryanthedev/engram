@@ -1,7 +1,7 @@
 {
   "name": "engram",
   "version": "0.1.0",
-  "description": "Engram agent-memory platform — hybrid retrieval over episodic/semantic/experience/graph tiers, exposed to Claude Code as memory_ingest / memory_search / memory_status. Requires a running engramd (see ENGRAM_ADDR) and a bearer token (ENGRAM_TOKEN).",
+  "description": "Engram agent memory: hybrid search over episodic, semantic and graph memory plus knowledge collections, as memory_* and knowledge_* MCP tools. Needs engramd at ENGRAM_ADDR and ENGRAM_TOKEN.",
   "author": {
     "name": "rtd"
   },

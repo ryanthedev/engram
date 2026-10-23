@@ -287,8 +287,9 @@ Template for a new filterable retriever.
 token attachment, proto↔domain translation, `IsAlreadyExists`/`IsPermissionDenied` predicates
 for non-allowlisted callers. Template for a new client-side RPC call.
 
-**`internal/mcp/tools.go`** — tool-handler edge: arg parsing, `toolResult`/`toolResultWithText`,
-the shared `packAndSpill` budget-then-overflow pattern. Template for a new MCP tool.
+**`internal/mcp/tools.go`** — tool-handler edge: arg parsing, `toolResult` (JSON) vs
+`toolResultLines` (text-only search rows), and the shared render-then-`packRendered` budget
+(`render.go`, `budget.go`). Template for a new MCP tool.
 
 **`internal/server/server.go` + `read.go`** — gRPC edge: thin handlers translating sentinels to
 gRPC codes, plus fetch-then-authorize-then-project to keep denials indistinguishable from
