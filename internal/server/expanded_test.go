@@ -8,7 +8,11 @@ package server_test
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/ryanthedev/engram/api/engrampb"
 	"github.com/ryanthedev/engram/internal/retrieval"
@@ -137,5 +141,39 @@ func TestSearchNonExpanderPostHookHitsStayInHits(t *testing.T) {
 	}
 	if src := resp.GetExpanded()[0].GetSource(); src != retrieval.ExpandedSource {
 		t.Fatalf("expanded[0].source = %q, want %q — an experience hit was misfiled", src, retrieval.ExpandedSource)
+	}
+}
+
+// TestSearchThreadsExpandToRetriever: SearchRequest.expand reaches the
+// retriever as Query.Expand, and its proto default (false) is the retriever's
+// skip — the server adds no default of its own that could re-enable expansion.
+func TestSearchThreadsExpandToRetriever(t *testing.T) {
+	for _, want := range []bool{false, true} {
+		var got *bool
+		s := server.New(&fakeStore{}, &fakeRetriever{
+			searchFn: func(_ context.Context, q retrieval.Query, _ retrieval.Filter) ([]retrieval.Hit, error) {
+				got = &q.Expand
+				return nil, nil
+			},
+		})
+		if _, err := s.Search(context.Background(), &engrampb.SearchRequest{Query: "q", Expand: want}); err != nil {
+			t.Fatalf("expand=%v: Search: %v", want, err)
+		}
+		if got == nil || *got != want {
+			t.Errorf("expand=%v: retriever saw Query.Expand=%v", want, got)
+		}
+	}
+}
+
+// TestSearchGraphSourceWithoutExpandIsInvalidArgument: the retriever's
+// contradictory-request error (graph named, expand false) surfaces as the
+// caller's mistake, carrying its self-correcting message, not as Internal.
+func TestSearchGraphSourceWithoutExpandIsInvalidArgument(t *testing.T) {
+	r := retrieval.NewOpenSearchRetriever(nil, "http://127.0.0.1:1", nil)
+	r.RegisterPostHook(retrieval.ExpandedSource, nil) // never reached: validation runs first
+	s := server.New(&fakeStore{}, r)
+	_, err := s.Search(context.Background(), &engrampb.SearchRequest{Query: "q", Sources: []string{"semantic", "graph"}})
+	if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "expand") {
+		t.Fatalf("err = %v, want InvalidArgument naming expand", err)
 	}
 }

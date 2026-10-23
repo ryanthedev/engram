@@ -91,7 +91,7 @@ Usage:
   engram acl revoke     --tenant T --user U (--agent A | --team M | --org) [--url URL]
   engram acl list       --tenant T --user U [--url URL]
   engram ingest         --event-id ID --text TEXT [--source S] [--scope private|team|org] [--team M] [-addr HOST:PORT] [-token TOK]
-  engram search         QUERY [-k 10] [-addr HOST:PORT] [-token TOK]
+  engram search         QUERY [-k 10] [-expand] [-addr HOST:PORT] [-token TOK]
   engram status         [-addr HOST:PORT] [-token TOK]
   engram audit          <fact-id> [-addr HOST:PORT] [-token TOK]
   engram export         <dir> [--force] [-addr HOST:PORT] [-token TOK]
@@ -289,6 +289,9 @@ func runSearch(ctx context.Context, args []string, env Env, out io.Writer) error
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	k := fs.Int("k", 10, "max hits")
+	// Graph expansions are opt-in on the wire (SearchRequest.expand): without
+	// this flag the server skips the traversal and none are printed.
+	expand := fs.Bool("expand", false, "also return graph expansions reached from the matches")
 	addr := fs.String("addr", "", "engramd address")
 	token := fs.String("token", "", "bearer token")
 	// Flags are accepted on either side of QUERY (the usage banner shows them
@@ -311,7 +314,7 @@ func runSearch(ctx context.Context, args []string, env Env, out io.Writer) error
 	defer client.Close()
 	// The CLI is an unfiltered search: a zero SearchFilter is exactly the query
 	// it issued before filters existed.
-	res, err := client.Search(ctx, query, *k, mcp.SearchFilter{})
+	res, err := client.SearchExpand(ctx, query, *k, mcp.SearchFilter{}, *expand)
 	if err != nil {
 		return err
 	}

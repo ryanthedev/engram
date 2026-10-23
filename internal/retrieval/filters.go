@@ -324,6 +324,32 @@ func (m *MultiRetriever) validateFilterableSources(preds []Predicate, sel source
 	return nil
 }
 
+// validateExpansionSources rejects a search that EXPLICITLY names the graph
+// expansion source (ExpandedSource) without opting in to expansion.
+//
+// Since Query.Expand landed, "graph" in Filter.Sources no longer suffices to
+// run the expander: expansion is opt-in, and the zero value skips it. Naming
+// the source while leaving Expand false is therefore a contradictory request,
+// and honoring either half silently would be the quiet surprise this package
+// refuses to serve (the validateFilterableSources precedent): dropping "graph"
+// would return no expansions the caller plainly asked for — and Sources:
+// ["graph"] alone would return zero hits with no explanation — while running
+// it would make Sources a second, undocumented expand switch. The error names
+// both fixes. Implicit selection (nil Sources) needs no check: expand alone
+// decides.
+func (m *MultiRetriever) validateExpansionSources(sel sourceSet, expand bool) error {
+	if expand || sel == nil {
+		return nil
+	}
+	for _, h := range m.postHooks {
+		if h.name == ExpandedSource && sel.selected(h.name) {
+			return invalidFilterf("source %q is graph expansion, which runs only when expand is true; set expand or drop %q from sources",
+				ExpandedSource, ExpandedSource)
+		}
+	}
+	return nil
+}
+
 // selectSources partitions the registered sources into the ones this search
 // runs. It is the single place Filter.Sources is applied — the built-in tier
 // fan-out, the registered tier-source fan-out, and the post-hook chain all
@@ -343,10 +369,32 @@ func (m *MultiRetriever) validateFilterableSources(preds []Predicate, sel source
 // field — its surface is declared, visible in every error message, and
 // excludable by name. See DW-4.2.)
 //
+// expand reports whether the query opted in to graph expansion (Query.Expand).
+// When it did not, the post-hook registered under ExpandedSource is dropped
+// HERE, alongside every other source exclusion, so the traversal never starts
+// — gating its output after the fact would still pay its latency. Post-hooks
+// under any other name are untouched: expand governs expansion only.
+//
 // It does not touch the ACL: the returned sources still run under the compiled
 // filter, and their hits are still re-verified. Narrowing sources can only
 // REMOVE results from a search, never admit one the ACL would have denied.
-func (m *MultiRetriever) selectSources(sel sourceSet, filtered bool) ([]*tierRetriever, []namedTierSource, []namedPostHook) {
+func (m *MultiRetriever) selectSources(sel sourceSet, filtered, expand bool) ([]*tierRetriever, []namedTierSource, []namedPostHook) {
+	tiers, srcs, hooks := m.selectBySources(sel, filtered)
+	if expand {
+		return tiers, srcs, hooks
+	}
+	kept := make([]namedPostHook, 0, len(hooks))
+	for _, h := range hooks {
+		if h.name != ExpandedSource {
+			kept = append(kept, h)
+		}
+	}
+	return tiers, srcs, kept
+}
+
+// selectBySources is selectSources' Filter.Sources/predicate half (see there):
+// the partition before the expansion gate is applied.
+func (m *MultiRetriever) selectBySources(sel sourceSet, filtered bool) ([]*tierRetriever, []namedTierSource, []namedPostHook) {
 	if sel == nil && !filtered { // nil Sources, no filter: every source, no work at all.
 		return m.tiers, m.tierSrcs, m.postHooks
 	}

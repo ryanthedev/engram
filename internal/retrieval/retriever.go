@@ -16,6 +16,14 @@ import (
 type Query struct {
 	Text string
 	K    int
+	// Expand opts in to graph expansion: the post-hook registered under
+	// ExpandedSource runs only when it is true. The zero value SKIPS the
+	// traversal outright — not just its output — because expansions are bonus
+	// context reached from the matched hits, not matches, most callers never
+	// read them, and the traversal is the costliest step after the tier
+	// queries. Matched hits, K, and every filter are unaffected either way, and
+	// post-hooks registered under any other name are not gated by it.
+	Expand bool
 }
 
 // Filter scopes a search. TenantID and UserID narrow by tenancy (D16);

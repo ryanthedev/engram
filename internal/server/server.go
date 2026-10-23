@@ -152,7 +152,10 @@ func (s *Server) Search(ctx context.Context, req *engrampb.SearchRequest) (*engr
 	if err != nil {
 		return nil, err
 	}
-	q := retrieval.Query{Text: req.GetQuery(), K: int(req.GetK())}
+	// Graph expansion is opt-in on the wire (SearchRequest.expand, default
+	// false): the retriever skips the traversal entirely unless asked, so an
+	// unexpanded search pays neither its tokens nor its latency.
+	q := retrieval.Query{Text: req.GetQuery(), K: int(req.GetK()), Expand: req.GetExpand()}
 	f := retrieval.Filter{
 		TenantID: req.GetTenantId(),
 		UserID:   req.GetUserId(),

@@ -282,6 +282,8 @@ func (m *MultiRetriever) checkSourceName(name string) {
 // naming the valid vocabulary — no cluster round-trip, no partial search. The
 // surviving sources decide which tiers, tier sources and post-hooks run, and
 // each tier compiles only the predicates it declares (routing, not zeroing).
+// The graph-expansion post-hook additionally runs only when q.Expand is set;
+// naming "graph" in f.Sources without it is a validation error.
 //
 // With ACL enabled, the filter is compiled ONCE from f.Identity and enforced
 // two ways:
@@ -314,6 +316,9 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 	if err := m.validateFilterableSources(f.Predicates, sel); err != nil {
 		return nil, err
 	}
+	if err := m.validateExpansionSources(sel, q.Expand); err != nil {
+		return nil, err
+	}
 	if q.Text == "" {
 		return nil, nil
 	}
@@ -322,7 +327,8 @@ func (m *MultiRetriever) Search(ctx context.Context, q Query, f Filter) ([]Hit, 
 	// A filtered search runs only sources that can honor the filter: registered
 	// tier sources and post-hooks declare no filterable fields, so their hits
 	// would ride back unconstrained beside constrained ones (see selectSources).
-	tiers, tierSrcs, postHooks := m.selectSources(sel, len(f.Predicates) > 0)
+	// Graph expansion runs only when the query opted in (Query.Expand).
+	tiers, tierSrcs, postHooks := m.selectSources(sel, len(f.Predicates) > 0, q.Expand)
 
 	var enf acl.Enforcer
 	var aclClause map[string]any
