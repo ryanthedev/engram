@@ -137,8 +137,8 @@ func parseCompactLines(t *testing.T, text string) map[string]any {
 }
 
 // TestDW_2_1_DefaultSearchFitsBudget: a default memory_search (no explicit k)
-// returns a response whose FULL serialized size (hits + envelope) is <= the
-// configured byte budget.
+// returns a response whose text — the whole tool response, header and
+// omission line included — is <= the configured byte budget.
 func TestDW_2_1_DefaultSearchFitsBudget(t *testing.T) {
 	hits := make([]Hit, 0, defaultRequestK+10)
 	for i := 0; i < defaultRequestK+10; i++ {
@@ -146,7 +146,59 @@ func TestDW_2_1_DefaultSearchFitsBudget(t *testing.T) {
 	}
 	text, _ := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "anything"})
 	if got, want := len(text), searchByteBudget(); got > want {
-		t.Errorf("serialized size = %d bytes, want <= %d", got, want)
+		t.Errorf("rendered size = %d bytes, want <= %d", got, want)
+	}
+}
+
+// TestBudgetMeasuresRenderedTextNotTheFatRecord is the regression for the
+// budget measuring the wrong thing: the packer used to marshal each Hit whole,
+// fields_json and all, so records whose JSON dwarfs their one-line rendering
+// were cut ("omitted") from a page whose shipped text was a fraction of the
+// budget. Here every hit carries a large field the render never shows: the
+// fat JSON is several times the budget, the rendered text is well under it,
+// and every hit must survive.
+func TestBudgetMeasuresRenderedTextNotTheFatRecord(t *testing.T) {
+	const budget = 2048
+	t.Setenv(searchBudgetBytesEnv, fmt.Sprint(budget))
+
+	hits := make([]Hit, 0, 8)
+	for i := 0; i < 8; i++ {
+		fields, _ := json.Marshal(map[string]any{
+			"statement":  fmt.Sprintf("fact %d", i),
+			"valid_at":   "2026-01-01T00:00:00Z",
+			"provenance": strings.Repeat("p", 1000), // never rendered
+		})
+		hits = append(hits, Hit{ID: fmt.Sprintf("f%d", i), Source: "semantic", Fields: string(fields)})
+	}
+	fat, _ := json.Marshal(hits)
+	if len(fat) <= budget {
+		t.Fatalf("setup: fat JSON is %d bytes, must exceed the %d budget for this test to mean anything", len(fat), budget)
+	}
+
+	text, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
+	if _, ok := decoded["omitted"]; ok {
+		t.Errorf("hits omitted although the rendered text (%d bytes) fits the %d-byte budget:\n%s", len(text), budget, text)
+	}
+	if got := len(decoded["hits"].([]any)); got != len(hits) {
+		t.Errorf("hits = %d, want all %d", got, len(hits))
+	}
+}
+
+// TestPackedTextFitsBudgetAtEveryCut: wherever the budget lands, the text the
+// tool returns — omission line included — is within it whenever more than the
+// one-hit floor survives. Sweeping the budget across a whole page catches an
+// omission line or header that the fit check failed to count.
+func TestPackedTextFitsBudgetAtEveryCut(t *testing.T) {
+	res := SearchResult{Hits: manyHits(12)}
+	full := renderedLen(res)
+	for budget := 1; budget <= full+10; budget++ {
+		packed := packRendered(renderSearchResult(res), budget)
+		if got := len(compactLines(packed)); len(packed.Hits) > 1 && got > budget {
+			t.Fatalf("budget %d: rendered %d bytes with %d hits kept", budget, got, len(packed.Hits))
+		}
+		if len(packed.Hits)+packed.Omitted != len(res.Hits) {
+			t.Fatalf("budget %d: kept %d + omitted %d != %d", budget, len(packed.Hits), packed.Omitted, len(res.Hits))
+		}
 	}
 }
 
@@ -187,7 +239,7 @@ func TestDW_2_2_OmissionFieldsPresentOnlyWhenOmitted(t *testing.T) {
 }
 
 // TestDW_2_3_SearchByteBudgetFromEnv: the byte budget is configurable via
-// ENGRAM_MCP_SEARCH_BUDGET_BYTES, defaulting to 16384; unset or invalid
+// ENGRAM_MCP_SEARCH_BUDGET_BYTES, defaulting to 6144; unset or invalid
 // values fall back to the default (dirty cases).
 func TestDW_2_3_SearchByteBudgetFromEnv(t *testing.T) {
 	tests := []struct {
@@ -195,7 +247,7 @@ func TestDW_2_3_SearchByteBudgetFromEnv(t *testing.T) {
 		val  string // "" means unset
 		want int
 	}{
-		{"unset", "", searchBudgetBytesDefault},
+		{"unset", "", 6144},
 		{"valid override", "8000", 8000},
 		{"minimal valid", "1", 1},
 		{"zero (dirty)", "0", searchBudgetBytesDefault},
@@ -219,7 +271,7 @@ func TestDW_2_4_SingleOverBudgetHitStillEmitted(t *testing.T) {
 	huge := semanticHit("h1", "s", "p", "o", 5000)
 
 	t.Run("only one hit, alone over budget", func(t *testing.T) {
-		result := packSearchResult([]Hit{huge}, 1)
+		result := packRendered(renderSearchResult(SearchResult{Hits: []Hit{huge}}), 1)
 		if len(result.Hits) != 1 {
 			t.Fatalf("Hits = %d, want 1 (never empty when hits exist)", len(result.Hits))
 		}
@@ -230,8 +282,8 @@ func TestDW_2_4_SingleOverBudgetHitStillEmitted(t *testing.T) {
 
 	t.Run("huge first hit forces the rest into omitted", func(t *testing.T) {
 		small := semanticHit("h2", "s2", "p2", "o2", 5)
-		result := packSearchResult([]Hit{huge, small}, 10)
-		if len(result.Hits) != 1 || result.Hits[0].ID != "h1" {
+		result := packRendered(renderSearchResult(SearchResult{Hits: []Hit{huge, small}}), 10)
+		if len(result.Hits) != 1 || result.Hits[0].ID != "semantic:h1" {
 			t.Fatalf("Hits = %+v, want exactly [h1]", result.Hits)
 		}
 		if result.Omitted != 1 {
@@ -240,30 +292,19 @@ func TestDW_2_4_SingleOverBudgetHitStillEmitted(t *testing.T) {
 	})
 }
 
-// TestPackSearchResultZeroHits: a zero-hit result produces an empty,
-// non-nil page — not a panic, not a null hits array (DW-2.1's zero-hit edge
-// case; the packing loop must test at the beginning).
-func TestPackSearchResultZeroHits(t *testing.T) {
-	result := packSearchResult[Hit](nil, searchBudgetBytesDefault)
-	if result.Hits == nil {
-		t.Error("Hits is nil, want a non-nil empty slice (marshals to [] not null)")
-	}
-	if len(result.Hits) != 0 {
-		t.Errorf("Hits = %d, want 0", len(result.Hits))
+// TestPackRenderedZeroHits: a zero-hit result produces an empty page that
+// still renders its header — not a panic, and not a cut (DW-2.1's zero-hit
+// edge case; the packing loop must test at the beginning).
+func TestPackRenderedZeroHits(t *testing.T) {
+	result := packRendered(renderSearchResult(SearchResult{}), searchBudgetBytesDefault)
+	if result.Hits == nil || len(result.Hits) != 0 {
+		t.Errorf("Hits = %#v, want a non-nil empty slice", result.Hits)
 	}
 	if result.Omitted != 0 {
 		t.Errorf("Omitted = %d, want 0", result.Omitted)
 	}
-	b, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(b, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if hits, ok := decoded["hits"].([]any); !ok || len(hits) != 0 {
-		t.Errorf("decoded hits = %v, want an empty array", decoded["hits"])
+	if got := compactLines(result); got != "memory (0)" {
+		t.Errorf("compactLines = %q, want just the header", got)
 	}
 }
 

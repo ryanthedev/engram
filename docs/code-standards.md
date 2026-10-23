@@ -90,16 +90,15 @@ func (s *OpenSearchStore) Create(ctx context.Context, id string, f memory.Semant
 }
 ```
 
-### A search tool handler: budget-pack, then count what was cut
+### A search tool handler: render, budget-pack the rendered text, count what was cut
 ```go
 // DO — from internal/mcp/tools.go callSearch, shared by memory_search and knowledge_search.
-// Oversized result sets are packed against a byte budget; anything cut is COUNTED on
-// one omission line ("... 7 more omitted for size; narrow the query") instead of
+// Render first, then pack: the byte budget bounds the exact text the caller receives,
+// so it is measured on that text, never on an upstream form. Anything cut is COUNTED
+// on one omission line ("... 7 more omitted for size; narrow the query") instead of
 // truncating silently. No spill file: callers never read one.
-budget := searchByteBudget()
-result := packSearchResult(res.Hits, budget)
-result = packExpanded(result, res.Expanded, budget)
-return toolResultLines(compactLines(renderSearchResult(result))), nil
+packed := packRendered(renderSearchResult(res), searchByteBudget())
+return toolResultLines(compactLines(packed)), nil
 ```
 
 ### A gRPC handler translating domain errors to status codes

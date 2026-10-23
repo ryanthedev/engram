@@ -13,18 +13,20 @@ import (
 // A named constant per the plan (Produces), not a magic number.
 const leadSnippetRunes = 200
 
-// renderKnowledgeResult converts a budget-packed knowledge search into the
-// same rendered envelope memory produces, so both tools emit one line format.
-// offset is the page's starting rank: knowledge_search pages, so its omission
-// line can name the exact offset that resumes where this page stopped.
-func renderKnowledgeResult(collection string, offset int, result searchResult[KnowledgeHit]) renderedResult {
+// renderKnowledgeResult converts one knowledge search page — every hit the
+// backend returned, before any budget cut — into the same rendered envelope
+// memory produces, so both tools emit one line format and pack through the
+// same packRendered. total is the exact match count, set BEFORE packing so the
+// "(3 of 9)" header is part of what the budget measures. offset is the page's
+// starting rank: knowledge_search pages, so its omission line can name the
+// exact offset that resumes where this page stopped.
+func renderKnowledgeResult(collection string, offset int, total int64, hits []KnowledgeHit) renderedResult {
 	return renderedResult{
-		Label:   "knowledge/" + collection,
-		Total:   result.Total,
-		Hits:    renderKnowledgeHits(collection, result.Hits),
-		Omitted: result.Omitted,
-		Paged:   true,
-		Offset:  offset,
+		Label:  "knowledge/" + collection,
+		Total:  total,
+		Hits:   renderKnowledgeHits(collection, hits),
+		Paged:  true,
+		Offset: offset,
 	}
 }
 
@@ -52,12 +54,13 @@ type renderedHit struct {
 	Text string `json:"text"`
 }
 
-// renderedResult is the rendered memory_search envelope: mirrors
-// searchResult's shape and its omitted gating (present only when hits were
-// actually left out), but with hits rendered to their compact-line form.
-// Expanded mirrors the same gating: the graph expansions that rode along
-// beside the matched hits, present only when there are any (DW-6.3) and never
-// merged into Hits (DW-6.2).
+// renderedResult is one search response in rendered form: the hits as
+// compact-line rows plus what the budget cut. It is both what packRendered
+// packs and what compactLines prints, so the budget is measured on exactly the
+// text that ships. Omitted counts matched hits the budget cut (zero when none
+// were). Expanded carries the graph expansions that rode along beside the
+// matched hits, present only when there are any (DW-6.3) and never merged
+// into Hits (DW-6.2).
 type renderedResult struct {
 	// Label names the block this result renders as — "memory" for the fused
 	// memory tiers, "knowledge/<collection>" for one collection.
@@ -78,27 +81,24 @@ type renderedResult struct {
 	ExpandedOmitted int
 }
 
-// renderSearchResult converts a packed searchResult into its rendered form.
-// It never mutates result or the Hits it packed (DW-1.6): every field is
-// copied into new renderedHit/renderedResult values, so the caller's
-// original Hit slice (and, upstream, whatever engramclient/gRPC decoded)
-// stays byte-identical after this call.
-func renderSearchResult(result searchResult[Hit]) renderedResult {
-	return renderedResult{
-		Label:           "memory",
-		Total:           result.Total,
-		Hits:            renderHits(result.Hits),
-		Omitted:         result.Omitted,
-		Expanded:        renderHits(result.Expanded),
-		ExpandedOmitted: result.ExpandedOmitted,
+// renderSearchResult converts one memory search answer — every hit the
+// backend returned, before any budget cut — into its rendered form, ready for
+// packRendered. It never mutates res or its Hits (DW-1.6): every field is
+// copied into new renderedHit/renderedResult values, so the caller's original
+// Hit slices (and, upstream, whatever engramclient/gRPC decoded) stay
+// byte-identical after this call.
+func renderSearchResult(res SearchResult) renderedResult {
+	r := renderedResult{Label: "memory", Hits: renderHits(res.Hits)}
+	if len(res.Expanded) > 0 {
+		r.Expanded = renderHits(res.Expanded)
 	}
+	return r
 }
 
-// renderHits renders one block of hits, always returning a non-nil slice so an
-// empty matched block still marshals as `"hits": []` (never `null`) exactly as
-// it did before there was a second block. The `expanded` block needs no such
-// care: its omitempty tag drops it whenever it is zero-LENGTH, nil or not
-// (DW-6.3).
+// renderHits renders one block of hits, always returning a non-nil slice, so
+// an empty block is an empty list rather than an absent one; whether an empty
+// expansion block is shown at all is renderSearchResult's and compactLines'
+// call (DW-6.3), not this function's.
 func renderHits(hits []Hit) []renderedHit {
 	out := make([]renderedHit, len(hits))
 	for i, h := range hits {

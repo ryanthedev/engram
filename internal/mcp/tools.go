@@ -337,18 +337,15 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	if err != nil {
 		return toolError(fmt.Sprintf("search failed: %v", err)), nil
 	}
-	// Matched hits are packed FIRST, against the whole budget; only then do
-	// graph expansions get appended into whatever budget is left (DW-6.4). So
-	// an expansion can never evict a match, and is the first thing dropped
-	// under pressure. Zero expansions leaves the block absent entirely
-	// (DW-6.3).
+	// Render first, then pack: the budget bounds the exact text the caller
+	// receives, so it can only be measured after rendering (see packRendered).
+	// Matched hits pack first against the whole budget; graph expansions get
+	// only what is left (DW-6.4), so an expansion can never evict a match.
 	//
 	// The result ships as compact lines only: the text block is the whole
 	// response (see toolResultLines).
-	budget := searchByteBudget()
-	result := packSearchResult(res.Hits, budget)
-	result = packExpanded(result, res.Expanded, budget)
-	return toolResultLines(compactLines(renderSearchResult(result))), nil
+	packed := packRendered(renderSearchResult(res), searchByteBudget())
+	return toolResultLines(compactLines(packed)), nil
 }
 
 // callRead is the memory_read tool: the deliberate full-record drill for an
@@ -455,16 +452,11 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 	if err != nil {
 		return toolError(fmt.Sprintf("knowledge search failed: %v", err)), nil
 	}
-	// Total is attached AFTER packing (the packer is shared with
-	// memory_search, which has no total concept) — see searchResult.Total.
-	result := packSearchResult(hits, searchByteBudget())
-	result.Total = total
-	// Same render path as memory_search: one line format across both sources,
-	// and the structured payload carries the SAME minimal hits the text block
-	// shows. Emitting the fat form in structuredContent while the text block
-	// showed compact lines is what made the render savings invisible — a
-	// client that consumes structuredContent got none of them.
-	return toolResultLines(compactLines(renderKnowledgeResult(args.Collection, args.Offset, result))), nil
+	// Same render-then-pack path as memory_search: one line format across both
+	// sources, and one budget measured on the text that ships — total and
+	// offset included, since the header and omission line carry them.
+	packed := packRendered(renderKnowledgeResult(args.Collection, args.Offset, total, hits), searchByteBudget())
+	return toolResultLines(compactLines(packed)), nil
 }
 
 func (s *Server) callKnowledgeCollections(ctx context.Context) (any, *rpcError) {
