@@ -310,8 +310,11 @@ func runSearch(ctx context.Context, args []string, env Env, out io.Writer) error
 	}
 	defer client.Close()
 	// The CLI is an unfiltered search: a zero SearchFilter is exactly the query
-	// it issued before filters existed.
-	res, err := client.Search(ctx, query, *k, mcp.SearchFilter{})
+	// it issued before filters existed — except Expand, which the CLI sets so
+	// it keeps printing the expansions block below now that the server skips
+	// graph traversal unless asked. A human at a terminal is not paying per
+	// token for them.
+	res, err := client.Search(ctx, query, *k, mcp.SearchFilter{Expand: true})
 	if err != nil {
 		return err
 	}

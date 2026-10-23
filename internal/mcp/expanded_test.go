@@ -8,6 +8,7 @@ package mcp
 // cosmetic.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -36,7 +37,7 @@ func TestDW_6_2_SearchResultRendersExpandedSection(t *testing.T) {
 		hits:     []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 10)},
 		expanded: []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 10)},
 	}
-	text, decoded := searchViaWire(t, backend, map[string]any{"query": "q"})
+	text, decoded := searchViaWire(t, backend, map[string]any{"query": "q", "expand": true})
 
 	// Structured: two blocks, never merged.
 	hits, _ := decoded["hits"].([]any)
@@ -79,7 +80,7 @@ func TestDW_6_2_SearchResultRendersExpandedSection(t *testing.T) {
 // encoding.
 func TestDW_6_3_ZeroExpansionsOmitsExpandedBlock(t *testing.T) {
 	backend := &fixedHitsBackend{hits: []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 10)}}
-	text, decoded := searchViaWire(t, backend, map[string]any{"query": "q"})
+	text, decoded := searchViaWire(t, backend, map[string]any{"query": "q", "expand": true})
 
 	if _, present := decoded["expanded"]; present {
 		t.Errorf("response carries an expanded block with zero expansions: %v", decoded["expanded"])
@@ -189,7 +190,7 @@ func TestDW_6_4_MatchedOverflowStillReportsOmission(t *testing.T) {
 		hits:     matched,
 		expanded: []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 120)},
 	}
-	_, decoded := searchViaWire(t, backend, map[string]any{"query": "q"})
+	_, decoded := searchViaWire(t, backend, map[string]any{"query": "q", "expand": true})
 
 	omitted, _ := decoded["omitted"].(float64)
 	if omitted == 0 {
@@ -253,5 +254,63 @@ func TestPackRenderedNeverPanicsOnEmptyInputs(t *testing.T) {
 				t.Errorf("expanded_omitted = %d, want 0 (everything fit)", got.ExpandedOmitted)
 			}
 		})
+	}
+}
+
+// expandRecordingBackend is a fixedHitsBackend that records the filter each
+// Search received, so a test can see what reached the seam.
+type expandRecordingBackend struct {
+	fixedHitsBackend
+	lastFilter SearchFilter
+}
+
+func (b *expandRecordingBackend) Search(ctx context.Context, q string, k int, f SearchFilter) (SearchResult, error) {
+	b.lastFilter = f
+	return b.fixedHitsBackend.Search(ctx, q, k, f)
+}
+
+// TestExpandFalseDiscardsServerExpansions: expansion is opt-in. Without
+// expand=true the request asks the server to skip graph traversal, AND any
+// expansions that come back anyway are dropped — the fake here always returns
+// them, exactly as a server predating SearchRequest.expand would, since it
+// ignores the unknown field. With expand=true they ride through.
+func TestExpandFalseDiscardsServerExpansions(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      map[string]any
+		wantAsked bool
+	}{
+		{"omitted", map[string]any{"query": "q"}, false},
+		{"explicit false", map[string]any{"query": "q", "expand": false}, false},
+		{"true", map[string]any{"query": "q", "expand": true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &expandRecordingBackend{fixedHitsBackend: fixedHitsBackend{
+				hits:     []Hit{semanticHit("s1", "svc", "owned_by", "team-a", 10)},
+				expanded: []Hit{padGraphHit("g1", "team-a", "located_in", "berlin", 10)},
+			}}
+			text, decoded := searchViaWire(t, backend, tc.args)
+			if backend.lastFilter.Expand != tc.wantAsked {
+				t.Errorf("SearchFilter.Expand = %v, want %v", backend.lastFilter.Expand, tc.wantAsked)
+			}
+			_, gotGraph := decoded["expanded"]
+			if gotGraph != tc.wantAsked || strings.Contains(text, "graph (") != tc.wantAsked {
+				t.Errorf("graph block present = %v, want %v:\n%s", gotGraph, tc.wantAsked, text)
+			}
+		})
+	}
+}
+
+// TestExpandRejectsNonBoolean: expand is a boolean, and the barricade says so
+// in caller terms rather than letting a string through as truthy.
+func TestExpandRejectsNonBoolean(t *testing.T) {
+	res := callSearchTool(t, newFakeBackend(), map[string]any{"query": "q", "expand": "yes"})
+	if res["isError"] != true {
+		t.Fatalf("expand:\"yes\" accepted: %v", res)
+	}
+	content, _ := res["content"].([]any)
+	block, _ := content[0].(map[string]any)
+	if msg, _ := block["text"].(string); !strings.Contains(msg, "expand must be a boolean") {
+		t.Errorf("error = %q, want it to name expand's shape", msg)
 	}
 }

@@ -92,6 +92,10 @@ func toolSchemas() []toolSchema {
 						"items":       map[string]any{"type": "string"},
 						"description": "Limit to these sources: " + strings.Join(memorySources, ", ") + " (default all). experience and graph cannot be filtered, so any filter above excludes them.",
 					},
+					"expand": map[string]any{
+						"type":        "boolean",
+						"description": "Also return graph neighbors of the hits, below them and not counted against k (default false).",
+					},
 				},
 				"required": []any{"query"},
 			},
@@ -336,6 +340,13 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	res, err := s.backend.Search(ctx, query, k, filter)
 	if err != nil {
 		return toolError(fmt.Sprintf("search failed: %v", err)), nil
+	}
+	// expand=false is enforced HERE, not trusted to the server: a server older
+	// than SearchRequest.expand ignores the unknown field and still runs the
+	// graph post-hook, so its expansions are dropped at this edge. The caller
+	// gets the answer it asked for whichever server it reached.
+	if !filter.Expand {
+		res.Expanded = nil
 	}
 	// Render first, then pack: the budget bounds the exact text the caller
 	// receives, so it can only be measured after rendering (see packRendered).

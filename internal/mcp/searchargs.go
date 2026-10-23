@@ -18,7 +18,7 @@ import (
 var searchParams = []string{
 	"query", "k",
 	"kind", "subject", "predicate", "object", "extractor_version",
-	"since", "until", "include_superseded", "sources",
+	"since", "until", "include_superseded", "sources", "expand",
 }
 
 // memorySources is the source vocabulary memory_search accepts: the two built-in
@@ -46,6 +46,7 @@ type searchArgs struct {
 	Until             string   `json:"until"`
 	IncludeSuperseded bool     `json:"include_superseded"`
 	Sources           []string `json:"sources"`
+	Expand            bool     `json:"expand"`
 }
 
 // parseSearchArgs is the memory_search barricade. Arguments arrive from an
@@ -97,6 +98,7 @@ func parseSearchArgs(raw json.RawMessage) (query string, k int, f SearchFilter, 
 		ExtractorVersion:  args.ExtractorVersion,
 		IncludeSuperseded: args.IncludeSuperseded,
 		Sources:           args.Sources,
+		Expand:            args.Expand,
 	}
 	if f.Since, err = parseBound("since", args.Since); err != nil {
 		return "", 0, SearchFilter{}, err

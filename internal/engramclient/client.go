@@ -254,6 +254,7 @@ func (c *Client) Search(ctx context.Context, query string, k int, f mcp.SearchFi
 		ExtractorVersion:  f.ExtractorVersion,
 		IncludeSuperseded: f.IncludeSuperseded,
 		Sources:           f.Sources,
+		Expand:            f.Expand,
 	}
 	if !f.Since.IsZero() {
 		req.Since = timestamppb.New(f.Since)
