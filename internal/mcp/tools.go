@@ -75,7 +75,7 @@ func toolSchemas() []toolSchema {
 				"type": "object",
 				"properties": map[string]any{
 					"query":             strProp("Natural-language query (required)."),
-					"k":                 map[string]any{"type": "integer", "description": "Max hits to return (default server-chosen)."},
+					"k":                 map[string]any{"type": "integer", "description": fmt.Sprintf("Max hits to return (default %d).", defaultRequestK)},
 					"kind":              strProp("Episodic event kind, exact match (e.g. conversation, tool_result)."),
 					"subject":           strProp("Semantic fact subject, exact match."),
 					"predicate":         strProp("Semantic fact predicate, exact match."),
@@ -184,7 +184,7 @@ func knowledgeToolSchemas() []toolSchema {
 						"description": "Sort keys: {field, order: asc|desc} over declared sortable fields.",
 						"items":       map[string]any{"type": "object"},
 					},
-					"k": map[string]any{"type": "integer", "description": "Max hits to return (default server-chosen)."},
+					"k": map[string]any{"type": "integer", "description": fmt.Sprintf("Max hits to return (default %d).", defaultRequestK)},
 					"offset": map[string]any{
 						"type":        "integer",
 						"description": "Skip this many ranked hits before returning k (paging; default 0, first page). The response's total is the exact match count.",
@@ -457,7 +457,7 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 	}
 	k := args.K
 	if k <= 0 {
-		k = defaultRequestK // same request-generously-pack-tightly posture as memory_search
+		k = defaultRequestK // same default as memory_search
 	}
 	hits, total, err := s.backend.KnowledgeSearch(ctx, args.Collection, args.Query, args.Filters, args.Sort, k, args.Offset, args.FullBody)
 	if err != nil {

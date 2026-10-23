@@ -358,6 +358,22 @@ func TestCallSearchDefaultKUsesDefaultRequestK(t *testing.T) {
 	}
 }
 
+// TestDefaultKIsTenForBothSearchTools pins the unset-k default at 10 — what
+// callers actually ask for — and proves knowledge_search shares it rather than
+// drifting to its own number.
+func TestDefaultKIsTenForBothSearchTools(t *testing.T) {
+	if defaultRequestK != 10 {
+		t.Errorf("defaultRequestK = %d, want 10", defaultRequestK)
+	}
+	b := &knowledgeFake{}
+	c := startServer(t, b)
+	c.call("initialize", nil)
+	callTool(t, c, ToolKnowledgeSearch, map[string]any{"collection": "papers", "query": "q"})
+	if b.lastSearch.k != defaultRequestK {
+		t.Errorf("knowledge_search requested k = %d, want defaultRequestK = %d", b.lastSearch.k, defaultRequestK)
+	}
+}
+
 // recordingKBackend records the k passed to Search and returns no hits.
 type recordingKBackend struct {
 	knowledgeStubs

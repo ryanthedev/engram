@@ -114,7 +114,7 @@ func parseSearchArgs(raw json.RawMessage) (query string, k int, f SearchFilter, 
 		return "", 0, SearchFilter{}, err
 	}
 
-	// k <= 0 is "server-chosen", not an error: request generously, pack tightly.
+	// k <= 0 means "use the default", not an error.
 	// The upper bound is enforced by the retriever's clamp to [1, MaxK], which
 	// is the one place that knows it.
 	k = args.K

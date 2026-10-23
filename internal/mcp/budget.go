@@ -5,12 +5,14 @@ import (
 	"strconv"
 )
 
-// defaultRequestK is how many hits memory_search asks the Backend for when
-// the caller doesn't specify k. It is deliberately larger than any single
-// response is expected to carry — the byte-budget packer below needs real
-// candidates to choose from — and stays at or under Phase 1's MaxK=100, which
-// the retrieval layer clamps to regardless.
-const defaultRequestK = 50
+// defaultRequestK is how many hits memory_search and knowledge_search ask the
+// Backend for when the caller doesn't specify k. 10 is what callers actually
+// ask for (50 of 52 sampled searches passed k, typically 5-10), and about what
+// the 6144-byte rendered budget holds of typical rows. The old 50 was sized to
+// give a fat-JSON packer candidates to choose from; with the budget measured on
+// rendered text, every extra candidate past what fits is fetched, ranked,
+// rendered and then cut — server work and an omission line for nothing.
+const defaultRequestK = 10
 
 // searchBudgetBytesEnv is the env var overriding the search response byte
 // budget; searchBudgetBytesDefault is its fallback.
