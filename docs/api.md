@@ -21,10 +21,10 @@ identity, never from client-supplied fields.
 | RPC | Purpose | Notes |
 |---|---|---|
 | `Ingest` | Durably append one episodic event; the append is the enqueue for async extraction. | `event_id` required (idempotency, D13); empty → `INVALID_ARGUMENT`. |
-| `Search` | One hybrid query (BM25 + kNN → RRF), tenancy-, validity- and filter-scoped. | Flat optional filters (`kind`, `subject`, `predicate`, `object`, `extractor_version`, `since`, `until`, `include_superseded`, `sources`) compile server-side into per-tier predicates; each reaches only the tier that declares its field. `include_superseded` relaxes the current-state filter only — never the ACL. `k` clamped server-side. |
+| `Search` | One hybrid query (BM25 + kNN → RRF), tenancy-, validity- and filter-scoped. | Flat optional filters (`kind`, `subject`, `predicate`, `object`, `extractor_version`, `since`, `until`, `include_superseded`, `sources`) compile server-side into per-tier predicates; each reaches only the tier that declares its field. `include_superseded` relaxes the current-state filter only — never the ACL. `k` clamped server-side. Graph expansions come back in a separate `expanded` list, only when `expand` is set or `sources` names `graph`. |
 | `Status` | Server health, resolved identity, coarse per-tier counts. | Backs `engram status` / `memory_status`. |
 | `Audit` | A fact's provenance + full bi-temporal version history. | Unauthorized/unknown id → `NOT_FOUND` (no existence oracle). |
-| `Read` | One record's full content by `(id, source)`. | `source` ∈ `episodic`\|`semantic`; `graph` → `UNIMPLEMENTED`. Fail-closed by id. |
+| `Read` | One record's full content by `(id, source)`. | `source` ∈ `episodic`\|`semantic`\|a knowledge collection; `graph` → `UNIMPLEMENTED`. A semantic id may be an 8–63 hex-char prefix (several matches → `INVALID_ARGUMENT`). Fail-closed by id. |
 | `Export` | One bounded page of the tenant's live, ACL-filtered graph (entities then edges) + opaque cursor. | Cursor carries no tenancy; empty `next_cursor` = exhausted. |
 
 ### Knowledge RPCs
@@ -101,24 +101,40 @@ MCP-only / harvester-only surfaces. `ingest --text` accepts optional pipe-delimi
 JSON-RPC 2.0 over stdio (protocol `2024-11-05`, server `engram-mcp` v0.1.0). Each tool
 maps 1:1 to a gRPC RPC via the shared client. Authenticated by `$ENGRAM_TOKEN`.
 
-> **`docs/mcp.md` is stale** — it documents 3 tools; the code exposes **10** (4 memory
-> + 6 knowledge).
-
 | Tool | Args | Returns | RPC |
 |---|---|---|---|
-| `memory_ingest` | `event_id`* `text`* `source` | `{id}` | Ingest |
-| `memory_search` | `query`* `k` `kind` `subject` `predicate` `object` `extractor_version` `since` `until` `include_superseded` `sources` | budget-packed ranked hits (spills oversized sets to `overflow_path`) | Search |
-| `memory_read` | `id`* `source`* (`episodic`\|`semantic`; `graph` rejected) | full record (episodic text; or fact + provenance + history) | Read |
-| `memory_status` | — | `{healthy, tenant/user/agent, episodic_count, semantic_count, opensearch_version}` | Status |
+| `memory_ingest` | `event_id`* `text`* `source` `scope` (`private` default \| `team` \| `org`) `team` (required with `team`) | `{id}` | Ingest |
+| `memory_search` | `query`* `k` (default 10) `kind` `subject` `predicate` `object` `extractor_version` `since` `until` `include_superseded` `sources` `expand` | text rows (below) | Search |
+| `memory_read` | `id`* (a search row's first column, as-is) `source` (only with a bare id) | full record as JSON: episodic text; fact + provenance + version history; or knowledge document | Read |
+| `memory_status` | — | `{healthy, tenant_id, user_id, agent_id, episodic_count, semantic_count, opensearch_version}` | Status |
 | `knowledge_ingest` | `collection`* `source`* `harvest_id`* `docs[]`* | `{indexed}` (harvester/admin) | KnowledgeIngest |
-| `knowledge_search` | `collection`* `query` `filters[]` `sort[]` `k` | budget-packed hits, spill to `overflow_path` | KnowledgeSearch |
+| `knowledge_search` | `collection`* `query` `filters[]` `sort[]` `k` (default 10) `offset` `full_body` | text rows; header `knowledge/<collection> (3 of 9)` when more match than are shown; a cut page names the `offset` that resumes it | KnowledgeSearch |
 | `knowledge_collections` | — | `{collections[]}` (mappings, count, staleness) | KnowledgeCollections |
 | `knowledge_delete` | `collection`* `source`* `current_harvest_id`* | `{deleted}` (harvester/admin) | KnowledgeDelete |
 | `knowledge_create_collection` | `name`* `text_field` `mappings` `public` `roles[]` | `{created}` (admin) | CreateCollection |
 | `knowledge_update_collection` | (same spec) | `{updated}` (admin) | UpdateCollection |
 
+**Search output.** `memory_search` and `knowledge_search` return one text block and no
+`structuredContent`: a header (`memory (N)`, or `knowledge/<collection> (N)`), then one row per hit,
+`<source>:<id>\t<date>\t<text>`, ranked by position (no score column). The id is
+self-addressing: hand it to `memory_read` unchanged. Semantic ids show their first 12
+hex chars; the server resolves the prefix. Episodic text is a 200-character lead
+snippet; semantic text is the whole statement; knowledge text is the matched fragments
+(`full_body: true` returns each document's body inline instead).
+
+`expand: true`, or naming `graph` in `sources`, appends a block headed
+`graph (N, reached from the hits above; not counted against k)` of bare statements. They
+carry no id or date because nothing can drill them: `memory_read` rejects `graph`. Any
+filter excludes the `experience` and `graph` sources.
+
+The rendered text is capped at `$ENGRAM_MCP_SEARCH_BUDGET_BYTES` (default 6144). Matched
+hits pack first, lowest-ranked cut first, at least one always kept; graph rows get only
+the space left. A cut page ends `... N more omitted for size; narrow the query`
+(`knowledge_search`: `page with offset=M`). Raising `k` cannot recover a cut, because
+those hits were already fetched.
+
 Tool-level failures return an `isError:true` result; protocol misuse returns a JSON-RPC
-error. Tuning env: `$ENGRAM_MCP_SEARCH_BUDGET_BYTES`, `$ENGRAM_MCP_SPILL_DIR`.
+error.
 
 ---
 
@@ -191,10 +207,10 @@ need a token).
 | Var | Used by | Meaning |
 |---|---|---|
 | `ENGRAM_TOKEN` | CLI, engram-mcp | Client bearer token |
-| `ENGRAM_ADDR` | CLI, harvester | gRPC address (default `localhost:7070`) |
+| `ENGRAM_ADDR` | CLI, engram-mcp (the harvester takes `--addr` only) | gRPC address (default `localhost:7070`; the local compose stack is `localhost:7071`) |
 | `ENGRAM_OPENSEARCH_URL` | CLI admin, server | OpenSearch base URL (default `http://localhost:9200`) |
 | `ENGRAM_HARVESTER_TOKEN` | harvester | Harvester's bearer token (required) |
-| `ENGRAM_MCP_SEARCH_BUDGET_BYTES`, `ENGRAM_MCP_SPILL_DIR` | engram-mcp | Search budget / overflow spill dir |
+| `ENGRAM_MCP_SEARCH_BUDGET_BYTES` | engram-mcp | Search response byte budget, measured on rendered text (default 6144) |
 | `ENGRAM_HALU_JUDGE_URL`, `ENGRAM_HALU_JUDGE_MODEL` | engram-eval | Hallucination judge |
 | `SHIM_BACKEND`, `SHIM_MODEL`, `SHIM_TIMEOUT` | engram-extract-shim | Backend agent CLI config |
 

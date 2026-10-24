@@ -63,6 +63,14 @@ type Server struct {
 	// ACL authorizes audit and export reads (Phase 4); nil skips the scope
 	// check.
 	ACL ReadAuthorizer
+	// ACLClause compiles the same policy as ACL into its query clause, for
+	// reads that must authorize INSIDE a search (semantic id-prefix
+	// resolution, readprefix.go). With ACL set and this nil, prefix reads are
+	// refused rather than run under the tenant pin alone.
+	ACLClause ReadClauseCompiler
+	// FactPrefix backs Read's semantic id-prefix resolution; nil disables
+	// prefixes (a full id still reads). See readprefix.go.
+	FactPrefix FactPrefixResolver
 	// Exporter backs the Export RPC (the Phase 1 graph scan); nil disables
 	// exporting (UNIMPLEMENTED). See export.go.
 	Exporter Exporter
@@ -152,7 +160,10 @@ func (s *Server) Search(ctx context.Context, req *engrampb.SearchRequest) (*engr
 	if err != nil {
 		return nil, err
 	}
-	q := retrieval.Query{Text: req.GetQuery(), K: int(req.GetK())}
+	// Graph expansion is opt-in on the wire (SearchRequest.expand, default
+	// false): the retriever skips the traversal entirely unless asked, so an
+	// unexpanded search pays neither its tokens nor its latency.
+	q := retrieval.Query{Text: req.GetQuery(), K: int(req.GetK()), Expand: req.GetExpand()}
 	f := retrieval.Filter{
 		TenantID: req.GetTenantId(),
 		UserID:   req.GetUserId(),

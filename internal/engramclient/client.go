@@ -170,6 +170,12 @@ func readResultFromProto(id string, resp *engrampb.ReadResponse) mcp.ReadResult 
 	}
 	if f := resp.GetFact(); f != nil {
 		out.Fields = factFields(f)
+		// A semantic read may arrive as an id PREFIX (search renders short
+		// semantic ids); the envelope reports the full id the server resolved
+		// it to, so a caller holding the result holds a complete address.
+		if full := f.GetId(); full != "" {
+			out.ID = full
+		}
 	}
 	if p := resp.GetProvenance(); p != nil {
 		out.Provenance = prune(map[string]any{
@@ -254,6 +260,7 @@ func (c *Client) Search(ctx context.Context, query string, k int, f mcp.SearchFi
 		ExtractorVersion:  f.ExtractorVersion,
 		IncludeSuperseded: f.IncludeSuperseded,
 		Sources:           f.Sources,
+		Expand:            f.Expand,
 	}
 	if !f.Since.IsZero() {
 		req.Since = timestamppb.New(f.Since)

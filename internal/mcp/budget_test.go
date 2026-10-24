@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -85,17 +84,15 @@ func searchViaWire(t *testing.T, backend Backend, args map[string]any) (text str
 	return text, parseCompactLines(t, text)
 }
 
-// omissionCounts/omissionFacets read the omission footer, which is the only
-// carrier of the budget signals now that search emits no structuredContent.
+// omissionCounts reads the omission line, which is the only carrier of the
+// budget signal now that search emits no structuredContent.
 var (
-	omissionCounts = regexp.MustCompile(`(\d+) more hit\(s\) omitted`)
-	omissionFacets = regexp.MustCompile(`(\w+)="([^"]*)"`)
+	omissionCounts = regexp.MustCompile(`^\.\.\. (\d+) more omitted for size`)
 	blockHeaderRE  = regexp.MustCompile(`^\S+ \((\d+)(?: of (\d+))?\)$`)
 )
 
 // parseCompactLines projects the compact-line block back into the field names
-// these tests already assert on (hits/omitted/omitted_facets/hint/
-// overflow_path). It parses the TEXT deliberately: the text block is now the
+// these tests already assert on (hits/omitted/hint/expanded). It parses the TEXT deliberately: the text block is now the
 // entire response contract, so a test that read a structured copy would be
 // testing something the caller never sees.
 func parseCompactLines(t *testing.T, text string) map[string]any {
@@ -121,26 +118,10 @@ func parseCompactLines(t *testing.T, text string) map[string]any {
 				out["expanded_omitted"] = float64(n)
 			}
 		case strings.HasPrefix(line, "... "):
-			hint := strings.TrimPrefix(line, "... ")
-			if hint, path, found := strings.Cut(hint, " overflow_path="); found {
-				out["overflow_path"] = path
-				out["hint"] = hint
-			} else {
-				out["hint"] = hint
-			}
+			out["hint"] = strings.TrimPrefix(line, "... ")
 			if m := omissionCounts.FindStringSubmatch(line); m != nil {
 				n, _ := strconv.Atoi(m[1])
 				out["omitted"] = float64(n)
-			}
-			if open, rest, found := strings.Cut(line, "(top omitted "); found {
-				_ = open
-				facets := map[string]any{}
-				for _, kv := range omissionFacets.FindAllStringSubmatch(rest, -1) {
-					facets[kv[1]] = kv[2]
-				}
-				if len(facets) > 0 {
-					out["omitted_facets"] = facets
-				}
 			}
 		case inExpanded:
 			expanded = append(expanded, line)
@@ -156,8 +137,8 @@ func parseCompactLines(t *testing.T, text string) map[string]any {
 }
 
 // TestDW_2_1_DefaultSearchFitsBudget: a default memory_search (no explicit k)
-// returns a response whose FULL serialized size (hits + envelope) is <= the
-// configured byte budget.
+// returns a response whose text — the whole tool response, header and
+// omission line included — is <= the configured byte budget.
 func TestDW_2_1_DefaultSearchFitsBudget(t *testing.T) {
 	hits := make([]Hit, 0, defaultRequestK+10)
 	for i := 0; i < defaultRequestK+10; i++ {
@@ -165,13 +146,64 @@ func TestDW_2_1_DefaultSearchFitsBudget(t *testing.T) {
 	}
 	text, _ := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "anything"})
 	if got, want := len(text), searchByteBudget(); got > want {
-		t.Errorf("serialized size = %d bytes, want <= %d", got, want)
+		t.Errorf("rendered size = %d bytes, want <= %d", got, want)
 	}
 }
 
-// TestDW_2_2_OmissionFieldsPresentOnlyWhenOmitted: over-budget carries
-// omitted>0 + non-empty omitted_facets + a hint; all-fit carries none of
-// those (absent, due to omitempty, or zero).
+// TestBudgetMeasuresRenderedTextNotTheFatRecord is the regression for the
+// budget measuring the wrong thing: the packer used to marshal each Hit whole,
+// fields_json and all, so records whose JSON dwarfs their one-line rendering
+// were cut ("omitted") from a page whose shipped text was a fraction of the
+// budget. Here every hit carries a large field the render never shows: the
+// fat JSON is several times the budget, the rendered text is well under it,
+// and every hit must survive.
+func TestBudgetMeasuresRenderedTextNotTheFatRecord(t *testing.T) {
+	const budget = 2048
+	t.Setenv(searchBudgetBytesEnv, fmt.Sprint(budget))
+
+	hits := make([]Hit, 0, 8)
+	for i := 0; i < 8; i++ {
+		fields, _ := json.Marshal(map[string]any{
+			"statement":  fmt.Sprintf("fact %d", i),
+			"valid_at":   "2026-01-01T00:00:00Z",
+			"provenance": strings.Repeat("p", 1000), // never rendered
+		})
+		hits = append(hits, Hit{ID: fmt.Sprintf("f%d", i), Source: "semantic", Fields: string(fields)})
+	}
+	fat, _ := json.Marshal(hits)
+	if len(fat) <= budget {
+		t.Fatalf("setup: fat JSON is %d bytes, must exceed the %d budget for this test to mean anything", len(fat), budget)
+	}
+
+	text, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
+	if _, ok := decoded["omitted"]; ok {
+		t.Errorf("hits omitted although the rendered text (%d bytes) fits the %d-byte budget:\n%s", len(text), budget, text)
+	}
+	if got := len(decoded["hits"].([]any)); got != len(hits) {
+		t.Errorf("hits = %d, want all %d", got, len(hits))
+	}
+}
+
+// TestPackedTextFitsBudgetAtEveryCut: wherever the budget lands, the text the
+// tool returns — omission line included — is within it whenever more than the
+// one-hit floor survives. Sweeping the budget across a whole page catches an
+// omission line or header that the fit check failed to count.
+func TestPackedTextFitsBudgetAtEveryCut(t *testing.T) {
+	res := SearchResult{Hits: manyHits(12)}
+	full := renderedLen(res)
+	for budget := 1; budget <= full+10; budget++ {
+		packed := packRendered(renderSearchResult(res), budget)
+		if got := len(compactLines(packed)); len(packed.Hits) > 1 && got > budget {
+			t.Fatalf("budget %d: rendered %d bytes with %d hits kept", budget, got, len(packed.Hits))
+		}
+		if len(packed.Hits)+packed.Omitted != len(res.Hits) {
+			t.Fatalf("budget %d: kept %d + omitted %d != %d", budget, len(packed.Hits), packed.Omitted, len(res.Hits))
+		}
+	}
+}
+
+// TestDW_2_2_OmissionFieldsPresentOnlyWhenOmitted: over-budget carries an
+// omission line (count + instruction); all-fit carries none.
 func TestDW_2_2_OmissionFieldsPresentOnlyWhenOmitted(t *testing.T) {
 	hits := []Hit{
 		semanticHit("h1", "alice", "knows", "bob", 50),
@@ -183,9 +215,6 @@ func TestDW_2_2_OmissionFieldsPresentOnlyWhenOmitted(t *testing.T) {
 		_, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
 		if _, ok := decoded["omitted"]; ok {
 			t.Errorf("omitted present when all hits fit: %v", decoded)
-		}
-		if _, ok := decoded["omitted_facets"]; ok {
-			t.Errorf("omitted_facets present when all hits fit: %v", decoded)
 		}
 		if _, ok := decoded["hint"]; ok {
 			t.Errorf("hint present when all hits fit: %v", decoded)
@@ -203,18 +232,14 @@ func TestDW_2_2_OmissionFieldsPresentOnlyWhenOmitted(t *testing.T) {
 		if omitted <= 0 {
 			t.Fatalf("omitted = %v, want > 0", decoded["omitted"])
 		}
-		facets, _ := decoded["omitted_facets"].(map[string]any)
-		if len(facets) == 0 {
-			t.Errorf("omitted_facets empty, want non-empty: %v", decoded)
-		}
-		if hint, _ := decoded["hint"].(string); hint == "" {
-			t.Errorf("hint empty, want non-empty: %v", decoded)
+		if hint, _ := decoded["hint"].(string); !strings.HasSuffix(hint, "; narrow the query") {
+			t.Errorf("hint = %q, want the narrow-the-query instruction", hint)
 		}
 	})
 }
 
 // TestDW_2_3_SearchByteBudgetFromEnv: the byte budget is configurable via
-// ENGRAM_MCP_SEARCH_BUDGET_BYTES, defaulting to 16384; unset or invalid
+// ENGRAM_MCP_SEARCH_BUDGET_BYTES, defaulting to 6144; unset or invalid
 // values fall back to the default (dirty cases).
 func TestDW_2_3_SearchByteBudgetFromEnv(t *testing.T) {
 	tests := []struct {
@@ -222,7 +247,7 @@ func TestDW_2_3_SearchByteBudgetFromEnv(t *testing.T) {
 		val  string // "" means unset
 		want int
 	}{
-		{"unset", "", searchBudgetBytesDefault},
+		{"unset", "", 6144},
 		{"valid override", "8000", 8000},
 		{"minimal valid", "1", 1},
 		{"zero (dirty)", "0", searchBudgetBytesDefault},
@@ -246,7 +271,7 @@ func TestDW_2_4_SingleOverBudgetHitStillEmitted(t *testing.T) {
 	huge := semanticHit("h1", "s", "p", "o", 5000)
 
 	t.Run("only one hit, alone over budget", func(t *testing.T) {
-		result := packSearchResult([]Hit{huge}, 1, memoryFacetFields)
+		result := packRendered(renderSearchResult(SearchResult{Hits: []Hit{huge}}), 1)
 		if len(result.Hits) != 1 {
 			t.Fatalf("Hits = %d, want 1 (never empty when hits exist)", len(result.Hits))
 		}
@@ -257,8 +282,8 @@ func TestDW_2_4_SingleOverBudgetHitStillEmitted(t *testing.T) {
 
 	t.Run("huge first hit forces the rest into omitted", func(t *testing.T) {
 		small := semanticHit("h2", "s2", "p2", "o2", 5)
-		result := packSearchResult([]Hit{huge, small}, 10, memoryFacetFields)
-		if len(result.Hits) != 1 || result.Hits[0].ID != "h1" {
+		result := packRendered(renderSearchResult(SearchResult{Hits: []Hit{huge, small}}), 10)
+		if len(result.Hits) != 1 || result.Hits[0].ID != "semantic:h1" {
 			t.Fatalf("Hits = %+v, want exactly [h1]", result.Hits)
 		}
 		if result.Omitted != 1 {
@@ -267,298 +292,58 @@ func TestDW_2_4_SingleOverBudgetHitStillEmitted(t *testing.T) {
 	})
 }
 
-// TestDW_2_1_OverflowPathHeadroomKeepsFinalResponseInBudget is the
-// regression for the defect where overflow_path escaped budget accounting:
-// packSearchResult/searchResultFits used to measure only hits+envelope, so
-// whenever the packing slack was smaller than the serialized overflow_path
-// field (spill dir + the fixed temp-filename pattern), the FINAL response —
-// after tools.go attached the real overflow_path — exceeded the budget
-// despite packSearchResult reporting it fit. Both budgets below force
-// omission (and therefore a spill + overflow_path); each asserts the exact
-// bytes a client receives (measured via searchViaWire, matching
-// TestDW_2_1_DefaultSearchFitsBudget's method) stay within budget.
-func TestDW_2_1_OverflowPathHeadroomKeepsFinalResponseInBudget(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv(spillDirEnv, dir)
-	hits := manyHits(30)
-
-	t.Run("small budget (documented reproduction case)", func(t *testing.T) {
-		budget := 2048
-		t.Setenv(searchBudgetBytesEnv, fmt.Sprintf("%d", budget))
-
-		text, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
-
-		omitted, _ := decoded["omitted"].(float64)
-		if omitted <= 0 {
-			t.Fatalf("omitted = %v, want > 0 (test setup should force overflow): %s", decoded["omitted"], text)
-		}
-		if _, ok := decoded["overflow_path"]; !ok {
-			t.Fatalf("overflow_path absent despite omission: %s", text)
-		}
-		if got := len(text); got > budget {
-			t.Errorf("final serialized response (incl. overflow_path) = %d bytes, want <= %d budget: %s", got, budget, text)
-		}
-	})
-
-	t.Run("budget near a single packed hit's size", func(t *testing.T) {
-		// The tightest budget at which the fix's headroom reservation still
-		// guarantees a fit: one hit's own envelope plus the worst-case
-		// overflow_path field length (maxSpillPath, an upper bound the real,
-		// equal-or-shorter path can never exceed), plus a small margin. This
-		// is the boundary where, pre-fix, the packer could keep enough hits
-		// to look like it fit without overflow_path, only for the real
-		// overflow_path to push the emitted response over budget.
-		oneHitCandidate := buildSearchResult(hits[:1], hits[1:], memoryFacetFields)
-		oneHitCandidate.OverflowPath = maxSpillPath()
-		worstCaseOneHit, err := json.Marshal(oneHitCandidate)
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		budget := len(worstCaseOneHit) + 20
-		t.Setenv(searchBudgetBytesEnv, fmt.Sprintf("%d", budget))
-
-		text, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
-
-		omitted, _ := decoded["omitted"].(float64)
-		if omitted <= 0 {
-			t.Fatalf("omitted = %v, want > 0 (test setup should force overflow): %s", decoded["omitted"], text)
-		}
-		if _, ok := decoded["overflow_path"]; !ok {
-			t.Fatalf("overflow_path absent despite omission: %s", text)
-		}
-		if got := len(text); got > budget {
-			t.Errorf("final serialized response (incl. overflow_path) = %d bytes, want <= %d budget: %s", got, budget, text)
-		}
-	})
-}
-
-// TestDW_2_4_SingleHitFloorHoldsWithOverflowHeadroom: DW-2.4's one-hit floor
-// stays unconditional even once overflow_path headroom is reserved — a
-// budget that fits one oversized hit ALONE but not that hit plus the
-// reserved headroom must still emit exactly the one hit (never zero),
-// because the floor is unconditional and budget is best-effort below it.
-func TestDW_2_4_SingleHitFloorHoldsWithOverflowHeadroom(t *testing.T) {
-	huge := semanticHit("h1", "s", "p", "o", 5000)
-	small := semanticHit("h2", "s2", "p2", "o2", 5)
-
-	aloneNoHeadroom, err := json.Marshal(buildSearchResult([]Hit{huge}, nil, memoryFacetFields))
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	// Fits the huge hit by itself with no headroom reserved, but not once
-	// headroom for overflow_path is added — the exact squeeze DW-2.4 must
-	// survive.
-	budget := len(aloneNoHeadroom) + 10
-
-	result := packSearchResult([]Hit{huge, small}, budget, memoryFacetFields)
-	if len(result.Hits) != 1 || result.Hits[0].ID != "h1" {
-		t.Fatalf("Hits = %+v, want exactly [h1] (one-hit floor unconditional)", result.Hits)
-	}
-	if result.Omitted != 1 {
-		t.Errorf("Omitted = %d, want 1", result.Omitted)
-	}
-}
-
-// TestDW_2_5_TopFacetsStableOnTies: facet counts are computed over the
-// omitted set, and ties are broken deterministically by first-encountered
-// order — not by Go's randomized map iteration.
-func TestDW_2_5_TopFacetsStableOnTies(t *testing.T) {
-	aFirst := []Hit{
-		semanticHit("1", "alice", "p", "o", 1),
-		semanticHit("2", "bob", "p", "o", 1),
-	}
-	bFirst := []Hit{
-		semanticHit("1", "bob", "p", "o", 1),
-		semanticHit("2", "alice", "p", "o", 1),
-	}
-
-	for i := 0; i < 5; i++ { // repeat: catch accidental dependence on map iteration order
-		if got := topFacets(aFirst, memoryFacetFields)["subject"]; got != "alice" {
-			t.Fatalf("run %d: topFacets(aFirst, memoryFacetFields)[subject] = %q, want %q (first-encountered tie-break)", i, got, "alice")
-		}
-		if got := topFacets(bFirst, memoryFacetFields)["subject"]; got != "bob" {
-			t.Fatalf("run %d: topFacets(bFirst, memoryFacetFields)[subject] = %q, want %q (first-encountered tie-break)", i, got, "bob")
-		}
-	}
-}
-
-// TestTopFacetsSkipsMalformedOrMissingFields: a hit with unparseable or
-// wrong-typed Fields contributes no facets and never panics (external-input
-// defense, matching Phase 1's "tolerate a missing field" precedent).
-func TestTopFacetsSkipsMalformedOrMissingFields(t *testing.T) {
-	hits := []Hit{
-		{ID: "bad-json", Fields: "not json"},
-		{ID: "wrong-type", Fields: `{"subject": 42}`},
-		{ID: "no-fields", Fields: ""},
-		semanticHit("good", "alice", "knows", "bob", 1),
-	}
-	facets := topFacets(hits, memoryFacetFields) // must not panic
-	if facets["subject"] != "alice" {
-		t.Errorf("subject facet = %q, want %q (only the well-formed hit counts)", facets["subject"], "alice")
-	}
-}
-
-// TestPackSearchResultZeroHits: a zero-hit result produces an empty,
-// non-nil page — not a panic, not a null hits array (DW-2.1's zero-hit edge
-// case; the packing loop must test at the beginning).
-func TestPackSearchResultZeroHits(t *testing.T) {
-	result := packSearchResult[Hit](nil, searchBudgetBytesDefault, memoryFacetFields)
-	if result.Hits == nil {
-		t.Error("Hits is nil, want a non-nil empty slice (marshals to [] not null)")
-	}
-	if len(result.Hits) != 0 {
-		t.Errorf("Hits = %d, want 0", len(result.Hits))
+// TestPackRenderedZeroHits: a zero-hit result produces an empty page that
+// still renders its header — not a panic, and not a cut (DW-2.1's zero-hit
+// edge case; the packing loop must test at the beginning).
+func TestPackRenderedZeroHits(t *testing.T) {
+	result := packRendered(renderSearchResult(SearchResult{}), searchBudgetBytesDefault)
+	if result.Hits == nil || len(result.Hits) != 0 {
+		t.Errorf("Hits = %#v, want a non-nil empty slice", result.Hits)
 	}
 	if result.Omitted != 0 {
 		t.Errorf("Omitted = %d, want 0", result.Omitted)
 	}
-	b, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(b, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if hits, ok := decoded["hits"].([]any); !ok || len(hits) != 0 {
-		t.Errorf("decoded hits = %v, want an empty array", decoded["hits"])
+	if got := compactLines(result); got != "memory (0)" {
+		t.Errorf("compactLines = %q, want just the header", got)
 	}
 }
 
-// TestRefineHintDeterministicFieldOrder: the hint text lists facets in a
-// fixed field order regardless of map iteration, so repeated calls with the
-// same facets produce byte-identical hints.
-func TestRefineHintDeterministicFieldOrder(t *testing.T) {
-	facets := map[string]string{"kind": "note", "subject": "alice", "predicate": "knows"}
-	first := refineHint(3, facets, memoryFacetFields, true)
-	for i := 0; i < 5; i++ {
-		if got := refineHint(3, facets, memoryFacetFields, true); got != first {
-			t.Fatalf("refineHint not deterministic: %q vs %q", got, first)
-		}
+// TestOmissionLineIsACountAndOneTrueInstruction pins the omission line's
+// exact wording. It carries no overflow_path and no facet summary — neither
+// was ever acted on — and its instruction must be one that actually surfaces
+// the cut hits: memory_search can only be narrowed (raising k would just grow
+// the cut), while a paged source names the offset that resumes this page.
+func TestOmissionLineIsACountAndOneTrueInstruction(t *testing.T) {
+	shown := []renderedHit{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	tests := []struct {
+		name string
+		r    renderedResult
+		want string
+	}{
+		{"memory", renderedResult{Hits: shown, Omitted: 7}, "... 7 more omitted for size; narrow the query"},
+		{"paged first page", renderedResult{Hits: shown, Omitted: 7, Paged: true}, "... 7 more omitted for size; page with offset=3"},
+		{"paged later page", renderedResult{Hits: shown, Omitted: 2, Paged: true, Offset: 10}, "... 2 more omitted for size; page with offset=13"},
 	}
-	if !strings.Contains(first, "subject=") || !strings.Contains(first, "predicate=") || !strings.Contains(first, "kind=") {
-		t.Errorf("hint missing a facet field: %q", first)
-	}
-}
-
-// TestRefineHintOverflowPathGating: refineHint mentions overflow_path only
-// when told it is actually set, and always names memory_read as the
-// single-hit drill regardless (DW-3.1/3.2/3.3 at the unit level).
-func TestRefineHintOverflowPathGating(t *testing.T) {
-	facets := map[string]string{"subject": "alice"}
-
-	withPath := refineHint(2, facets, memoryFacetFields, true)
-	if !strings.Contains(withPath, "overflow_path") {
-		t.Errorf("refineHint(overflowPathSet=true) = %q, want an overflow_path mention", withPath)
-	}
-
-	withoutPath := refineHint(2, facets, memoryFacetFields, false)
-	if strings.Contains(withoutPath, "overflow_path") {
-		t.Errorf("refineHint(overflowPathSet=false) = %q, want no overflow_path mention", withoutPath)
-	}
-
-	for _, hint := range []string{withPath, withoutPath} {
-		if !strings.Contains(hint, "memory_read") {
-			t.Errorf("hint = %q, want a memory_read mention regardless of overflow_path state", hint)
-		}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := omissionLine(tc.r); got != tc.want {
+				t.Errorf("omissionLine = %q, want %q", got, tc.want)
+			}
+			if got := compactLines(tc.r); !strings.HasSuffix(got, "\n"+tc.want) {
+				t.Errorf("compactLines does not end with the omission line:\n%s", got)
+			}
+		})
 	}
 }
 
-// TestRefineHintNoFacets: refineHint produces a well-formed hint (no
-// dangling "(top omitted )" parenthetical) when there are no facets to show
-// — an edge case the omitted-facets loop must handle cleanly.
-func TestRefineHintNoFacets(t *testing.T) {
-	hint := refineHint(1, nil, memoryFacetFields, false)
-	if strings.Contains(hint, "(top omitted") {
-		t.Errorf("hint = %q, want no facet parenthetical when facets are empty", hint)
+// manyHits builds n semantic hits, each padded so the full set overflows a
+// small byte budget deterministically.
+func manyHits(n int) []Hit {
+	hits := make([]Hit, 0, n)
+	for i := 0; i < n; i++ {
+		hits = append(hits, semanticHit("h"+string(rune('a'+i)), "s", "p", "o", 50))
 	}
-	if !strings.Contains(hint, "1 more hit(s) omitted") {
-		t.Errorf("hint = %q, want the omitted count", hint)
-	}
-}
-
-// TestDW_3_1_HintNamesOverflowPathWhenSet: when hits are omitted and the
-// spill succeeds, the hint names overflow_path as the full-set source.
-func TestDW_3_1_HintNamesOverflowPathWhenSet(t *testing.T) {
-	t.Setenv(spillDirEnv, t.TempDir())
-	t.Setenv(searchBudgetBytesEnv, "200")
-	hits := manyHits(5)
-
-	_, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
-
-	omitted, _ := decoded["omitted"].(float64)
-	if omitted <= 0 {
-		t.Fatalf("omitted = %v, want > 0 (test setup should force omission)", decoded["omitted"])
-	}
-	if _, ok := decoded["overflow_path"]; !ok {
-		t.Fatalf("overflow_path absent, want set (spill dir is writable): %v", decoded)
-	}
-	hint, _ := decoded["hint"].(string)
-	if !strings.Contains(hint, "overflow_path") {
-		t.Errorf("hint = %q, want it to name overflow_path as the full-set source", hint)
-	}
-}
-
-// TestDW_3_2_HintOmitsOverflowPathWhenNotSet: the hint never references
-// overflow_path when it is not actually present in the response — neither
-// when nothing was omitted, nor when omission happened but the spill write
-// itself failed (the existing graceful-degradation path).
-func TestDW_3_2_HintOmitsOverflowPathWhenNotSet(t *testing.T) {
-	t.Run("all fit: hint absent entirely", func(t *testing.T) {
-		hits := []Hit{semanticHit("h1", "s", "p", "o", 5)}
-		_, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
-		if _, ok := decoded["overflow_path"]; ok {
-			t.Fatalf("overflow_path present when all hits fit: %v", decoded)
-		}
-		if hint, ok := decoded["hint"]; ok {
-			t.Errorf("hint = %v, want absent (omitempty) when nothing was omitted", hint)
-		}
-	})
-
-	t.Run("spill write failed: hint present but no overflow_path mention", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := os.Chmod(dir, 0o500); err != nil { // read+execute, no write
-			t.Fatalf("chmod: %v", err)
-		}
-		t.Cleanup(func() { os.Chmod(dir, 0o700) }) // let t.TempDir's own cleanup remove it
-		t.Setenv(spillDirEnv, dir)
-		t.Setenv(searchBudgetBytesEnv, "200")
-
-		hits := manyHits(5)
-		_, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
-
-		omitted, _ := decoded["omitted"].(float64)
-		if omitted <= 0 {
-			t.Fatalf("omitted = %v, want > 0 (test setup should force omission)", decoded["omitted"])
-		}
-		if _, ok := decoded["overflow_path"]; ok {
-			t.Fatalf("overflow_path present despite an unwritable spill dir: %v", decoded)
-		}
-		hint, _ := decoded["hint"].(string)
-		if hint == "" {
-			t.Fatalf("hint empty, want a non-empty hint even without overflow_path")
-		}
-		if strings.Contains(hint, "overflow_path") {
-			t.Errorf("hint = %q, dangles a promise: overflow_path was never written", hint)
-		}
-	})
-}
-
-// TestDW_3_3_HintNamesMemoryReadDrill: whenever hits are omitted, the hint
-// names memory_read as the sanctioned single-hit drill, regardless of
-// whether overflow_path ended up set — steering the caller away from
-// inventing its own path (the motivating incident).
-func TestDW_3_3_HintNamesMemoryReadDrill(t *testing.T) {
-	t.Setenv(spillDirEnv, t.TempDir())
-	t.Setenv(searchBudgetBytesEnv, "200")
-	hits := manyHits(5)
-
-	_, decoded := searchViaWire(t, &fixedHitsBackend{hits: hits}, map[string]any{"query": "q"})
-
-	hint, _ := decoded["hint"].(string)
-	if !strings.Contains(hint, "memory_read") {
-		t.Errorf("hint = %q, want it to name memory_read as the single-hit drill", hint)
-	}
+	return hits
 }
 
 // TestCallSearchDefaultKUsesDefaultRequestK: memory_search with no k arg
@@ -570,6 +355,22 @@ func TestCallSearchDefaultKUsesDefaultRequestK(t *testing.T) {
 	_, _ = searchViaWireIgnoringHits(t, backend, map[string]any{"query": "q"})
 	if gotK != defaultRequestK {
 		t.Errorf("requested k = %d, want defaultRequestK = %d", gotK, defaultRequestK)
+	}
+}
+
+// TestDefaultKIsTenForBothSearchTools pins the unset-k default at 10 — what
+// callers actually ask for — and proves knowledge_search shares it rather than
+// drifting to its own number.
+func TestDefaultKIsTenForBothSearchTools(t *testing.T) {
+	if defaultRequestK != 10 {
+		t.Errorf("defaultRequestK = %d, want 10", defaultRequestK)
+	}
+	b := &knowledgeFake{}
+	c := startServer(t, b)
+	c.call("initialize", nil)
+	callTool(t, c, ToolKnowledgeSearch, map[string]any{"collection": "papers", "query": "q"})
+	if b.lastSearch.k != defaultRequestK {
+		t.Errorf("knowledge_search requested k = %d, want defaultRequestK = %d", b.lastSearch.k, defaultRequestK)
 	}
 }
 

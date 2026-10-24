@@ -208,7 +208,7 @@ func TestDW_6_2_Integration_TwoHopConnectTheDots(t *testing.T) {
 	retriever.RegisterTier("seed", &seedTier{hits: []retrieval.Hit{semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}})
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
-	hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", K: 10}, retrieval.Filter{Identity: caller})
+	hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", Expand: true, K: 10}, retrieval.Filter{Identity: caller})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestDW_2_2_Integration_NameKeyedDedup_TwoHopThroughRealStage(t *testing.T) 
 	retriever.RegisterTier("seed", &seedTier{hits: []retrieval.Hit{semanticHit("fact-ab", "t1", "private", "a1", "", "A", "B")}})
 
 	caller := auth.Identity{TenantID: "t1", UserID: "u1", AgentID: "a1"}
-	hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", K: 10}, retrieval.Filter{Identity: caller})
+	hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", Expand: true, K: 10}, retrieval.Filter{Identity: caller})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestDW_6_5_Integration_ExpansionLatencyP95(t *testing.T) {
 	var totalHop2 int
 	for i := 0; i < runs; i++ {
 		start := time.Now()
-		hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", K: 50}, retrieval.Filter{Identity: caller})
+		hits, err := retriever.Search(ctx, retrieval.Query{Text: "q", Expand: true, K: 50}, retrieval.Filter{Identity: caller})
 		d := time.Since(start)
 		if err != nil {
 			t.Fatalf("run %d: Search: %v", i, err)

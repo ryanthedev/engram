@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"slices"
 	"strings"
 )
 
@@ -48,50 +48,54 @@ func toolSchemas() []toolSchema {
 	return []toolSchema{
 		{
 			Name:        ToolIngest,
-			Description: "Append one event to Engram episodic memory. Extraction and reconciliation happen asynchronously; returns the durable episodic id.",
+			Description: "Append one event to Engram episodic memory; facts are extracted from it asynchronously. Returns the episodic id.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"event_id": strProp("Client-supplied idempotency id (required)."),
-					"text":     strProp("Raw event text to remember (required)."),
-					"source":   strProp("Optional source identifier for provenance."),
+					"event_id": strProp("Idempotency id (required)."),
+					"text":     strProp("Event text to remember (required)."),
+					"source":   strProp("Provenance label."),
 					"scope": map[string]any{
 						"type":        "string",
 						"enum":        []any{"private", "team", "org"},
 						"description": "Who may read it: private (default, this agent only), team (members of `team`), or org (every agent of this user, across machines).",
 					},
-					"team": strProp("Team id; required when scope is team, rejected otherwise."),
+					"team": strProp("Team id; only with scope team, where it is required."),
 				},
 				"required": []any{"event_id", "text"},
 			},
 		},
 		{
 			Name: ToolSearch,
-			// Every byte of this description is a per-call token cost on the
-			// caller's context: it says what a caller cannot infer from the
-			// parameter names (which filter narrows which tier, and what the
-			// defaults are) and nothing else.
-			Description: "Hybrid (BM25 + vector) search over Engram memory. Returns fused, ranked hits. All filters are optional; each narrows only the tier that owns it (kind: episodic; subject/predicate/object/extractor_version: semantic) and leaves the other tier unnarrowed.",
+			// Every byte of this schema is paid each time a client loads it: the
+			// description says what a caller cannot infer from the parameter
+			// names (which filter narrows which tier, that graph neighbors are
+			// opt-in) and nothing else. Defaults live on each parameter.
+			Description: "Hybrid (BM25 + vector) search over Engram memory; ranked hits. Filters are optional and each narrows only its own tier (kind: episodic; subject/predicate/object/extractor_version: semantic). Graph neighbors of the hits are opt-in via expand.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query":             strProp("Natural-language query (required)."),
-					"k":                 map[string]any{"type": "integer", "description": "Max hits to return (default server-chosen)."},
-					"kind":              strProp("Episodic event kind, exact match (e.g. conversation, tool_result)."),
-					"subject":           strProp("Semantic fact subject, exact match."),
-					"predicate":         strProp("Semantic fact predicate, exact match."),
-					"object":            strProp("Semantic fact object, exact match."),
-					"extractor_version": strProp("Semantic extractor version, exact match."),
+					"k":                 map[string]any{"type": "integer", "description": fmt.Sprintf("Max hits to return (default %d).", defaultRequestK)},
+					"kind":              strProp("Episodic event kind, exact (e.g. conversation, tool_result)."),
+					"subject":           strProp("Fact subject, exact."),
+					"predicate":         strProp("Fact predicate, exact."),
+					"object":            strProp("Fact object, exact."),
+					"extractor_version": strProp("Fact extractor version, exact."),
 					"since":             strProp("Earliest event time, RFC 3339 (episodic occurred_at, semantic valid_at)."),
 					"until":             strProp("Latest event time, RFC 3339."),
 					"include_superseded": map[string]any{
 						"type":        "boolean",
-						"description": "Include superseded/retracted historical facts (default false: current facts only).",
+						"description": "Include superseded/retracted facts (default false).",
 					},
 					"sources": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"description": "Limit to these sources: " + strings.Join(memorySources, ", ") + " (default all). experience and graph cannot be filtered, so any filter above excludes them.",
+						"description": "Limit to these sources: " + strings.Join(memorySources, ", ") + " (default all). Any filter excludes experience and graph.",
+					},
+					"expand": map[string]any{
+						"type":        "boolean",
+						"description": "Add graph neighbors of the hits, not counted against k (default false).",
 					},
 				},
 				"required": []any{"query"},
@@ -99,19 +103,19 @@ func toolSchemas() []toolSchema {
 		},
 		{
 			Name:        ToolRead,
-			Description: "Read ONE record's full content by the id and source a search result exposes. Episodic returns the full untruncated text; semantic returns the fact plus its provenance and version history; a knowledge collection returns the full stored document a knowledge_search fragment came from. Spends your context on the whole record — drill deliberately.",
+			Description: "Read one search hit's full record: episodic's untruncated text; a semantic fact with provenance and version history; a knowledge collection's whole document. Costs context; drill deliberately.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":     strProp("Record id exactly as shown in a search result (required)."),
-					"source": strProp(`Where the id lives: "episodic", "semantic", or a knowledge collection name from a knowledge_search hit (required; "graph" has no drill-down).`),
+					"id":     strProp(`A search row's first column, e.g. "episodic:<id>" (required).`),
+					"source": strProp("Only for a bare id: episodic, semantic, or a knowledge collection."),
 				},
-				"required": []any{"id", "source"},
+				"required": []any{"id"},
 			},
 		},
 		{
 			Name:        ToolStatus,
-			Description: "Report Engram server health, the caller's identity, and per-tier document counts.",
+			Description: "Engram server health, the caller's identity, and per-tier document counts.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -161,7 +165,7 @@ func knowledgeToolSchemas() []toolSchema {
 		},
 		{
 			Name:        ToolKnowledgeSearch,
-			Description: "BM25 search over one knowledge collection with generic field filters and sort. Each hit carries extracted text fragments instead of the document body; drill the full document with memory_read(id, <collection>). An empty query (filter-only) matches no terms, so its hits carry scalar fields only — no fragments and no body. Returns budget-packed ranked hits plus the exact total match count; page with offset to drain past k. Oversized result sets spill to overflow_path.",
+			Description: "BM25 search over one knowledge collection with generic field filters and sort. Each hit carries extracted text fragments instead of the document body; drill the full document with memory_read(id, <collection>). An empty query (filter-only) matches no terms, so its hits carry scalar fields only — no fragments and no body. Returns budget-packed ranked hits plus the exact total match count; page with offset to drain past k.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -181,7 +185,7 @@ func knowledgeToolSchemas() []toolSchema {
 						"description": "Sort keys: {field, order: asc|desc} over declared sortable fields.",
 						"items":       map[string]any{"type": "object"},
 					},
-					"k": map[string]any{"type": "integer", "description": "Max hits to return (default server-chosen)."},
+					"k": map[string]any{"type": "integer", "description": fmt.Sprintf("Max hits to return (default %d).", defaultRequestK)},
 					"offset": map[string]any{
 						"type":        "integer",
 						"description": "Skip this many ranked hits before returning k (paging; default 0, first page). The response's total is the exact match count.",
@@ -232,7 +236,7 @@ func knowledgeToolSchemas() []toolSchema {
 	}
 }
 
-// handleToolsList returns the advertised tool schemas: the three memory tools
+// handleToolsList returns the advertised tool schemas: the four memory tools
 // followed by the six knowledge tools.
 func (s *Server) handleToolsList() (any, *rpcError) {
 	return map[string]any{"tools": append(toolSchemas(), knowledgeToolSchemas()...)}, nil
@@ -338,45 +342,24 @@ func (s *Server) callSearch(ctx context.Context, raw json.RawMessage) (any, *rpc
 	if err != nil {
 		return toolError(fmt.Sprintf("search failed: %v", err)), nil
 	}
-	// Matched hits are packed (and spilled) FIRST, against the whole budget and
-	// exactly as they were before expansions had a block of their own; only then
-	// do graph expansions get appended into whatever budget is left (DW-6.4).
-	// So an expansion can never evict a match, and is the first thing dropped
-	// under pressure. Zero expansions leaves the block absent entirely (DW-6.3).
-	//
-	// memory_search renders the budget-packed result as compact lines: the
-	// text block is the compact-line form the agent reads; structuredContent
-	// carries the rendered envelope. (knowledge_search returns extracted
-	// fragments rather than the full body; the suppressed body is reachable
-	// via memory_read(id, <collection>) — see the knowledge drill-down.)
-	result := packAndSpill(res.Hits, memoryFacetFields, ToolSearch)
-	result = packExpanded(result, res.Expanded, searchByteBudget())
-	return toolResultLines(compactLines(renderSearchResult(result))), nil
-}
-
-// packAndSpill budget-packs hits (facet hints computed over facetFields) and,
-// when the page omitted anything, spills the FULL result set to disk and
-// attaches its overflow_path. hits (unsliced) is exactly the full slim result
-// set: packed and remainder are an order-preserving split of it (budget.go),
-// so no reconstruction is needed. A spill failure must never fail the search
-// (DW-3.4) — log and return the capped page without overflow_path rather than
-// propagating the error. Shared verbatim by memory_search and
-// knowledge_search (DW-6.1); toolName only labels the degradation log line.
-func packAndSpill[H packable](hits []H, facetFields []string, toolName string) searchResult[H] {
-	result := packSearchResult(hits, searchByteBudget(), facetFields)
-	if result.Omitted > 0 {
-		if path, spillErr := spillFullResult(hits); spillErr != nil {
-			slog.Warn(toolName+": spilling full result set to disk failed; returning capped response without overflow_path", "error", spillErr)
-			// buildSearchResult (budget.go) built Hint optimistically,
-			// assuming this spill would succeed; now that it hasn't,
-			// rebuild the hint so it doesn't dangle a path that was never
-			// written (DW-3.2).
-			result.Hint = refineHint(result.Omitted, result.OmittedFacets, facetFields, false)
-		} else {
-			result.OverflowPath = path
-		}
+	// expand=false is enforced HERE, not trusted to the server: a server older
+	// than SearchRequest.expand ignores the unknown field and still runs the
+	// graph post-hook, so its expansions are dropped at this edge. The caller
+	// gets the answer it asked for whichever server it reached. Naming "graph"
+	// in sources asks for expansion too — the same rule the server applies
+	// (retrieval.expansionRequested) — so those expansions are kept.
+	if !filter.Expand && !slices.Contains(filter.Sources, "graph") {
+		res.Expanded = nil
 	}
-	return result
+	// Render first, then pack: the budget bounds the exact text the caller
+	// receives, so it can only be measured after rendering (see packRendered).
+	// Matched hits pack first against the whole budget; graph expansions get
+	// only what is left (DW-6.4), so an expansion can never evict a match.
+	//
+	// The result ships as compact lines only: the text block is the whole
+	// response (see toolResultLines).
+	packed := packRendered(renderSearchResult(res), searchByteBudget())
+	return toolResultLines(compactLines(packed)), nil
 }
 
 // callRead is the memory_read tool: the deliberate full-record drill for an
@@ -477,24 +460,17 @@ func (s *Server) callKnowledgeSearch(ctx context.Context, raw json.RawMessage) (
 	}
 	k := args.K
 	if k <= 0 {
-		k = defaultRequestK // same request-generously-pack-tightly posture as memory_search
+		k = defaultRequestK // same default as memory_search
 	}
 	hits, total, err := s.backend.KnowledgeSearch(ctx, args.Collection, args.Query, args.Filters, args.Sort, k, args.Offset, args.FullBody)
 	if err != nil {
 		return toolError(fmt.Sprintf("knowledge search failed: %v", err)), nil
 	}
-	// nil facet fields: collections declare their own field vocabulary at
-	// runtime, so v1 reports the omitted count + hint without facet values.
-	// Total is attached AFTER packing (packAndSpill is shared with
-	// memory_search, which has no total concept) — see searchResult.Total.
-	result := packAndSpill(hits, nil, ToolKnowledgeSearch)
-	result.Total = total
-	// Same render path as memory_search: one line format across both sources,
-	// and the structured payload carries the SAME minimal hits the text block
-	// shows. Emitting the fat form in structuredContent while the text block
-	// showed compact lines is what made the render savings invisible — a
-	// client that consumes structuredContent got none of them.
-	return toolResultLines(compactLines(renderKnowledgeResult(args.Collection, result))), nil
+	// Same render-then-pack path as memory_search: one line format across both
+	// sources, and one budget measured on the text that ships — total and
+	// offset included, since the header and omission line carry them.
+	packed := packRendered(renderKnowledgeResult(args.Collection, args.Offset, total, hits, args.FullBody), searchByteBudget())
+	return toolResultLines(compactLines(packed)), nil
 }
 
 func (s *Server) callKnowledgeCollections(ctx context.Context) (any, *rpcError) {
@@ -587,20 +563,6 @@ func toolResult(payload any) map[string]any {
 	text, _ := json.Marshal(payload)
 	return map[string]any{
 		"content":           []any{map[string]any{"type": "text", "text": string(text)}},
-		"structuredContent": payload,
-		"isError":           false,
-	}
-}
-
-// toolResultWithText wraps a structured payload as an MCP tool result whose
-// content text block is the caller-supplied rendering (memory_search's
-// compact-line format) rather than a straight marshal of payload — while
-// structuredContent still carries the full structured payload for clients
-// that consume it. toolResult stays the JSON-marshal-both-ways default;
-// this is the divergent case.
-func toolResultWithText(payload any, text string) map[string]any {
-	return map[string]any{
-		"content":           []any{map[string]any{"type": "text", "text": text}},
 		"structuredContent": payload,
 		"isError":           false,
 	}

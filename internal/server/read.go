@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -172,7 +173,32 @@ func (s *Server) readKnowledge(ctx context.Context, docID, source string) (*engr
 // two paths can never diverge. The response adds the TARGET version
 // explicitly: a superseded id returns that immutable version with its
 // possibly-closed validity interval, which is expected, not an error.
+//
+// docID may also be a hex PREFIX of a fact id (see resolveFactPrefix): it is
+// resolved to the one full id the caller can read, and that full id then takes
+// exactly the path above — the prefix never reaches Audit, so Audit's own
+// by-id contract is unchanged.
 func (s *Server) readSemantic(ctx context.Context, docID string) (*engrampb.ReadResponse, error) {
+	// Fact ids are lowercase hex digests, so an uppercased copy of one (or of
+	// its prefix) can only mean the lowercase id: fold it rather than answer a
+	// pasted id with the opaque NOT_FOUND.
+	if lower := strings.ToLower(docID); isHex(lower) {
+		docID = lower
+	}
+	switch {
+	case isFactIDPrefix(docID):
+		full, err := s.resolveFactPrefix(ctx, docID)
+		if err != nil {
+			return nil, err
+		}
+		docID = full
+	case isHex(docID) && len(docID) < minFactIDPrefix:
+		// Too short to be worth a seek, and a full id it is not: say so
+		// rather than answer a malformed request with the opaque NOT_FOUND
+		// (the message depends on the input alone — no record is consulted).
+		return nil, status.Errorf(codes.InvalidArgument,
+			"semantic id prefix %q is too short: use at least %d hex characters, or the full id", docID, minFactIDPrefix)
+	}
 	audit, err := s.Audit(ctx, &engrampb.AuditRequest{Id: docID})
 	if err != nil {
 		// Audit is already fail-closed; normalize its NOT_FOUND wording to

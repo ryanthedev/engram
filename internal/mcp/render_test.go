@@ -165,6 +165,31 @@ func TestDW_1_4_IDSourceRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSemanticIDsRenderAsShortPrefix: a semantic row shows the first 12 hex
+// chars of its 64-hex id, and nothing else is shortened — an episodic id is a
+// 20-char OpenSearch id with no prefix resolution behind it, and a knowledge
+// doc id is harvester-chosen. A semantic id already at or under 12 chars is
+// shown whole rather than padded.
+func TestSemanticIDsRenderAsShortPrefix(t *testing.T) {
+	const fullSemantic = "6485d017480030ee3cf100054c6753b3508159829627e1532f9e454dce223768"
+	const episodicID = "_a1su58Bj9q7QSuwse43"
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"semantic 64-hex", renderHit(semanticHit(fullSemantic, "s", "p", "o", 5)).ID, "semantic:6485d0174800"},
+		{"semantic already short", renderHit(semanticHit("abc123", "s", "p", "o", 5)).ID, "semantic:abc123"},
+		{"episodic stays whole", renderHit(episodicHit(episodicID, "t", "note", "2026-07-01T00:00:00Z", "e")).ID, "episodic:" + episodicID},
+		{"knowledge stays whole", renderKnowledgeHit("notes", KnowledgeHit{ID: strings.Repeat("d", 40)}, false).ID, "notes:" + strings.Repeat("d", 40)},
+	}
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s: id = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 // TestDW_1_4_IDSourceRoundTripSurvivesAdversarialContent: a statement/text
 // body containing embedded tab and newline characters (an attempt to forge
 // extra delimiter fields) must not corrupt the id+source round trip — the
@@ -306,7 +331,7 @@ func TestRenderHitMissingOrMalformedFieldsNoPanic(t *testing.T) {
 	tests := []Hit{
 		{ID: "no-fields", Source: "episodic", Score: 0.1, Fields: ""},
 		{ID: "bad-json", Source: "episodic", Score: 0.1, Fields: "not json"},
-		{ID: "no-fields-semantic", Source: "semantic", Score: 0.1, Fields: ""},
+		{ID: "nofields-sem", Source: "semantic", Score: 0.1, Fields: ""},
 		{ID: "unregistered-source", Source: "experience", Score: 0.1, Fields: `{"text":"hello"}`},
 	}
 	for _, h := range tests {
@@ -328,9 +353,8 @@ func TestRenderHitMissingOrMalformedFieldsNoPanic(t *testing.T) {
 }
 
 // TestCompactLinesOmissionFooterOnlyWhenOmitted: the omission summary
-// footer line appears only when hits were actually left out — mirroring
-// buildSearchResult's gating in budget.go, so the format change doesn't
-// silently drop that signal.
+// footer line appears only when hits were actually left out, so the format
+// never silently drops that signal.
 func TestCompactLinesOmissionFooterOnlyWhenOmitted(t *testing.T) {
 	fit := renderedResult{Hits: []renderedHit{{ID: "episodic:a", Text: "g"}}}
 	if got := compactLines(fit); strings.Contains(got, "...") {
@@ -340,10 +364,48 @@ func TestCompactLinesOmissionFooterOnlyWhenOmitted(t *testing.T) {
 	omitted := renderedResult{
 		Hits:    []renderedHit{{ID: "episodic:a", Text: "g"}},
 		Omitted: 3,
-		Hint:    "3 more hit(s) omitted to stay within the response size budget; narrow your query.",
 	}
 	got := compactLines(omitted)
-	if !strings.Contains(got, "3 more hit(s) omitted") {
-		t.Errorf("compactLines with omission missing the hint text: %q", got)
+	if !strings.Contains(got, "\n... 3 more omitted for size") {
+		t.Errorf("compactLines with omission missing the omission line: %q", got)
+	}
+}
+
+// TestKnowledgeFullBodyRendersTheDocument: a full_body search carries no
+// fragments, and its row must show the stored document (body included), not
+// collapse to the title as it did before.
+func TestKnowledgeFullBodyRendersTheDocument(t *testing.T) {
+	h := KnowledgeHit{ID: "d1", Fields: `{"title":"T","text":"the whole body\nsecond line"}`}
+	got := renderKnowledgeHit("notes", h, true).Text
+	if !strings.Contains(got, "the whole body") || strings.ContainsAny(got, "\t\n") {
+		t.Fatalf("full_body row = %q, want the body on one line", got)
+	}
+	if got := renderKnowledgeHit("notes", h, false).Text; got != "T" {
+		t.Fatalf("filter-only row = %q, want the title fallback", got)
+	}
+}
+
+// TestDateColumnIsSanitizedAndRuneSafe: knowledge dates are harvester-supplied,
+// so a newline or tab inside one must not break the row, and a multi-byte rune
+// must never be split.
+func TestDateColumnIsSanitizedAndRuneSafe(t *testing.T) {
+	if got := dateOf(map[string]any{"date": "2026-01\n01T00"}); strings.ContainsAny(got, "\t\n") {
+		t.Fatalf("date = %q, want no control characters", got)
+	}
+	got := dateOf(map[string]any{"date": "２０２６年１月１日です、はい"})
+	if !utf8.ValidString(got) || utf8.RuneCountInString(got) != 10 {
+		t.Fatalf("date = %q, want 10 whole runes", got)
+	}
+}
+
+// TestBlankExpansionRowsAreDropped: an expansion renders as its statement
+// alone, so one without a statement is a blank line carrying nothing.
+func TestBlankExpansionRowsAreDropped(t *testing.T) {
+	r := renderSearchResult(SearchResult{
+		Hits:     []Hit{{ID: "e1", Source: "episodic", Fields: `{"text":"x"}`}},
+		Expanded: []Hit{{ID: "g1", Source: "graph", Fields: `{"statement":""}`}, {ID: "g2", Source: "graph", Fields: `{"statement":"kept"}`}},
+	})
+	if len(r.Expanded) != 1 || r.Expanded[0].Text != "kept" {
+		t.Fatalf("expanded = %+v, want only the non-blank row", r.Expanded)
 	}
 }

@@ -94,19 +94,15 @@ func (s *OpenSearchStore) Create(ctx context.Context, id string, f memory.Semant
 }
 ```
 
-### A search tool handler: budget-pack, then spill on overflow
+### A search tool handler: render, budget-pack the rendered text, count what was cut
 ```go
-// DO — internal/mcp/tools.go:366-372, shared by memory_search and knowledge_search.
-// Oversized results are packed against a byte budget; omitted hits spill to disk and the
-// tool returns overflow_path instead of truncating silently.
-result := packSearchResult(hits, searchByteBudget(), facetFields)
-if result.Omitted > 0 {
-    if path, spillErr := spillFullResult(hits); spillErr != nil {
-        result.Hint = refineHint(...) // spill failed — fall back to a narrower hint
-    } else {
-        result.OverflowPath = path
-    }
-}
+// DO — from internal/mcp/tools.go callSearch, shared by memory_search and knowledge_search.
+// Render first, then pack: the byte budget bounds the exact text the caller receives,
+// so it is measured on that text, never on an upstream form. Anything cut is COUNTED
+// on one omission line ("... 7 more omitted for size; narrow the query") instead of
+// truncating silently. No spill file: callers never read one.
+packed := packRendered(renderSearchResult(res), searchByteBudget())
+return toolResultLines(compactLines(packed)), nil
 ```
 
 ### A gRPC handler translating domain errors to status codes
@@ -226,7 +222,7 @@ generated `api/engrampb` excluded). A new exported name without a comment fails 
 
 OpenSearch fields are `snake_case` in struct tags / query maps (`expired_at`, `text_embedding`).
 Domain terms are load-bearing: **episodic**/**semantic**/**knowledge** tiers, **fact**, **scope**,
-**outbox**, **ledger**, **tenant**/**owner_agent_id**, **overflow_path**, **brain** (a root of
+**outbox**, **ledger**, **tenant**/**owner_agent_id**, **brain** (a root of
 local notes in the markdown-dir harvester), **purge** (memory removal) vs **retract** (adds a
 retracting fact) vs **sweep** (knowledge mark-and-sweep). Comments cite decision codes
 (`D12`, `DW-4.5`) that index the plan.
@@ -289,8 +285,8 @@ failure inspection, path-traversal guarded index names.
 **`internal/engramclient/client.go` + `knowledge.go` + `purge.go`** — the shared gRPC client edge:
 token attachment, proto<->domain translation, `IsXxx` predicates for non-allowlisted callers.
 
-**`internal/mcp/tools.go` + `budget.go` + `render.go`** — tool handlers, byte-budget packing,
-overflow spill, one-line hit rendering.
+**`internal/mcp/tools.go` + `budget.go` + `render.go`** — tool handlers, render-then-pack
+byte budget on the shipped text, one-line hit rendering.
 
 **`internal/server/server.go`, `read.go`, `purge.go`** — thin handlers: sentinel -> gRPC code,
 fetch-authorize-project, authorize-before-validate.

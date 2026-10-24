@@ -190,15 +190,21 @@ func TestRunSearch_FlagsOnEitherSideOfQuery(t *testing.T) {
 		wantQuery string
 		wantK     int32
 		wantErr   string // substring of stderr when the invocation must fail
+		// wantExpand is the SearchRequest.expand sent: false unless --expand
+		// was given (on either side of QUERY, like every other flag).
+		wantExpand bool
 	}{
-		{"flags before query", []string{"-k", "3", "-addr", "ADDR", "upublish publish flow"}, "upublish publish flow", 3, ""},
-		{"flags after query (documented order)", []string{"upublish publish flow", "-k", "3", "-addr", "ADDR"}, "upublish publish flow", 3, ""},
-		{"flags on both sides", []string{"-addr", "ADDR", "upublish publish flow", "-k", "3"}, "upublish publish flow", 3, ""},
-		{"default k when omitted", []string{"upublish publish flow", "-addr", "ADDR"}, "upublish publish flow", 10, ""},
-		{"double-dash ends flags", []string{"-k", "3", "-addr", "ADDR", "--", "-k"}, "-k", 3, ""},
-		{"unknown trailing flag is an error", []string{"upublish publish flow", "-addr", "ADDR", "-bogus"}, "", 0, "flag provided but not defined: -bogus"},
-		{"unquoted multi-word query is an error", []string{"upublish", "publish", "-addr", "ADDR"}, "", 0, "expected exactly one QUERY"},
-		{"missing query is an error", []string{"-k", "3", "-addr", "ADDR"}, "", 0, "expected a QUERY"},
+		{"flags before query", []string{"-k", "3", "-addr", "ADDR", "upublish publish flow"}, "upublish publish flow", 3, "", false},
+		{"flags after query (documented order)", []string{"upublish publish flow", "-k", "3", "-addr", "ADDR"}, "upublish publish flow", 3, "", false},
+		{"flags on both sides", []string{"-addr", "ADDR", "upublish publish flow", "-k", "3"}, "upublish publish flow", 3, "", false},
+		{"default k when omitted", []string{"upublish publish flow", "-addr", "ADDR"}, "upublish publish flow", 10, "", false},
+		{"double-dash ends flags", []string{"-k", "3", "-addr", "ADDR", "--", "-k"}, "-k", 3, "", false},
+		{"unknown trailing flag is an error", []string{"upublish publish flow", "-addr", "ADDR", "-bogus"}, "", 0, "flag provided but not defined: -bogus", false},
+		{"unquoted multi-word query is an error", []string{"upublish", "publish", "-addr", "ADDR"}, "", 0, "expected exactly one QUERY", false},
+		{"missing query is an error", []string{"-k", "3", "-addr", "ADDR"}, "", 0, "expected a QUERY", false},
+		{"expand before query", []string{"--expand", "-addr", "ADDR", "upublish publish flow"}, "upublish publish flow", 10, "", true},
+		{"expand after query", []string{"upublish publish flow", "-addr", "ADDR", "--expand"}, "upublish publish flow", 10, "", true},
+		{"expand between flags after query", []string{"upublish publish flow", "-expand", "-k", "3", "-addr", "ADDR"}, "upublish publish flow", 3, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -236,6 +242,9 @@ func TestRunSearch_FlagsOnEitherSideOfQuery(t *testing.T) {
 			}
 			if req.GetK() != tt.wantK {
 				t.Errorf("k = %d, want %d", req.GetK(), tt.wantK)
+			}
+			if req.GetExpand() != tt.wantExpand {
+				t.Errorf("expand = %v, want %v", req.GetExpand(), tt.wantExpand)
 			}
 		})
 	}

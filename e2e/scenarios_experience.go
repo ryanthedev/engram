@@ -142,18 +142,36 @@ func waitForExperienceHit(conn *MCPConn, query, want string) error {
 	return fmt.Errorf("no experience-tier hit for %q containing %q within deadline", query, want)
 }
 
-// searchHitsMCP runs memory_search and returns the raw hit maps.
+// searchHitsMCP runs memory_search with graph expansion on and parses its
+// text rows back into hit maps: "source" from the row's "<source>:<id>"
+// column, or "graph" for rows under the graph header (bare statements), and
+// "fields_json" holding the row's matched text, which is what the scenarios
+// substring-match on. Expansion is requested so the graph scenarios exercise
+// it (it is opt-in) and the ACL scenario checks expansions, not their absence.
 func searchHitsMCP(conn *MCPConn, query string) ([]map[string]any, error) {
-	sc, err := conn.CallTool("memory_search", map[string]any{"query": query, "k": 25})
+	text, err := conn.CallToolText("memory_search", map[string]any{"query": query, "k": 25, "expand": true})
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := sc["hits"].([]any)
-	out := make([]map[string]any, 0, len(raw))
-	for _, r := range raw {
-		if hm, ok := r.(map[string]any); ok {
-			out = append(out, hm)
+	var out []map[string]any
+	inGraph := false
+	for i, line := range strings.Split(text, "\n") {
+		switch {
+		case i == 0 || strings.HasPrefix(line, "... ") || line == "":
+			continue // block header, omission line
+		case strings.HasPrefix(line, "graph ("):
+			inGraph = true
+			continue
+		case inGraph:
+			out = append(out, map[string]any{"source": "graph", "fields_json": line})
+			continue
 		}
+		cols := strings.SplitN(line, "\t", 3)
+		if len(cols) != 3 {
+			continue
+		}
+		source, _, _ := strings.Cut(cols[0], ":")
+		out = append(out, map[string]any{"id": cols[0], "source": source, "fields_json": cols[2]})
 	}
 	return out, nil
 }

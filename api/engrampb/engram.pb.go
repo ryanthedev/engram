@@ -355,7 +355,13 @@ type SearchRequest struct {
 	// source; an empty list is an error, not a silent "all". Sources that
 	// declare no filterable fields cannot honor a filter, so they are excluded
 	// from any search that sets one.
-	Sources       []string `protobuf:"bytes,14,rep,name=sources,proto3" json:"sources,omitempty"`
+	Sources []string `protobuf:"bytes,14,rep,name=sources,proto3" json:"sources,omitempty"`
+	// Run the graph post-hook and return its expansions. Default (false) skips
+	// graph traversal entirely: expansions are bonus context reached from the
+	// matched hits, not matches, and most callers never use them. Naming "graph"
+	// in sources also turns expansion on. It governs the graph post-hook only;
+	// matched hits, k, and every filter are unaffected.
+	Expand        bool `protobuf:"varint,15,opt,name=expand,proto3" json:"expand,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -479,6 +485,13 @@ func (x *SearchRequest) GetSources() []string {
 		return x.Sources
 	}
 	return nil
+}
+
+func (x *SearchRequest) GetExpand() bool {
+	if x != nil {
+		return x.Expand
+	}
+	return false
 }
 
 // Hit is one fused result.
@@ -3279,7 +3292,7 @@ const file_engram_proto_rawDesc = "" +
 	"\voccurred_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"occurredAt\" \n" +
 	"\x0eIngestResponse\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\xb9\x03\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\xd1\x03\n" +
 	"\rSearchRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\f\n" +
 	"\x01k\x18\x02 \x01(\x05R\x01k\x12\x1b\n" +
@@ -3294,7 +3307,8 @@ const file_engram_proto_rawDesc = "" +
 	"\x05since\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x05since\x120\n" +
 	"\x05until\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\x05until\x12-\n" +
 	"\x12include_superseded\x18\r \x01(\bR\x11includeSuperseded\x12\x18\n" +
-	"\asources\x18\x0e \x03(\tR\asourcesJ\x04\b\x05\x10\x06R\n" +
+	"\asources\x18\x0e \x03(\tR\asources\x12\x16\n" +
+	"\x06expand\x18\x0f \x01(\bR\x06expandJ\x04\b\x05\x10\x06R\n" +
 	"valid_only\"d\n" +
 	"\x03Hit\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
