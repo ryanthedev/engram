@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Engram agent memory: hybrid search over episodic, semantic and graph memory plus knowledge collections, as memory_* and knowledge_* MCP tools. Needs engramd at ENGRAM_ADDR and ENGRAM_TOKEN.",
   "author": {
     "name": "rtd"
