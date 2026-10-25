@@ -79,4 +79,14 @@ func TestDW_7_8_PendingBacklogAndDeadLetteredCount(t *testing.T) {
 	if dlq != 1 {
 		t.Fatalf("DLQ depth = %d, want 1", dlq)
 	}
+
+	// The repair sweep can still complete a dead-lettered event; once it
+	// does, the event leaves the DLQ.
+	if err := s.Complete(ctx, "lag-b"); err != nil {
+		t.Fatalf("Complete (dead-lettered): %v", err)
+	}
+	testutil.RefreshIndex(t, base, epIdx)
+	if dlq, err := s.DeadLetteredCount(ctx); err != nil || dlq != 0 {
+		t.Fatalf("DLQ depth after completing lag-b = (%d, %v), want (0, nil)", dlq, err)
+	}
 }

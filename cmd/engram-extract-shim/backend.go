@@ -32,7 +32,7 @@ var ErrUnknownBackend = errors.New("engram-extract-shim: unknown backend")
 // Default cheap-model, low-effort configuration per backend (research:
 // .code-foundations/research/2026-07-08-extraction-cli-shim.md).
 const (
-	defaultAgyModel     = "Gemini 3.5 Flash (Low)"
+	defaultAgyModel     = "Gemini 3.8 Flash (Low)" // agy retired the 3.5 preset; check `agy models` when bumping
 	defaultClaudeModel  = "haiku"
 	defaultClaudeEffort = "low"
 )
