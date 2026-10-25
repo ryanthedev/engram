@@ -261,10 +261,11 @@ func backendKind(b Backend) string {
 	}
 }
 
-// TestBackendsRunIsolatedWithSchema pins the flags that keep each CLI a plain
-// completion endpoint: event text is untrusted, so no backend may get tools,
-// MCP servers, user settings or a saved session, and each must enforce
-// factsSchema. Dropping claude's isolation flags took a judge call from ~525
+// TestBackendsRunIsolatedWithSchema pins the flags that keep each CLI close
+// to a plain completion endpoint: event text is untrusted, so tools, MCP
+// servers, user settings and saved sessions stay off, and each backend must
+// enforce factsSchema. The flags' effect was checked live with a canary file
+// (see the comment above agyBackend); this test keeps them from being dropped. Dropping claude's isolation flags took a judge call from ~525
 // to ~30.7k input tokens (measured 2026-10-25).
 func TestBackendsRunIsolatedWithSchema(t *testing.T) {
 	tests := []struct {
@@ -281,6 +282,7 @@ func TestBackendsRunIsolatedWithSchema(t *testing.T) {
 		}},
 		{"codex", codexBackend{}.args("sys", "user", "/tmp/schema.json", "/tmp/out.json"), [][]string{
 			{"--ignore-user-config"}, {"--ephemeral"}, {"-s", "read-only"}, {"--output-schema", "/tmp/schema.json"},
+			{"--disable", "shell_tool"}, {"--disable", "unified_exec"}, {"--disable", "code_mode_host"},
 		}},
 	}
 	for _, tc := range tests {

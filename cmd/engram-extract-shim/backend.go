@@ -129,11 +129,18 @@ func runProcess(ctx context.Context, name string, args []string) (string, error)
 	return stdout.String(), nil
 }
 
-// Every backend runs its CLI as a plain completion endpoint, not an agent:
-// the event text is untrusted (pasted content, tool output, web harvests),
-// so no backend gets tools, MCP servers, user hooks or a saved session, and
-// each one enforces factsSchema through its CLI's structured-output flag.
-// Run returns the schema-shaped JSON for parseFacts.
+// Every backend runs its CLI as close to a plain completion endpoint as the
+// CLI allows: the event text is untrusted (pasted content, tool output, web
+// harvests), so tools, MCP servers, user hooks and saved sessions are turned
+// off wherever a flag exists, and each backend enforces factsSchema through
+// its CLI's structured-output flag. Run returns the schema-shaped JSON for
+// parseFacts.
+//
+// Checked 2026-10-25 by asking each CLI to read a canary file outside its
+// working directory: claude and codex (with the flags below) could not; codex
+// with only -s read-only could. agy has no flag to turn its tools off; it
+// could not read the canary either, and its working directory is the
+// launchd agent's empty ~/.engram/shim.
 
 // agyBackend is the default backend: `agy -p "<sys+user>" --model <preset>
 // --sandbox --disable-slash-commands --json-schema <schema> --output-format
@@ -163,21 +170,30 @@ func (b agyBackend) Run(ctx context.Context, systemPrompt, userPrompt string) (s
 	return structuredOutput("agy", out)
 }
 
-// codexBackend: `codex exec --skip-git-repo-check --ignore-user-config
-// --ephemeral -s read-only --output-schema FILE -o FILE -c
-// model_reasoning_effort=low "<sys+user>"`. codex's stdout carries banner
+// codexBackend: `codex exec <codexNoToolArgs> --skip-git-repo-check
+// --ignore-user-config --ephemeral -s read-only --output-schema FILE -o FILE
+// -c model_reasoning_effort=low "<sys+user>"`. codex's stdout carries banner
 // noise, so the final message is captured via -o. Both files live in a
 // shim-controlled temp dir (never a path derived from event text).
 type codexBackend struct {
 	Model string
 }
 
+// codexNoToolArgs disable codex's tools. -s read-only alone still lets codex
+// run commands that read any file the user can (it read the canary).
+var codexNoToolArgs = []string{
+	"--disable", "shell_tool", "--disable", "unified_exec", "--disable", "code_mode_host",
+	"--disable", "view_image", "--disable", "sleep_tool", "--disable", "browser_use",
+	"--disable", "computer_use", "--disable", "apps", "-c", "web_search=disabled",
+}
+
 // args builds the argv slice for codex given shim-controlled schema and
 // output paths (see Run) — pure and separate from execution for the same
 // reason as agyBackend.args.
 func (b codexBackend) args(systemPrompt, userPrompt, schemaPath, outPath string) []string {
-	args := []string{"exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", "-s", "read-only",
-		"--output-schema", schemaPath, "-o", outPath, "-c", "model_reasoning_effort=low"}
+	args := append([]string{"exec"}, codexNoToolArgs...)
+	args = append(args, "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", "-s", "read-only",
+		"--output-schema", schemaPath, "-o", outPath, "-c", "model_reasoning_effort=low")
 	if b.Model != "" {
 		args = append(args, "-c", "model="+b.Model)
 	}
