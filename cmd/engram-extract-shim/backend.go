@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -127,9 +129,22 @@ func runProcess(ctx context.Context, name string, args []string) (string, error)
 	return stdout.String(), nil
 }
 
-// agyBackend is the default backend: `agy -p "<sys+user>" --model <preset>`.
-// agy has no system/user split and no JSON-output mode — its plain stdout is
-// already clean per the research's live test.
+// Every backend runs its CLI as close to a plain completion endpoint as the
+// CLI allows: the event text is untrusted (pasted content, tool output, web
+// harvests), so tools, MCP servers, user hooks and saved sessions are turned
+// off wherever a flag exists, and each backend enforces factsSchema through
+// its CLI's structured-output flag. Run returns the schema-shaped JSON for
+// parseFacts.
+//
+// Checked 2026-10-25 by asking each CLI to read a canary file outside its
+// working directory: claude and codex (with the flags below) could not; codex
+// with only -s read-only could. agy has no flag to turn its tools off; it
+// could not read the canary either, and its working directory is the
+// launchd agent's empty ~/.engram/shim.
+
+// agyBackend is the default backend: `agy -p "<sys+user>" --model <preset>
+// --sandbox --disable-slash-commands --json-schema <schema> --output-format
+// json`. agy has no system/user split, so the prompts are combined.
 type agyBackend struct {
 	Model string
 }
@@ -143,26 +158,42 @@ func (b agyBackend) args(systemPrompt, userPrompt string) []string {
 	if model == "" {
 		model = defaultAgyModel
 	}
-	return []string{"-p", combinePrompt(systemPrompt, userPrompt), "--model", model}
+	return []string{"-p", combinePrompt(systemPrompt, userPrompt), "--model", model,
+		"--sandbox", "--disable-slash-commands", "--json-schema", factsSchema, "--output-format", "json"}
 }
 
 func (b agyBackend) Run(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	return runProcess(ctx, "agy", b.args(systemPrompt, userPrompt))
+	out, err := runProcess(ctx, "agy", b.args(systemPrompt, userPrompt))
+	if err != nil {
+		return "", err
+	}
+	return structuredOutput("agy", out)
 }
 
-// codexBackend: `codex exec --skip-git-repo-check --ignore-user-config -o
-// FILE -c model_reasoning_effort=low "<sys+user>"`. codex's stdout carries
-// banner noise, so output is captured via -o into a shim-controlled temp
-// file (never a path derived from event text) and read back after exit.
+// codexBackend: `codex exec <codexNoToolArgs> --skip-git-repo-check
+// --ignore-user-config --ephemeral -s read-only --output-schema FILE -o FILE
+// -c model_reasoning_effort=low "<sys+user>"`. codex's stdout carries banner
+// noise, so the final message is captured via -o. Both files live in a
+// shim-controlled temp dir (never a path derived from event text).
 type codexBackend struct {
 	Model string
 }
 
-// args builds the argv slice for codex given a shim-controlled outPath (see
-// Run) — pure and separate from execution for the same reason as
-// agyBackend.args.
-func (b codexBackend) args(systemPrompt, userPrompt, outPath string) []string {
-	args := []string{"exec", "--skip-git-repo-check", "--ignore-user-config", "-o", outPath, "-c", "model_reasoning_effort=low"}
+// codexNoToolArgs disable codex's tools. -s read-only alone still lets codex
+// run commands that read any file the user can (it read the canary).
+var codexNoToolArgs = []string{
+	"--disable", "shell_tool", "--disable", "unified_exec", "--disable", "code_mode_host",
+	"--disable", "view_image", "--disable", "sleep_tool", "--disable", "browser_use",
+	"--disable", "computer_use", "--disable", "apps", "-c", "web_search=disabled",
+}
+
+// args builds the argv slice for codex given shim-controlled schema and
+// output paths (see Run) — pure and separate from execution for the same
+// reason as agyBackend.args.
+func (b codexBackend) args(systemPrompt, userPrompt, schemaPath, outPath string) []string {
+	args := append([]string{"exec"}, codexNoToolArgs...)
+	args = append(args, "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", "-s", "read-only",
+		"--output-schema", schemaPath, "-o", outPath, "-c", "model_reasoning_effort=low")
 	if b.Model != "" {
 		args = append(args, "-c", "model="+b.Model)
 	}
@@ -170,18 +201,18 @@ func (b codexBackend) args(systemPrompt, userPrompt, outPath string) []string {
 }
 
 func (b codexBackend) Run(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	tmp, err := os.CreateTemp("", "engram-extract-shim-codex-*.txt")
+	dir, err := os.MkdirTemp("", "engram-extract-shim-codex-*")
 	if err != nil {
-		return "", fmt.Errorf("%w: creating codex output file: %v", ErrBackendUnavailable, err)
+		return "", fmt.Errorf("%w: creating codex temp dir: %v", ErrBackendUnavailable, err)
 	}
-	outPath := tmp.Name()
-	if cerr := tmp.Close(); cerr != nil {
-		os.Remove(outPath)
-		return "", fmt.Errorf("%w: closing codex output file: %v", ErrBackendUnavailable, cerr)
+	defer os.RemoveAll(dir)
+	schemaPath := filepath.Join(dir, "schema.json")
+	outPath := filepath.Join(dir, "out.json")
+	if err := os.WriteFile(schemaPath, []byte(factsSchema), 0o600); err != nil {
+		return "", fmt.Errorf("%w: writing codex schema file: %v", ErrBackendUnavailable, err)
 	}
-	defer os.Remove(outPath)
 
-	if _, err := runProcess(ctx, "codex", b.args(systemPrompt, userPrompt, outPath)); err != nil {
+	if _, err := runProcess(ctx, "codex", b.args(systemPrompt, userPrompt, schemaPath, outPath)); err != nil {
 		return "", err
 	}
 	out, err := os.ReadFile(outPath)
@@ -192,13 +223,19 @@ func (b codexBackend) Run(ctx context.Context, systemPrompt, userPrompt string) 
 }
 
 // claudeBackend: `claude -p "<user>" --system-prompt "<sys>" --model haiku
-// --effort low`. claude is the only backend with a true system/user split,
-// but its global CLAUDE.md injection (~24k tokens, non-deterministic
-// extraction quality per the research) makes it opt-in only — it is never
-// selected by a default and must be named explicitly via -backend claude.
+// --effort low` plus the isolation flags below. claude is the only backend
+// with a true system/user split. Without isolation every call loaded ~30.7k
+// tokens of the user's CLAUDE.md, tools and plugins; with it, ~525 (measured
+// 2026-10-25). --bare would do the same but reads only ANTHROPIC_API_KEY,
+// and this shim runs on the user's subscription login.
 type claudeBackend struct {
 	Model string
 }
+
+// claudeIsolationArgs turn claude into a completion endpoint: no tools, no
+// MCP servers, no user/project/local settings (so no hooks, plugins or
+// CLAUDE.md), and no session file per call.
+var claudeIsolationArgs = []string{"--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"}
 
 // args builds the argv slice for claude, pure and separate from execution
 // for the same reason as agyBackend.args. claude is the only backend with a
@@ -209,9 +246,42 @@ func (b claudeBackend) args(systemPrompt, userPrompt string) []string {
 	if model == "" {
 		model = defaultClaudeModel
 	}
-	return []string{"-p", userPrompt, "--system-prompt", systemPrompt, "--model", model, "--effort", defaultClaudeEffort}
+	args := []string{"-p", userPrompt, "--system-prompt", systemPrompt, "--model", model, "--effort", defaultClaudeEffort}
+	args = append(args, claudeIsolationArgs...)
+	return append(args, "--json-schema", factsSchema, "--output-format", "json")
 }
 
 func (b claudeBackend) Run(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	return runProcess(ctx, "claude", b.args(systemPrompt, userPrompt))
+	out, err := runProcess(ctx, "claude", b.args(systemPrompt, userPrompt))
+	if err != nil {
+		return "", err
+	}
+	return structuredOutput("claude", out)
+}
+
+// structuredOutput unwraps the --output-format json envelope that claude and
+// agy print: the schema-validated structured_output when present, else the
+// plain response text for parseFacts to try. An envelope reporting an error,
+// or one with neither field, is a backend failure (retryable), never "[]".
+func structuredOutput(name, stdout string) (string, error) {
+	var env struct {
+		StructuredOutput json.RawMessage `json:"structured_output"`
+		Result           string          `json:"result"`   // claude
+		Response         string          `json:"response"` // agy
+		IsError          bool            `json:"is_error"` // claude
+		Status           string          `json:"status"`   // agy
+	}
+	if err := json.Unmarshal([]byte(stdout), &env); err != nil {
+		return "", fmt.Errorf("%w: %s: decoding json envelope: %v", ErrBackendUnavailable, name, err)
+	}
+	if env.IsError || (env.Status != "" && env.Status != "SUCCESS") {
+		return "", fmt.Errorf("%w: %s reported an error: %.300s", ErrBackendUnavailable, name, stdout)
+	}
+	if len(env.StructuredOutput) > 0 && string(env.StructuredOutput) != "null" {
+		return string(env.StructuredOutput), nil
+	}
+	if text := env.Result + env.Response; strings.TrimSpace(text) != "" {
+		return text, nil
+	}
+	return "", fmt.Errorf("%w: %s: envelope carried no output", ErrBackendUnavailable, name)
 }

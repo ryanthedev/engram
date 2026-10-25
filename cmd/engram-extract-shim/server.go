@@ -122,21 +122,29 @@ func (s *Shim) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.Timeout)
 	defer cancel()
 
+	start := time.Now()
 	stdout, err := s.Backend.Run(ctx, systemPrompt, userPrompt)
+	var facts []fact
+	if err == nil {
+		facts, err = parseFacts(stdout)
+	}
 	if err != nil {
-		// Any backend failure (non-zero exit, timeout, or an unrecognized
-		// error from a future backend) is treated as one uniform, retryable
-		// upstream failure — never a 500 that would look like a shim bug and
-		// dead-letter the event.
-		s.logger().Error("engram-extract-shim: backend invocation failed", "err", err)
+		// Any backend failure (non-zero exit, timeout, unparseable output,
+		// or an unrecognized error from a future backend) is treated as one
+		// uniform, retryable upstream failure — never a 500 that would look
+		// like a shim bug, and never "[]", which would complete the event
+		// with its facts lost.
+		s.logger().Error("engram-extract-shim: extraction failed", "err", err, "duration", time.Since(start).Round(time.Millisecond))
 		http.Error(w, "extraction backend unavailable", http.StatusBadGateway)
 		return
 	}
+	s.logger().Info("engram-extract-shim: extracted", "facts", len(facts), "duration", time.Since(start).Round(time.Millisecond), "prompt_bytes", len(userPrompt))
 
-	content, factCount := parseFacts(stdout)
+	// usage is an estimate: the CLIs don't report tokens in one comparable
+	// form, so engramd's cost meter sees a rough size, not a bill.
 	resp := chatResponse{
-		Choices: []choice{{Message: chatMessage{Role: "assistant", Content: string(content)}}},
-		Usage:   usage{PromptTokens: len(userPrompt) / 4, CompletionTokens: 24*factCount + 8},
+		Choices: []choice{{Message: chatMessage{Role: "assistant", Content: marshalFacts(facts)}}},
+		Usage:   usage{PromptTokens: len(userPrompt) / 4, CompletionTokens: 24*len(facts) + 8},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
