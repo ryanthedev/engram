@@ -153,6 +153,19 @@ func TestDW_1_2_HappyPathFactArray(t *testing.T) {
 
 // TestDW_1_3_BackendNonZeroExitReturnsRetryableError and its timeout sibling
 // below cover the HTTP-level half of DW-1.3: a failing backend must produce
+// TestUnparseableBackendOutputIsRetryable: a garbled model turn must come
+// back as a 502 so engramd retries it. Answering 200 "[]" would complete the
+// event with nothing indexed and lose its facts for good.
+func TestUnparseableBackendOutputIsRetryable(t *testing.T) {
+	shim := newTestShim(fakeBackend{run: func(context.Context, string, string) (string, error) {
+		return "I could not find any facts, sorry!", nil
+	}})
+	rec := postChat(t, shim, "sys", "user text")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d for unparseable output; body=%s", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+}
+
 // a clean, retryable HTTP error — never a 500, never a hang.
 func TestDW_1_3_BackendNonZeroExitReturnsRetryableError(t *testing.T) {
 	shim := newTestShim(fakeBackend{run: func(context.Context, string, string) (string, error) {

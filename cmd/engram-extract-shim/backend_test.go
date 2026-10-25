@@ -31,7 +31,7 @@ func TestDW_1_4_ShellMetacharactersPassedInert(t *testing.T) {
 		assertOpaqueSubstringInOneArg(t, args, dirtyEventText)
 	})
 	t.Run("codex", func(t *testing.T) {
-		args := codexBackend{}.args("sys", dirtyEventText, "/tmp/out.txt")
+		args := codexBackend{}.args("sys", dirtyEventText, "/tmp/schema.json", "/tmp/out.txt")
 		assertOpaqueSubstringInOneArg(t, args, dirtyEventText)
 	})
 	// claude has a true system/user split (--system-prompt), so each prompt
@@ -258,5 +258,84 @@ func backendKind(b Backend) string {
 		return "claude"
 	default:
 		return "unknown"
+	}
+}
+
+// TestBackendsRunIsolatedWithSchema pins the flags that keep each CLI a plain
+// completion endpoint: event text is untrusted, so no backend may get tools,
+// MCP servers, user settings or a saved session, and each must enforce
+// factsSchema. Dropping claude's isolation flags took a judge call from ~525
+// to ~30.7k input tokens (measured 2026-10-25).
+func TestBackendsRunIsolatedWithSchema(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want [][]string // each a contiguous run of argv elements
+	}{
+		{"claude", claudeBackend{}.args("sys", "user"), [][]string{
+			{"--tools", ""}, {"--strict-mcp-config"}, {"--setting-sources", ""}, {"--no-session-persistence"},
+			{"--json-schema", factsSchema}, {"--output-format", "json"},
+		}},
+		{"agy", agyBackend{}.args("sys", "user"), [][]string{
+			{"--sandbox"}, {"--disable-slash-commands"}, {"--json-schema", factsSchema}, {"--output-format", "json"},
+		}},
+		{"codex", codexBackend{}.args("sys", "user", "/tmp/schema.json", "/tmp/out.json"), [][]string{
+			{"--ignore-user-config"}, {"--ephemeral"}, {"-s", "read-only"}, {"--output-schema", "/tmp/schema.json"},
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, run := range tc.want {
+				if !containsRun(tc.args, run) {
+					t.Errorf("args %q missing %q", tc.args, run)
+				}
+			}
+		})
+	}
+}
+
+func containsRun(args, run []string) bool {
+	for i := 0; i+len(run) <= len(args); i++ {
+		match := true
+		for j := range run {
+			if args[i+j] != run[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// TestStructuredOutput covers the claude/agy --output-format json envelopes.
+func TestStructuredOutput(t *testing.T) {
+	tests := []struct {
+		name, stdout, want string
+		wantErr            bool
+	}{
+		{name: "claude structured", stdout: `{"type":"result","is_error":false,"result":"x","structured_output":{"facts":[]}}`, want: `{"facts":[]}`},
+		{name: "agy structured", stdout: `{"status":"SUCCESS","response":"x","structured_output":{"facts":[]}}`, want: `{"facts":[]}`},
+		{name: "agy falls back to response", stdout: `{"status":"SUCCESS","response":"[]","structured_output":null}`, want: "[]"},
+		{name: "claude error", stdout: `{"is_error":true,"result":"rate limited"}`, wantErr: true},
+		{name: "agy failure status", stdout: `{"status":"ERROR","response":""}`, wantErr: true},
+		{name: "no output", stdout: `{"status":"SUCCESS"}`, wantErr: true},
+		{name: "not json", stdout: "banner text", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := structuredOutput("test", tc.stdout)
+			if tc.wantErr {
+				if !errors.Is(err, ErrBackendUnavailable) {
+					t.Fatalf("structuredOutput = (%q, %v), want ErrBackendUnavailable", got, err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("structuredOutput = (%q, %v), want %q", got, err, tc.want)
+			}
+		})
 	}
 }

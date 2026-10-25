@@ -173,7 +173,7 @@ func TestNewBackend_Ensemble_ModelFlagAppliesToCandidatesNotJudge(t *testing.T) 
 // `claude --model sonnet --system-prompt <strict prompt> -p <content>`-shaped
 // args; the system prompt explicitly forbids CLAUDE.md/config leakage.
 func TestDW_1_2_JudgeArgvIsClaudeSonnetWithStrictSystemPrompt(t *testing.T) {
-	userContent := assembleJudgeUserContent("source text", candidateResult{source: "agy"}, candidateResult{source: "codex"})
+	userContent := assembleJudgeUserContent("", "source text", candidateResult{source: "agy"}, candidateResult{source: "codex"})
 	args := claudeBackend{Model: judgeModel}.args(judgeSystemPrompt, userContent)
 
 	joined := strings.Join(args, " ")
@@ -204,9 +204,9 @@ func TestDW_1_2_JudgeArgvIsClaudeSonnetWithStrictSystemPrompt(t *testing.T) {
 func TestDW_1_2_AssembleJudgeUserContent_ContainsSourceAndBothCandidateSets(t *testing.T) {
 	agy := candidateResult{source: "agy", facts: []fact{{Subject: "rtd", Predicate: "prefers", Object: "tabs"}}}
 	codex := candidateResult{source: "codex", facts: []fact{{Subject: "rtd", Predicate: "uses", Object: "zsh"}}}
-	got := assembleJudgeUserContent("rtd prefers tabs and uses zsh", agy, codex)
+	got := assembleJudgeUserContent("use snake_case predicates", "rtd prefers tabs and uses zsh", agy, codex)
 
-	for _, want := range []string{"rtd prefers tabs and uses zsh", "prefers", "tabs", "uses", "zsh", "CANDIDATE A", "CANDIDATE B", "SOURCE EVENT"} {
+	for _, want := range []string{"EXTRACTION RULES", "use snake_case predicates", "rtd prefers tabs and uses zsh", "prefers", "tabs", "uses", "zsh", "CANDIDATE A", "CANDIDATE B", "SOURCE EVENT"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("assembled judge content missing %q; got:\n%s", want, got)
 		}
@@ -504,35 +504,5 @@ func TestDedupeFacts(t *testing.T) {
 	}
 	if got[0].Object != "tabs" || got[1].Object != "zsh" {
 		t.Fatalf("dedupeFacts did not preserve first-occurrence order: %+v", got)
-	}
-}
-
-// TestParseJudgeFacts_DistinguishesGarbageFromLegitimateEmpty is the unit
-// test for the helper DW-1.3(c)'s fallback decision depends on.
-func TestParseJudgeFacts_DistinguishesGarbageFromLegitimateEmpty(t *testing.T) {
-	tests := []struct {
-		name    string
-		raw     string
-		wantOK  bool
-		wantLen int
-	}{
-		{name: "legitimate empty array", raw: "[]", wantOK: true, wantLen: 0},
-		{name: "well-formed single fact", raw: `[{"subject":"rtd","predicate":"uses","object":"zsh"}]`, wantOK: true, wantLen: 1},
-		{name: "fenced well-formed", raw: "```json\n[]\n```", wantOK: true, wantLen: 0},
-		{name: "no brackets at all", raw: "I found nothing.", wantOK: false},
-		{name: "empty stdout", raw: "", wantOK: false},
-		{name: "array of non-objects", raw: `["not","an","object"]`, wantOK: false},
-		{name: "invalid json", raw: "[{not json", wantOK: false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			facts, ok := parseJudgeFacts(tc.raw)
-			if ok != tc.wantOK {
-				t.Fatalf("parseJudgeFacts(%q) ok = %v, want %v", tc.raw, ok, tc.wantOK)
-			}
-			if tc.wantOK && len(facts) != tc.wantLen {
-				t.Fatalf("parseJudgeFacts(%q) len = %d, want %d", tc.raw, len(facts), tc.wantLen)
-			}
-		})
 	}
 }

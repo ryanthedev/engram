@@ -81,8 +81,12 @@ func TestDW_1_5_LiveSmokeJudgeGuardsAgainstCLAUDEMdLeak(t *testing.T) {
 		t.Skipf("DW-1.5 live judge call failed (claude may not be authenticated) — skipping rather than claiming a result: %v", err)
 	}
 
-	canonical, count := parseFacts(out)
-	if count == 0 {
+	facts, err := parseFacts(out)
+	if err != nil {
+		t.Fatalf("DW-1.5 live judge output is unparseable: %v; output=%s", err, out)
+	}
+	canonical := marshalFacts(facts)
+	if len(facts) == 0 {
 		t.Fatalf("DW-1.5 live judge returned zero facts for a source event carrying two clear durable facts; output=%s", out)
 	}
 
