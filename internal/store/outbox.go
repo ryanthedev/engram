@@ -108,8 +108,13 @@ func (s *OpenSearchStore) claimOne(ctx context.Context, id string, seqNo, primar
 // _id deliberately drains replayed appends too — a client retry of Ingest
 // creates a second doc with the same event_id, and both must leave the
 // outbox once the ledger short-circuits the duplicate.
+//
+// It also clears dead_lettered: the repair sweep re-drives an event's
+// incomplete ledger entry even after the outbox gave up on it, and an event
+// that finally completes is no longer failed. dead_letter_reason stays as the
+// record of what went wrong.
 func (s *OpenSearchStore) Complete(ctx context.Context, eventID string) error {
-	script := "ctx._source.processed_at = params.ts; ctx._source.claim_lease_until = null;"
+	script := "ctx._source.processed_at = params.ts; ctx._source.claim_lease_until = null; ctx._source.dead_lettered = false;"
 	params := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339Nano)}
 	return s.updateByEventID(ctx, "completing", eventID, script, params)
 }

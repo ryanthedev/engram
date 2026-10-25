@@ -61,6 +61,7 @@ func main() {
 	embedTimeout := flag.Duration("embed-timeout", 5*time.Minute, "per-request budget for the embedding service")
 	extractURL := flag.String("extract-url", "", "OpenAI-compatible extraction endpoint base URL (e.g. https://api.openai.com/v1); empty uses the deterministic rule extractor")
 	extractModel := flag.String("extract-model", ingest.DefaultPricing.Model, "extraction model id (the pinned cheap model)")
+	extractTimeout := flag.Duration("extract-timeout", 3*time.Minute, "per-request budget for the extraction endpoint; keep it above the endpoint's own timeout")
 	extractorVersion := flag.String("extractor-version", "v1", "extraction pipeline version (ledger key component, D13)")
 	workers := flag.Int("workers", 2, "outbox worker pool size (D12)")
 	claimBatch := flag.Int("claim-batch", 16, "outbox events claimed per scan")
@@ -147,7 +148,13 @@ func main() {
 	pricing := ingest.Pricing{Model: *extractModel, InputUSDPer1M: *priceIn, OutputUSDPer1M: *priceOut}
 	var extractor ingest.Extractor
 	if *extractURL != "" {
-		httpEx := ingest.NewHTTPExtractor(httpClient, *extractURL, *extractModel)
+		// Its own client for the same reason as embedClient: the host
+		// extract shim runs agent CLIs (an ensemble call takes 20-30s on a
+		// short event), so store.DefaultTimeout's 30s cut real extractions
+		// off mid-flight and the sweeper re-drove them, re-spending quota on
+		// every pass.
+		extractClient := &http.Client{Timeout: *extractTimeout}
+		httpEx := ingest.NewHTTPExtractor(extractClient, *extractURL, *extractModel)
 		httpEx.Meter = meter
 		extractor = httpEx
 	} else {
